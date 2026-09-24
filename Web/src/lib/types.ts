@@ -42,6 +42,7 @@ export type Account = {
   avgOrderGapDays: number | null;
   archived: boolean;
   misc: boolean;
+  hasHistoricalOrders?: boolean;
   createdAt: string;
   updatedAt: string;
 };

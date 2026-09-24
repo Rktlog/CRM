@@ -2,10 +2,12 @@ import { supabase } from './supabase';
 
 const API_URL = import.meta.env.VITE_API_URL;
 
-async function authHeader() {
+async function authHeader(): Promise<Record<string, string>> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
 }
 
 export async function apiGet(path: string) {
