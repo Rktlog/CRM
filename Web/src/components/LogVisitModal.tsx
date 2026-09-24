@@ -59,18 +59,29 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
 
   useEffect(() => {
     apiGet('/accounts').then(setAccounts).catch(e => setError(e.message));
   }, []);
 
-  // Revoke the preview object URL on unmount / when the photo changes,
-  // so we don't leak memory across repeated opens of this modal.
   useEffect(() => {
     return () => {
       if (photoPreview) URL.revokeObjectURL(photoPreview);
     };
   }, [photoPreview]);
+
+  // Once the success message shows, close the modal and refresh the
+  // underlying list shortly after — long enough to actually read it,
+  // short enough not to feel stuck.
+  useEffect(() => {
+    if (!success) return;
+    const t = setTimeout(() => {
+      onCreated();
+      onClose();
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [success, onCreated, onClose]);
 
   const matches = useMemo(() => {
     if (!accounts || selected) return [];
@@ -78,6 +89,11 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
     if (q.length < 2) return [];
     return accounts.filter(a => a.name.toLowerCase().includes(q)).slice(0, 8);
   }, [accounts, search, selected]);
+
+  function selectAccount(a: Account) {
+    setSelected(a);
+    setSearch('');
+  }
 
   function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0] ?? null;
@@ -118,13 +134,26 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
         note: note.trim(),
         ...(photoUrl ? { photoUrl } : {}),
       });
-      onCreated();
-      onClose();
+      setSuccess(true);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setSaving(false);
     }
+  }
+
+  if (success) {
+    return (
+      <div className="modal-overlay" onClick={onClose}>
+        <div className="modal-card" onClick={e => e.stopPropagation()} style={{ textAlign: 'center', padding: '32px 24px' }}>
+          <div style={{ fontSize: 28, marginBottom: 8 }}>✓</div>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>Visit logged</div>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
+            {selected?.name}{photoFile ? ' · photo attached' : ''}
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -134,42 +163,60 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
 
         <label className="modal-field">
           Account
-          {selected ? (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', border: '1px solid var(--line)', borderRadius: 5, padding: '8px 10px' }}>
-              <span>{selected.name}</span>
-              <button
-                type="button"
-                onClick={() => { setSelected(null); setSearch(''); }}
-                style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}
-              >
-                Change
-              </button>
-            </div>
-          ) : (
-            <>
-              <input
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Start typing a business name…"
-                autoFocus
-              />
-              {matches.length > 0 && (
-                <div style={{ border: '1px solid var(--line)', borderRadius: 5, marginTop: 4, maxHeight: 180, overflowY: 'auto' }}>
-                  {matches.map(a => (
-                    <div
-                      key={a.id}
-                      onClick={() => { setSelected(a); setSearch(''); }}
-                      style={{ padding: '8px 10px', cursor: 'pointer', fontSize: 13, borderBottom: '1px solid var(--line)' }}
-                    >
-                      {a.name}
-                      <span style={{ color: 'var(--muted)', fontSize: 11.5, marginLeft: 6 }}>{a.region}</span>
-                    </div>
-                  ))}
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Start typing a business name…"
+            autoFocus
+          />
+          {matches.length > 0 && (
+            <div style={{ border: '1px solid var(--line)', borderRadius: 5, marginTop: 4, maxHeight: 180, overflowY: 'auto' }}>
+              {matches.map(a => (
+                <div
+                  key={a.id}
+                  onMouseDown={e => { e.preventDefault(); selectAccount(a); }}
+                  style={{ padding: '8px 10px', cursor: 'pointer', fontSize: 13, borderBottom: '1px solid var(--line)' }}
+                >
+                  {a.name}
+                  <span style={{ color: 'var(--muted)', fontSize: 11.5, marginLeft: 6 }}>{a.region}</span>
                 </div>
-              )}
-            </>
+              ))}
+            </div>
           )}
         </label>
+
+        {/* Always-visible readout of the current selection — separate from
+            the search box above, so it's unmistakable whether a click
+            actually registered. */}
+        <div
+          style={{
+            marginTop: 8,
+            marginBottom: 4,
+            padding: '8px 10px',
+            borderRadius: 5,
+            fontSize: 13,
+            background: selected ? 'var(--accent-bg, #eef6f3)' : 'transparent',
+            border: selected ? '1px solid var(--line)' : '1px dashed var(--line)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}
+        >
+          {selected ? (
+            <>
+              <span>Selected: <strong>{selected.name}</strong></span>
+              <button
+                type="button"
+                onClick={() => setSelected(null)}
+                style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}
+              >
+                Clear
+              </button>
+            </>
+          ) : (
+            <span style={{ color: 'var(--muted)' }}>No account selected yet</span>
+          )}
+        </div>
 
         <label className="modal-field">
           Notes
