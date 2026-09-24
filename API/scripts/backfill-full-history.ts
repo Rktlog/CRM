@@ -98,7 +98,7 @@ async function main() {
 
     const accounts = await prisma.account.findMany({
       where: { OR: [{ dearCustomerId: { not: null } }, { type: 'customer' }] },
-      select: { id: true, name: true, dearCustomerId: true, stage: true, contactName: true, type: true },
+      select: { id: true, name: true, dearCustomerId: true, stage: true, contactName: true, type: true, archived: true },
     });
     const byDearId = new Map(accounts.filter(a => a.dearCustomerId).map(a => [a.dearCustomerId!, a]));
     const byName = new Map(accounts.map(a => [normalize(a.name), a]));
@@ -182,6 +182,12 @@ async function main() {
               lineTotal: (line.Quantity ?? 0) * (line.Price ?? 0),
             })),
           });
+          // A line item literally named as a replacement is a
+          // reliable warranty signal even when the order reference
+          // text doesn't say so explicitly.
+          if (!miscType && rawLines.some((l: any) => String(l.Name ?? '').toLowerCase().includes('replacement'))) {
+            await prisma.quote.update({ where: { id: quote.id }, data: { miscType: 'warranty' } });
+          }
         }
 
         let nextStage = account.stage;
@@ -192,6 +198,7 @@ async function main() {
         if (stageOrder.indexOf(nextStage) > stageOrder.indexOf(account.stage)) patch.stage = nextStage;
         if (paid) patch.lastOrderAt = sentAt;
         if (paid && account.type === 'prospect') patch.type = 'customer';
+        if (paid && account.archived) patch.archived = false; // real new order = real evidence an archive was wrong or the account came back to life
         if (Object.keys(patch).length) await prisma.account.update({ where: { id: account.id }, data: patch });
 
         touchedAccountIds.add(account.id);

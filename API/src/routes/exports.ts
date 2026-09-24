@@ -172,13 +172,28 @@ exportsRouter.get('/:type', async (req, res) => {
       }
 
       case 'accounts': {
-        const accounts = await scopedAccountIds(req, region, repId);
+        // Mirrors the real Accounts page exactly — company-wide,
+        // excludes misc, and applies the same "has a real order, or
+        // none yet" visibility rule, not the older scopedAccountIds
+        // helper shared by the sales-figure reports (which never
+        // excluded archived or misc accounts at all).
+        const accountWhere: any = {
+          archived: false,
+          misc: false,
+          OR: [{ quotes: { none: {} } }, { quotes: { some: { miscType: null } } }],
+        };
+        if (region) accountWhere.region = { in: region.split(',') };
+        if (repId) accountWhere.repId = repId;
+        const accounts = await prisma.account.findMany({
+          where: accountWhere,
+          include: { rep: { select: { name: true } } },
+          orderBy: { updatedAt: 'desc' },
+        });
         const rows = accounts.map(a => ({
-          Account: a.name, Region: a.region, Type: a.type, Stage: a.stage, Category: a.category ?? '',
+          Account: a.name, Region: a.region, Rep: a.rep?.name ?? '', Type: a.type, Stage: a.stage, Category: a.category ?? '',
           Contact: a.contactName ?? '', Phone: a.phone ?? '', Email: a.email ?? '',
           'Spend 30d': a.spend30, 'Spend 90d': a.spend90, 'Spend 365d': a.spend365,
           'Last Order': a.lastOrderAt ? a.lastOrderAt.toISOString().slice(0, 10) : '',
-          Archived: a.archived ? 'Yes' : 'No',
         }));
         return sendWorkbook(res, 'accounts.xlsx', [{ name: 'Accounts', rows }]);
       }

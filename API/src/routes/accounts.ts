@@ -50,12 +50,17 @@ accountsRouter.get('/', async (req, res) => {
         { quotes: { some: { miscType: null } } },
       ],
     },
-    include: { rep: { select: { name: true } } },
+    include: {
+      rep: { select: { name: true } },
+      // Just enough to know if this account has any order that came
+      // from the old spreadsheet import, without pulling all of them.
+      quotes: { where: { source: 'rhino-history' }, take: 1, select: { id: true } },
+    },
     orderBy: { updatedAt: 'desc' },
   });
 
   // Flatten rep.name onto repName, matching the rest of the API's flat shape.
-  const flattened = accounts.map(({ rep, ...a }) => ({ ...a, repName: rep?.name ?? null }));
+  const flattened = accounts.map(({ rep, quotes, ...a }) => ({ ...a, repName: rep?.name ?? null, hasHistoricalOrders: quotes.length > 0 }));
   res.json(flattened);
 });
 

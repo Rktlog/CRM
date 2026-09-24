@@ -79,7 +79,7 @@ export async function syncSales() {
   // matching the Customer name string if it's missing for some reason.
   const accounts = await prisma.account.findMany({
     where: { OR: [{ dearCustomerId: { not: null } }, { type: 'customer' }] },
-    select: { id: true, name: true, dearCustomerId: true, stage: true, contactName: true, type: true },
+    select: { id: true, name: true, dearCustomerId: true, stage: true, contactName: true, type: true, archived: true },
   });
   const byDearId = new Map(accounts.filter(a => a.dearCustomerId).map(a => [a.dearCustomerId!, a]));
   const byName = new Map(accounts.map(a => [normalize(a.name), a]));
@@ -182,6 +182,12 @@ export async function syncSales() {
           lineTotal: (line.Quantity ?? 0) * (line.Price ?? 0),
         })),
       });
+      // A line item literally named as a replacement is a reliable
+      // warranty signal on its own, even when the order reference
+      // text doesn't say so explicitly.
+      if (!miscType && rawLines.some((l: any) => String(l.Name ?? '').toLowerCase().includes('replacement'))) {
+        await prisma.quote.update({ where: { id: quote.id }, data: { miscType: 'warranty' } });
+      }
     }
 
     const order = ['new_lead', 'approached', 'quote_sent', 'payment_cleared', 'dispatched'];
@@ -196,6 +202,12 @@ export async function syncSales() {
     // A real paid order is what actually makes someone a customer —
     // promote from prospect here rather than assuming it on creation.
     if (paid && account.type === 'prospect') patch.type = 'customer';
+    // Same logic for archived — a real new order is real evidence
+    // that whoever archived this account (bulk cleanup, voided-order
+    // sweep, etc.) was wrong, or that a dormant one came back to
+    // life. Bring it back into view rather than leaving it invisible
+    // forever despite genuine current activity.
+    if (paid && account.archived) patch.archived = false;
     if (Object.keys(patch).length) {
       await prisma.account.update({ where: { id: account.id }, data: patch });
     }
