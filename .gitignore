@@ -1,0 +1,38 @@
+# Real secrets — never commit these. .env.example is the template
+# that's safe to commit; actual .env files are not.
+.env
+.env.local
+.env.*.local
+API/.env
+Web/.env
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output
+dist/
+build/
+.next/
+API/dist/
+Web/dist/
+
+# Real customer data this session's cleanup scripts write to disk —
+# names, emails, phone numbers. Never belongs in git history, even
+# in a private repo.
+*.csv
+sample-sale.json
+individual-name-candidates.csv
+genuine-one-off-candidates.csv
+likely-real-businesses.csv
+archived-accounts-review.xlsx
+*-review.xlsx
+
+# Editor/OS noise
+.DS_Store
+.vscode/
+*.log
+npm-debug.log*
+
+# Prisma
+API/prisma/migrations/dev.db
