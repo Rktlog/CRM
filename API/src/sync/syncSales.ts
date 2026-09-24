@@ -95,6 +95,12 @@ export async function syncSales() {
   let processed = 0;
   let unmatchedCustomer = 0;
   let loggedSample = false;
+  // Only these accounts get their spend figures recomputed below —
+  // not every account in the database with a quote. That full-table
+  // recompute used to run every single cycle regardless of how many
+  // sales actually changed, which is why runs were taking 10+ minutes
+  // and sometimes never reaching the cursor update at the end.
+  const touchedAccountIds = new Set<string>();
 
   for (const sale of sales) {
     let account = sale.CustomerID ? byDearId.get(String(sale.CustomerID)) : undefined;
@@ -212,15 +218,12 @@ export async function syncSales() {
       await prisma.account.update({ where: { id: account.id }, data: patch });
     }
 
+    touchedAccountIds.add(account.id);
     processed++;
   }
 
-  const accountsWithQuotes = await prisma.account.findMany({
-    where: { quotes: { some: {} } },
-    select: { id: true },
-  });
   const now = Date.now();
-  for (const { id } of accountsWithQuotes) {
+  for (const id of touchedAccountIds) {
     const quotes = await prisma.quote.findMany({ where: { accountId: id, paid: true } });
     const sum = (days: number) =>
       quotes.filter(q => now - q.sentAt.getTime() <= days * 86400000).reduce((s, q) => s + q.amount, 0);

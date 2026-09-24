@@ -196,6 +196,12 @@ model Quote {
   // Misc page's two tabs and is excluded from all performance figures.
   miscType  String?  @map("misc_type") // "marketing" | "warranty" | null
 
+  // Every account-list request filters/includes quotes by these
+  // exact combinations (misc filtering, the History badge lookup) —
+  // without these, Postgres was scanning the whole table per account.
+  @@index([accountId])
+  @@index([accountId, miscType])
+  @@index([accountId, source])
   @@map("quotes")
   @@schema("crm")
 }
