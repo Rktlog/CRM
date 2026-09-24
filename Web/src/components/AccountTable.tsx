@@ -42,7 +42,6 @@ export default function AccountTable({ accounts, sortKey, sortDir, onSort }: Pro
               <div className="acct-name">{a.name}</div>
               <div className="acct-region">{a.region} · {a.credit === 'prepay' ? 'Pay first' : 'Credit account'}</div>
               {a.repName && <div className="acct-region" style={{ opacity: 0.7 }}>{a.repName}</div>}
-              {a.hasHistoricalOrders && <span className="badge muted" style={{ fontSize: 10, marginTop: 2, display: 'inline-block' }}>History</span>}
             </div>
             <div>
               {a.contactName && <div>{a.contactName}</div>}
