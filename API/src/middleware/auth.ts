@@ -20,9 +20,9 @@ declare global {
 // Supabase-issued tokens are standard signed JWTs; verifying the
 // signature is exactly as secure as asking Supabase to do it for us,
 // just without leaving this server.
-const JWT_SECRET: string = process.env.SUPABASE_JWT_SECRET ?? (() => {
+const JWT_SECRET: string = (process.env.SUPABASE_JWT_SECRET ?? (() => {
   throw new Error('SUPABASE_JWT_SECRET is not set — required to verify login tokens locally.');
-})();
+})()).trim(); // defensive: strips a hidden trailing newline/space from copy-paste, which silently breaks HMAC verification
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
@@ -37,7 +37,12 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     const payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as { sub?: string };
     if (!payload.sub) throw new Error('Token has no subject');
     userId = payload.sub;
-  } catch {
+  } catch (err: any) {
+    // Logging the REAL reason server-side (Railway logs) — the response
+    // to the client stays a generic 401, but this tells us definitively
+    // whether it's a bad secret ("invalid signature"), an expired
+    // session ("jwt expired"), or something else, instead of guessing.
+    console.error(`Token verification failed: ${err?.name ?? 'Error'} — ${err?.message ?? String(err)}`);
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 
