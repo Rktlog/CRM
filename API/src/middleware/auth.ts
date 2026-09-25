@@ -20,10 +20,9 @@ declare global {
 // Supabase-issued tokens are standard signed JWTs; verifying the
 // signature is exactly as secure as asking Supabase to do it for us,
 // just without leaving this server.
-const JWT_SECRET = process.env.SUPABASE_JWT_SECRET;
-if (!JWT_SECRET) {
+const JWT_SECRET: string = process.env.SUPABASE_JWT_SECRET ?? (() => {
   throw new Error('SUPABASE_JWT_SECRET is not set — required to verify login tokens locally.');
-}
+})();
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
