@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { prisma } from '../lib/prisma';
 
 // Attaches req.rep so every route handler knows who's calling and
@@ -12,17 +12,22 @@ declare global {
   }
 }
 
-// Verifying the JWT's signature locally, with the project's own JWT
-// secret, instead of calling supabase.auth.getUser(token) — that call
-// made a real network round-trip to Supabase's Auth servers on every
-// single API request, which is what was actually making every page
-// feel slow (it's paid once per request, and a page fires many).
-// Supabase-issued tokens are standard signed JWTs; verifying the
-// signature is exactly as secure as asking Supabase to do it for us,
-// just without leaving this server.
-const JWT_SECRET: string = (process.env.SUPABASE_JWT_SECRET ?? (() => {
-  throw new Error('SUPABASE_JWT_SECRET is not set — required to verify login tokens locally.');
-})()).trim(); // defensive: strips a hidden trailing newline/space from copy-paste, which silently breaks HMAC verification
+// Verifying the JWT's signature locally, using Supabase's own public
+// signing keys, instead of calling supabase.auth.getUser(token) — that
+// call made a real network round-trip to Supabase's Auth servers on
+// every single API request, which is what was actually making every
+// page feel slow (paid once per request, and a page fires many).
+//
+// This project signs its tokens with an asymmetric key (confirmed via
+// the "invalid algorithm" error a shared-secret/HS256 attempt hit), not
+// the older shared-secret scheme — so verification needs Supabase's
+// public key, not a copied secret. jose fetches and caches that key set
+// automatically, and re-fetches it if Supabase ever rotates keys, so
+// there's no secret to keep in sync by hand at all.
+const SUPABASE_URL = process.env.SUPABASE_URL ?? (() => {
+  throw new Error('SUPABASE_URL is not set — required to verify login tokens locally.');
+})();
+const JWKS = createRemoteJWKSet(new URL(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`));
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
@@ -34,14 +39,13 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 
   let userId: string;
   try {
-    const payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as { sub?: string };
+    const { payload } = await jwtVerify(token, JWKS);
     if (!payload.sub) throw new Error('Token has no subject');
     userId = payload.sub;
   } catch (err: any) {
     // Logging the REAL reason server-side (Railway logs) — the response
     // to the client stays a generic 401, but this tells us definitively
-    // whether it's a bad secret ("invalid signature"), an expired
-    // session ("jwt expired"), or something else, instead of guessing.
+    // what's actually failing if something goes wrong again.
     console.error(`Token verification failed: ${err?.name ?? 'Error'} — ${err?.message ?? String(err)}`);
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
