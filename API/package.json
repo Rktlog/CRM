@@ -2,11 +2,14 @@
   "name": "rocket-crm-api",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "postinstall": "prisma generate --schema=Prisma/schema.prisma",
+    "postinstall": "prisma generate",
     "studio": "prisma studio",
     "sync": "tsx src/sync/index.ts",
     "sync:once": "tsx src/sync/index.ts --once"
@@ -19,7 +22,7 @@
     "express": "^4.19.2",
     "jose": "^6.2.12",
     "node-cron": "^3.0.3",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -30,5 +33,11 @@
     "prisma": "^6.19.3",
     "tsx": "^4.16.2",
     "typescript": "^5.5.3"
+  },
+  "allowScripts": {
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "esbuild@0.28.2": true,
+    "prisma@6.19.3": true
   }
 }
