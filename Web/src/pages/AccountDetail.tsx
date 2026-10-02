@@ -23,6 +23,7 @@ export default function AccountDetail() {
   const [type, setType] = useState<'call' | 'email' | 'visit'>('call');
   const [saving, setSaving] = useState(false);
   const [editingActivityId, setEditingActivityId] = useState<string | null>(null);
+  const [openOrderId, setOpenOrderId] = useState<string | null>(null);
 
   // Year-filtered product breakdown, computed client-side from the
   // real per-quote line items already in the response — no extra
@@ -285,25 +286,57 @@ export default function AccountDetail() {
                 {account.quotes
                   .slice()
                   .sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime())
-                  .map(q => (
-                    <div className="m-row" key={q.id} style={{ gridTemplateColumns: '1.1fr 0.9fr 1fr', cursor: 'default', padding: '9px 0' }}>
-                      <div>
-                        <div className="acct-name">{q.number}</div>
-                        <div className="acct-region">{fmtDateWithYear(q.sentAt)}</div>
-                        {(q.shippingCompany || q.shippingAddress) && (
-                          <div className="acct-region" style={{ marginTop: 2 }}>
-                            📍 {q.shippingCompany ?? q.shippingAddress}
+                  .map(q => {
+                    const open = openOrderId === q.id;
+                    const lines = q.lines ?? [];
+                    return (
+                      <div key={q.id}>
+                        <div
+                          className="m-row"
+                          style={{ gridTemplateColumns: '1.1fr 0.9fr 1fr', padding: '9px 0', cursor: lines.length ? 'pointer' : 'default' }}
+                          onClick={() => lines.length && setOpenOrderId(open ? null : q.id)}
+                          aria-expanded={lines.length ? open : undefined}
+                        >
+                          <div>
+                            <div className="acct-name">
+                              {lines.length > 0 && <span className="order-caret">{open ? '▾' : '▸'}</span>}
+                              {q.number}
+                            </div>
+                            <div className="acct-region">{fmtDateWithYear(q.sentAt)}</div>
+                            {(q.shippingCompany || q.shippingAddress) && (
+                              <div className="acct-region" style={{ marginTop: 2 }}>
+                                📍 {q.shippingCompany ?? q.shippingAddress}
+                              </div>
+                            )}
+                          </div>
+                          <div className="num">{fmtMoney(q.amount)}</div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
+                            {q.miscType === 'marketing' && <span className="pill marketing">Marketing order</span>}
+                            {q.miscType === 'warranty' && <span className="pill neutral">Warranty</span>}
+                            {q.paid ? <span className="pill teal">Paid</span> : <span className="pill amber">Unpaid</span>}
+                            {statusPill(q.fulfillmentStatus)}
+                            {q.source === 'rhino-history' && <span className="badge muted" style={{ fontSize: 10 }}>History</span>}
+                          </div>
+                        </div>
+
+                        {open && (
+                          <div className="order-lines">
+                            {lines.map((l, i) => (
+                              <div className="order-line" key={i}>
+                                <div>
+                                  <div>{l.productName}</div>
+                                  <div className="acct-region num">{l.sku}{l.brand ? `, ${l.brand}` : ''}</div>
+                                </div>
+                                <div className="num">{l.quantity} × {fmtMoney(l.unitPrice)}</div>
+                                <div className="num">{fmtMoney(Math.round(l.lineTotal * 100) / 100)}</div>
+                              </div>
+                            ))}
+                            <Link to={`/orders/${q.id}`} className="order-link order-full-link">Full order details</Link>
                           </div>
                         )}
                       </div>
-                      <div className="num">{fmtMoney(q.amount)}</div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
-                        {q.paid ? <span className="pill teal">Paid</span> : <span className="pill amber">Unpaid</span>}
-                        {statusPill(q.fulfillmentStatus)}
-                        {q.source === 'rhino-history' && <span className="badge muted" style={{ fontSize: 10 }}>History</span>}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
               </div>
               </div>
             )}

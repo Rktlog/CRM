@@ -11,6 +11,8 @@ import { tasksRouter } from './routes/tasks';
 import { repRegionsRouter } from './routes/repRegions';
 import { exportsRouter } from './routes/exports';
 import { miscRouter } from './routes/misc';
+import { productsRouter } from './routes/products';
+import { ordersRouter } from './routes/orders';
 
 const app = express();
 // Restricts which origins can call this API — wide-open cors() would
@@ -32,6 +34,8 @@ app.use('/tasks', requireAuth, tasksRouter);
 app.use('/rep-regions', requireAuth, repRegionsRouter);
 app.use('/exports', requireAuth, exportsRouter);
 app.use('/misc-orders', requireAuth, miscRouter);
+app.use('/products', requireAuth, productsRouter);
+app.use('/orders', requireAuth, ordersRouter);
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => console.log(`API listening on :${port}`));

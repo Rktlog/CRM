@@ -325,7 +325,8 @@ reportsRouter.get('/ledger', async (req, res) => {
       return { label: `${monthNames[Number(m) - 1]} ${y.slice(2)}`, total: Math.round(total * 100) / 100 };
     });
 
-  // ---- Quarterly budget vs actual (calendar quarters, this year vs last) ----
+  // ---- Quarterly budget vs actual (fiscal quarters, this FY vs last) ----
+  // A budget target's `year` is the FY start year: 2026 = FY 2026/27.
   const targets = effectiveRepId
     ? await prisma.budgetTarget.findMany({ where: { repId: effectiveRepId, year: { in: [year, year - 1] } } })
     : await prisma.budgetTarget.findMany({ where: { year: { in: [year, year - 1] } } });
@@ -338,12 +339,13 @@ reportsRouter.get('/ledger', async (req, res) => {
     if (!firstOrderByAccount.has(q.accountId)) firstOrderByAccount.set(q.accountId, q.sentAt);
   }
 
-  const quarterMonths = [['Jan','Feb','Mar'],['Apr','May','Jun'],['Jul','Aug','Sep'],['Oct','Nov','Dec']];
+  const quarterMonths = [['Jul','Aug','Sep'],['Oct','Nov','Dec'],['Jan','Feb','Mar'],['Apr','May','Jun']];
   const quarters = [1, 2, 3, 4].map(qn => {
-    const qStart = new Date(year, (qn - 1) * 3, 1);
-    const qEnd = new Date(year, qn * 3, 1);
-    const priorStart = new Date(year - 1, (qn - 1) * 3, 1);
-    const priorEnd = new Date(year - 1, qn * 3, 1);
+    // FY starts July of `year`. JS Date rolls month 12+ into the next year.
+    const qStart = new Date(year, 6 + (qn - 1) * 3, 1);
+    const qEnd = new Date(year, 6 + qn * 3, 1);
+    const priorStart = new Date(year - 1, 6 + (qn - 1) * 3, 1);
+    const priorEnd = new Date(year - 1, 6 + qn * 3, 1);
 
     const inQuarter = paidQuotes.filter(q => q.sentAt >= qStart && q.sentAt < qEnd);
     const inPriorQuarter = paidQuotes.filter(q => q.sentAt >= priorStart && q.sentAt < priorEnd);
@@ -478,6 +480,8 @@ reportsRouter.get('/ledger', async (req, res) => {
     totalValue: Math.round(windowedQuotes.reduce((s, q) => s + q.amount, 0) * 100) / 100,
     totalOrders: windowedQuotes.length,
     accountsWithActivity,
+    newCustomerCount: newCount,
+    newCustomerValue: Math.round(newValue * 100) / 100,
     period,
     periodLabel: window.label,
     priorPeriodLabel: window.priorLabel,

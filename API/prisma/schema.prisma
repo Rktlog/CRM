@@ -196,6 +196,21 @@ model Quote {
   // Misc page's two tabs and is excluded from all performance figures.
   miscType  String?  @map("misc_type") // "marketing" | "warranty" | null
 
+  // Full order detail captured by the sync, so the Orders page can show
+  // everything a rep would otherwise open DEAR for.
+  dearSaleId      String?  @map("dear_sale_id")
+  invoiceNumber   String?  @map("invoice_number")
+  paymentStatus   String?  @map("payment_status")   // DEAR CombinedPaymentStatus
+  shippingStatus  String?  @map("shipping_status")  // DEAR CombinedShippingStatus
+  orderContact    String?  @map("order_contact")
+  orderEmail      String?  @map("order_email")
+  orderPhone      String?  @map("order_phone")
+  shippingDetails Json?    @map("shipping_details") // { company, contact, line1, line2, city, state, postcode, country }
+  shipments       Json     @default("[]")           // [{ date, carrier, trackingNumber, trackingUrl }]
+  taxTotal        Float?   @map("tax_total")
+  total           Float?   // exact order total incl. tax; `amount` is the rounded figure used in reports
+  memo            String?
+
   // Every account-list request filters/includes quotes by these
   // exact combinations (misc filtering, the History badge lookup) —
   // without these, Postgres was scanning the whole table per account.
@@ -299,8 +314,32 @@ model QuoteLine {
   brand       String?
   quantity    Float
   unitPrice   Float   @map("unit_price")
+  discount    Float   @default(0) // percent, as DEAR stores it
+  tax         Float   @default(0)
   lineTotal   Float   @map("line_total")
 
   @@map("quote_lines")
+  @@schema("crm")
+}
+
+// DEAR products and stock, kept current by the sync-products Edge
+// Function. The app reads stock from here only, never from DEAR.
+model Product {
+  sku           String    @id
+  dearId        String?   @map("dear_id")
+  name          String
+  brand         String?
+  category      String?
+  uom           String?
+  status        String?
+  onHand        Float     @default(0) @map("on_hand")
+  allocated     Float     @default(0)
+  available     Float     @default(0)
+  onOrder       Float     @default(0) @map("on_order")
+  locations     Json      @default("[]")
+  updatedAt     DateTime  @default(now()) @map("updated_at")
+  stockSyncedAt DateTime? @map("stock_synced_at")
+
+  @@map("products")
   @@schema("crm")
 }

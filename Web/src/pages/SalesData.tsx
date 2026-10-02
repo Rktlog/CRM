@@ -16,6 +16,7 @@ type SkuRow = { sku: string; productName: string; quantity: number; total: numbe
 type RecentInvoice = { invoice: string; date: string; customer: string; region: string; amount: number; paid: boolean };
 type LedgerData = {
   totalValue: number; totalOrders: number; accountsTracked: number; accountsWithActivity: number;
+  newCustomerCount: number; newCustomerValue: number;
   period: 'calendar' | 'fiscal'; periodLabel: string; priorPeriodLabel: string;
   monthlyTrend: { label: string; total: number }[];
   quarters: Quarter[]; unpaidQuotes: UnpaidQuote[]; topAccounts: TopAccount[];
@@ -40,7 +41,11 @@ export default function SalesData() {
   const [data, setData] = useState<LedgerData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [regionKey, setRegionKey] = useState('nsw-act');
-  const [year, setYear] = useState(new Date().getFullYear());
+  // Defaults to the current FY: in Feb 2027 that's FY 2026/27, not 2027.
+  const [year, setYear] = useState(() => {
+    const d = new Date();
+    return d.getMonth() >= 6 ? d.getFullYear() : d.getFullYear() - 1;
+  });
   const [period, setPeriod] = useState<'calendar' | 'fiscal' | 'alltime'>('fiscal');
   const [reps, setReps] = useState<Rep[]>([]);
   const [repId, setRepId] = useState<string>('');
@@ -104,7 +109,7 @@ export default function SalesData() {
             {REGION_GROUPS.map(g => <option key={g.key} value={g.key}>{g.label}</option>)}
           </select>
           <select value={year} onChange={e => setYear(Number(e.target.value))}>
-            {Array.from({ length: new Date().getFullYear() - 2019 }, (_, i) => 2021 + i).reverse().map(y => <option key={y} value={y}>{y}</option>)}
+            {Array.from({ length: new Date().getFullYear() - 2019 }, (_, i) => 2021 + i).reverse().map(y => <option key={y} value={y}>{period === 'fiscal' ? `FY ${y}/${String(y + 1).slice(2)}` : y}</option>)}
           </select>
           <select value={period} onChange={e => setPeriod(e.target.value as 'calendar' | 'fiscal' | 'alltime')}>
             <option value="fiscal">Fiscal year (Jul–Jun)</option>
@@ -131,6 +136,12 @@ export default function SalesData() {
               <div className="label">Active accounts — {data.periodLabel}</div>
               <div className="val">{data.accountsWithActivity.toLocaleString()}</div>
             </div>
+            {period !== 'alltime' && (
+              <div className="ledger-stat">
+                <div className="label">New customers in {data.periodLabel}</div>
+                <div className="val">{data.newCustomerCount.toLocaleString()}</div>
+              </div>
+            )}
             <div className="ledger-stat">
               <div className="label">Accounts tracked ({activeGroup.label})</div>
               <div className="val">{data.accountsTracked.toLocaleString()}</div>
@@ -172,7 +183,7 @@ export default function SalesData() {
           <hr className="ledger-rule" />
 
           <div className="ledger-section-head">
-            <h2>Quarterly budget — {year}</h2>
+            <h2>Quarterly budget, FY {year}/{String(year + 1).slice(2)}</h2>
             <span className="ledger-note">Set in Settings</span>
           </div>
           <div className="qcards">
@@ -194,7 +205,7 @@ export default function SalesData() {
                   <div className="qvariance num" style={{ color: up ? 'var(--teal)' : 'var(--rust)' }}>
                     {fmtMoney(q.varianceDollar)} YoY {q.variancePct !== null ? `(${(q.variancePct * 100).toFixed(0)}%)` : ''}
                   </div>
-                  <div className="qnew">{q.newBusinessCount} new · {fmtMoney(q.newBusinessValue)}</div>
+                  <div className="qnew">{q.newBusinessCount} new {q.newBusinessCount === 1 ? 'customer' : 'customers'}, {fmtMoney(q.newBusinessValue)}</div>
                 </div>
               );
             })}
@@ -271,7 +282,7 @@ export default function SalesData() {
             </div>
             <div>
               <div className="bd-title">New in {data.periodLabel} vs existing customers</div>
-              <BarRows items={data.typeBreakdown.map(t => ({ ...t, label: `${t.type} (${t.count})` }))} labelKey="label" />
+              <BarRows items={data.typeBreakdown.map(t => ({ ...t, label: `${t.type}: ${t.count} ${t.count === 1 ? 'customer' : 'customers'}` }))} labelKey="label" />
             </div>
           </div>
 

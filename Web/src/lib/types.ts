@@ -60,6 +60,7 @@ export type Quote = {
   shippingCompany: string | null;
   shippingAddress: string | null;
   source?: string;
+  miscType?: string | null;
   lines?: QuoteLineItem[];
 };
 

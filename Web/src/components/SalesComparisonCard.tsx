@@ -54,12 +54,12 @@ export default function SalesComparisonCard() {
         <>
           <div style={{ display: 'flex', gap: 24, marginBottom: 16 }}>
             <div>
-              <div className="num" style={{ fontSize: 22, fontWeight: 600 }}>{fmtMoney(data.currentTotal)}</div>
-              <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>{data.currentLabel}</div>
-            </div>
-            <div>
               <div className="num" style={{ fontSize: 22, fontWeight: 600, color: 'var(--muted)' }}>{fmtMoney(data.previousTotal)}</div>
               <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>{data.previousLabel}</div>
+            </div>
+            <div>
+              <div className="num" style={{ fontSize: 22, fontWeight: 600 }}>{fmtMoney(data.currentTotal)}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>{data.currentLabel}</div>
             </div>
             {data.changePct !== null && (
               <div style={{ alignSelf: 'center' }}>

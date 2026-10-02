@@ -6,7 +6,8 @@ import { fmtMoney } from '../lib/types';
 type Rep = { id: string; name: string; role: string };
 type Target = { id: string; repId: string; repName: string; year: number; quarter: number; amount: number };
 
-const QUARTER_LABELS = ['Q1 (Jan–Mar)', 'Q2 (Apr–Jun)', 'Q3 (Jul–Sep)', 'Q4 (Oct–Dec)'];
+// Fiscal quarters. A target's year is the FY start year: 2026 = FY 2026/27.
+const QUARTER_LABELS = ['Q1 (Jul–Sep)', 'Q2 (Oct–Dec)', 'Q3 (Jan–Mar)', 'Q4 (Apr–Jun)'];
 const ALL_STATES = ['NSW', 'ACT', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'NT', 'NZ'];
 
 export default function Settings() {
@@ -14,7 +15,10 @@ export default function Settings() {
   const isManager = role === 'manager';
   const [reps, setReps] = useState<Rep[] | null>(null);
   const [selectedRep, setSelectedRep] = useState<string>('');
-  const [year, setYear] = useState(new Date().getFullYear());
+  const [year, setYear] = useState(() => {
+    const d = new Date();
+    return d.getMonth() >= 6 ? d.getFullYear() : d.getFullYear() - 1;
+  });
   const [targets, setTargets] = useState<Target[] | null>(null);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [saving, setSaving] = useState<number | null>(null);
@@ -237,7 +241,7 @@ export default function Settings() {
             </select>
           )}
           <select value={year} onChange={e => setYear(Number(e.target.value))}>
-            {[year - 1, year, year + 1].map(y => <option key={y} value={y}>{y}</option>)}
+            {[year - 1, year, year + 1].map(y => <option key={y} value={y}>FY {y}/{String(y + 1).slice(2)}</option>)}
           </select>
         </div>
 
