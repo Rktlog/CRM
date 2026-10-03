@@ -2,19 +2,23 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiGet } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
-import { Account, fmtDate, daysBetween, isOverdueCustomer } from '../lib/types';
+import { Account, fmtDate, fmtMoney, daysBetween, isOverdueCustomer } from '../lib/types';
+import { HEALTH_COLUMNS, Health, healthOf } from '../lib/customerHealth';
 import AccountTable from '../components/AccountTable';
 import BackorderCard from '../components/BackorderCard';
 import TeamActivityCard from '../components/TeamActivityCard';
 
 export default function Dashboard() {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
+  // Same list as the Customers board, so the counts always match it.
+  const [customers, setCustomers] = useState<{ lastOrderAt: string | null; avgOrderGapDays: number | null; spend365: number }[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
   const { role } = useAuth();
 
   useEffect(() => {
     apiGet('/accounts').then(setAccounts).catch(e => setError(e.message));
+    apiGet('/accounts/customers').then(setCustomers).catch(() => {});
   }, []);
 
   if (error) return <div className="empty-state">Couldn't load accounts: {error}</div>;
@@ -67,6 +71,39 @@ export default function Dashboard() {
           <div className="stat-sub">overdue against their usual reorder gap</div>
         </a>
       </div>
+
+      {/* ---- Customer base at a glance (same rules as the Customers board) ---- */}
+      {customers && customers.length > 0 && (() => {
+        const counts: Record<Health, { n: number; value: number }> = {
+          recent: { n: 0, value: 0 }, due: { n: 0, value: 0 }, overdue: { n: 0, value: 0 }, lapsed: { n: 0, value: 0 },
+        };
+        for (const c of customers) {
+          const h = healthOf(c);
+          counts[h].n++;
+          counts[h].value += c.spend365;
+        }
+        return (
+          <div className="section">
+            <div className="panel-title">
+              Customers <span className="plan-count">{customers.length} stores, by their own reorder pace</span>
+            </div>
+            <div className="health-row">
+              {HEALTH_COLUMNS.map(col => (
+                <div
+                  key={col.key}
+                  className={`health-stat health-stat-${col.key}`}
+                  onClick={() => navigate(`/customers?col=${col.key}`)}
+                  title={`${col.hint}. Open on the Customers board.`}
+                >
+                  <div className="stat-label">{col.title}</div>
+                  <div className="stat-value num">{counts[col.key].n}</div>
+                  <div className="stat-sub">{fmtMoney(Math.round(counts[col.key].value))} a year</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {role === 'manager' && (
         <div className="section">

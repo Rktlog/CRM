@@ -633,3 +633,34 @@ a.pd-list-card:hover { border-color: var(--teal); }
 .doc-title { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
 .doc-row { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
 .doc-row > .num { text-align: right; white-space: nowrap; }
+
+/* ---- Customers board ---- */
+.customers-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.customers-filters { display: flex; gap: 8px; align-items: center; }
+.customers-filters input { padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 13px; min-width: 220px; }
+.bay-sub { font-size: 11px; color: var(--muted); padding: 0 10px 8px; }
+.bay-empty { color: var(--muted); font-size: 12px; padding: 8px 2px; }
+.bay.health-recent .bay-head { border-top: 3px solid var(--teal); }
+.bay.health-due .bay-head { border-top: 3px solid var(--amber); }
+.bay.health-overdue .bay-head { border-top: 3px solid var(--rust); }
+.bay.health-lapsed .bay-head { border-top: 3px solid var(--muted); }
+.deal-card.health-card-recent { border-left-color: var(--teal); }
+.deal-card.health-card-due { border-left-color: var(--amber); }
+.deal-card.health-card-overdue { border-left-color: var(--rust); }
+.deal-card.health-card-lapsed { border-left-color: #B4BBC4; }
+.dc-pace { font-size: 11px; color: var(--ink-soft); margin-top: 3px; }
+.dc-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.dc-badges .pill { font-size: 10px; padding: 1px 6px; }
+.dc-rep { font-size: 10.5px; color: var(--muted); margin-top: 3px; }
+.bay-more { width: 100%; padding: 6px; font-size: 12px; margin-top: 2px; }
+
+/* ---- Dashboard: customer base row ---- */
+.health-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.health-stat { background: var(--panel); border: 1px solid var(--line); border-top: 3px solid; border-radius: 8px; padding: 12px 14px; cursor: pointer; transition: box-shadow 0.12s; }
+.health-stat:hover { box-shadow: 0 2px 8px rgba(27, 36, 48, 0.08); }
+.health-stat-recent { border-top-color: var(--teal); }
+.health-stat-due { border-top-color: var(--amber); }
+.health-stat-overdue { border-top-color: var(--rust); }
+.health-stat-lapsed { border-top-color: #B4BBC4; }
+.bay.focused { box-shadow: 0 0 0 2px var(--teal); border-radius: 6px; }
+@media (max-width: 760px) { .health-row { grid-template-columns: repeat(2, 1fr); } }

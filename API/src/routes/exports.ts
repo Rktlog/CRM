@@ -567,14 +567,60 @@ exportsRouter.get('/:type', async (req, res) => {
         const miscType = type === 'misc-marketing' ? 'marketing' : 'warranty';
         const quotes = await prisma.quote.findMany({
           where: { miscType },
-          include: { account: { select: { name: true, region: true } } },
+          include: { account: { select: { name: true, region: true } }, lines: true },
           orderBy: { sentAt: 'desc' },
         });
-        const rows = quotes.map(q => ({
-          Account: q.account.name, Region: q.account.region, Order: q.number,
-          Date: q.sentAt.toISOString().slice(0, 10), Amount: q.amount, Reference: q.reference ?? '', Source: q.source,
+
+        // These orders are usually charged at $0, so value what was sent at
+        // today's wholesale price (from crm.products, kept in sync with DEAR).
+        const skus = [...new Set(quotes.flatMap(q => q.lines.map(l => l.sku)))];
+        const wholesaleBySku = new Map(
+          (await prisma.product.findMany({ where: { sku: { in: skus } }, select: { sku: true, prices: true } }))
+            .map(p => [p.sku, wholesalePrice(p.prices as Record<string, number>)]),
+        );
+        const lineValue = (sku: string, qty: number) => {
+          const price = wholesaleBySku.get(sku);
+          return price != null ? cents(price * qty) : null;
+        };
+
+        const label = miscType === 'warranty' ? 'Warranty' : 'Marketing';
+        const orderRows = quotes.map(q => {
+          const values = q.lines.map(l => lineValue(l.sku, l.quantity));
+          return {
+            Account: q.account.name,
+            Region: q.account.region,
+            Order: q.number,
+            Date: xlDate(q.sentAt),
+            Reference: q.reference ?? '',
+            Items: q.lines.length,
+            Units: q.lines.reduce((sum, l) => sum + l.quantity, 0),
+            'Charged': cents(q.total ?? q.amount),
+            'Wholesale value': cents(values.reduce<number>((sum, v) => sum + (v ?? 0), 0)),
+            'Missing prices': values.filter(v => v == null).length || '',
+            Source: q.source,
+          };
+        });
+
+        const itemRows = quotes.flatMap(q => q.lines.map(l => {
+          const price = wholesaleBySku.get(l.sku);
+          return {
+            Order: q.number,
+            Date: xlDate(q.sentAt),
+            Account: q.account.name,
+            Region: q.account.region,
+            SKU: l.sku,
+            Product: l.productName,
+            Brand: l.brand ?? '',
+            Quantity: l.quantity,
+            'Wholesale price': price ?? '',
+            'Wholesale value': lineValue(l.sku, l.quantity) ?? '',
+          };
         }));
-        return sendWorkbook(res, `misc-${miscType}.xlsx`, [{ name: miscType === 'warranty' ? 'Warranty' : 'Marketing', rows }]);
+
+        return sendWorkbook(res, `misc-${miscType}.xlsx`, [
+          { name: `${label} orders`, rows: orderRows.length ? orderRows : [{ Note: `No ${label.toLowerCase()} orders.` }] },
+          { name: 'Items sent', rows: itemRows.length ? itemRows : [{ Note: 'No items.' }] },
+        ]);
       }
 
       case 'rep-activity': {

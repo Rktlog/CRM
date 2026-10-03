@@ -68,6 +68,58 @@ accountsRouter.get('/', async (req, res) => {
   res.json(flattened);
 });
 
+// Existing customers for the Customers board, with what a rep needs on
+// each card: reorder pace, spend, and whether there's an open quote, an
+// unpaid balance or a backorder right now. Same territory rule as
+// everything else. Reorder health (recent / due / overdue / lapsed) is
+// worked out in the page from lastOrderAt and avgOrderGapDays.
+accountsRouter.get('/customers', async (req, res) => {
+  const accounts = await prisma.account.findMany({
+    where: {
+      AND: [
+        await territoryWhere(req.rep!),
+        { type: 'customer', archived: false, misc: false },
+      ],
+    },
+    select: {
+      id: true, name: true, region: true, contactName: true, phone: true,
+      lastOrderAt: true, avgOrderGapDays: true, spend90: true, spend365: true,
+      rep: { select: { name: true } },
+    },
+  });
+  const ids = accounts.map(a => a.id);
+
+  // Live DEAR orders only (not spreadsheet history, marketing or warranty).
+  const flags = ids.length
+    ? await prisma.$queryRaw<{ account_id: string; open_quote: boolean; backordered: boolean; owing: number }[]>`
+        select account_id,
+          bool_or(upper(coalesce(fulfillment_status, '')) in ('DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING')
+                  and sent_at > now() - interval '90 days') as open_quote,
+          bool_or(upper(coalesce(fulfillment_status, '')) = 'BACKORDERED') as backordered,
+          coalesce(sum(case
+            when amount_due is not null then amount_due
+            when not paid and invoice_date is not null then coalesce(total, amount)
+            else 0 end), 0)::float8 as owing
+        from crm.quotes
+        where account_id = any(${ids}::uuid[])
+          and source <> 'rhino-history' and number not like 'Q%' and misc_type is null
+          and upper(coalesce(fulfillment_status, '')) not in ('VOIDED', 'CREDITED')
+        group by account_id`
+    : [];
+  const flagsById = new Map(flags.map(f => [f.account_id, f]));
+
+  res.json(accounts.map(({ rep, ...a }) => {
+    const f = flagsById.get(a.id);
+    return {
+      ...a,
+      repName: rep?.name ?? null,
+      openQuote: f?.open_quote ?? false,
+      backordered: f?.backordered ?? false,
+      owing: Math.round((f?.owing ?? 0) * 100) / 100,
+    };
+  }));
+});
+
 accountsRouter.get('/:id', async (req, res) => {
   const account = await prisma.account.findUnique({
     where: { id: req.params.id },

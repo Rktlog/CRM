@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { apiGet } from '../lib/api';
 import { Account, STAGES, STAGE_LABELS, fmtMoney, flagFor } from '../lib/types';
 import { useMe, stateOptionsFor, territoryLabel } from '../lib/useMe';
@@ -28,6 +28,9 @@ export default function Pipeline() {
         <div>
           <h1>Pipeline</h1>
           {territoryLabel(me) && <div className="territory-note">{territoryLabel(me)}</div>}
+          <div className="territory-note">
+            New business. Once a store's first order ships, it moves to <Link to="/customers" className="order-link">Customers</Link>.
+          </div>
         </div>
         {stateOptions.length > 1 && (
           <select value={region} onChange={e => setRegion(e.target.value)}>
@@ -40,7 +43,9 @@ export default function Pipeline() {
         <div className="empty-state">Loading…</div>
       ) : (
         <div className="board">
-          {STAGES.map(stage => {
+          {/* New business only: once an account's order has shipped, it's a
+              customer and lives on the Customers board instead. */}
+          {STAGES.filter(stage => stage !== 'dispatched').map(stage => {
             const deals = accounts.filter(a => a.stage === stage);
             return (
               <div className="bay" key={stage}>
