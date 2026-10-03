@@ -115,9 +115,9 @@ model Account {
   nextFollowUpAt DateTime?  @map("next_follow_up_at")
 
   // Cached spend figures, written by the Cin7 sync job later.
-  spend30       Int         @default(0) @map("spend_30")
-  spend90       Int         @default(0) @map("spend_90")
-  spend365      Int         @default(0) @map("spend_365")
+  spend30       Float       @default(0) @map("spend_30")
+  spend90       Float       @default(0) @map("spend_90")
+  spend365      Float       @default(0) @map("spend_365")
   lastOrderAt   DateTime?   @map("last_order_at")
   // Average days between this account's own past orders — used to
   // flag "inactive" relative to THEIR normal pace, not one fixed
@@ -169,7 +169,7 @@ model Quote {
   accountId String   @map("account_id") @db.Uuid
   account   Account  @relation(fields: [accountId], references: [id])
   number    String   @unique
-  amount    Int
+  amount    Float // exact order total incl. cents
   sentAt      DateTime  @map("sent_at")
   invoiceDate       DateTime? @map("invoice_date")
   paid              Boolean   @default(false)
@@ -213,7 +213,8 @@ model Quote {
   shippingDetails Json?    @map("shipping_details") // { company, contact, line1, line2, city, state, postcode, country }
   shipments       Json     @default("[]")           // [{ date, carrier, trackingNumber, trackingUrl }]
   taxTotal        Float?   @map("tax_total")
-  total           Float?   // exact order total incl. tax; `amount` is the rounded figure used in reports
+  total           Float?   // exact order total incl. tax, from DEAR
+  amountPaid      Float?   @map("amount_paid") // paid so far on the invoice (part payments)
   memo            String?
 
   // Every account-list request filters/includes quotes by these

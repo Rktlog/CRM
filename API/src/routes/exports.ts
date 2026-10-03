@@ -2,7 +2,8 @@ import { Router } from 'express';
 import * as XLSX from 'xlsx';
 import { prisma } from '../lib/prisma';
 import { territoryWhere, canSeeAccount } from '../lib/territory';
-import { LIVE_ORDER } from '../lib/orderSource';
+import { LIVE_ORDER, isHistory } from '../lib/orderSource';
+import { wholesalePrice, retailPrice } from '../lib/pricing';
 
 export const exportsRouter = Router();
 
@@ -35,6 +36,39 @@ async function scopedAccountIds(req: any, region?: string, repId?: string) {
   if (isManager && repId) where.AND.push({ repId });
   const accounts = await prisma.account.findMany({ where, select: { id: true, name: true, region: true, type: true, stage: true, category: true, contactName: true, phone: true, email: true, spend30: true, spend90: true, spend365: true, lastOrderAt: true, avgOrderGapDays: true, repId: true, archived: true } });
   return accounts;
+}
+
+const cents = (n: number) => Math.round(n * 100) / 100;
+const xlDate = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : '');
+
+// Plain-English order status for spreadsheets (matches the app's tags).
+function orderStatusWords(q: {
+  source?: string | null; number?: string | null; fulfillmentStatus?: string | null; shippingStatus?: string | null;
+}): string {
+  if (isHistory(q)) return 'History';
+  const status = (q.fulfillmentStatus ?? '').toUpperCase();
+  const ship = (q.shippingStatus ?? '').toUpperCase();
+  if (status === 'VOIDED') return 'Voided';
+  if (status === 'CREDITED') return 'Credited';
+  if (['DRAFT', 'ESTIMATING', 'ESTIMATED'].includes(status)) return 'Quote';
+  if (ship === 'SHIPPED' || status === 'COMPLETED') return 'Shipped';
+  if (ship === 'PARTIALLY SHIPPED') return 'Part shipped';
+  if (status === 'BACKORDERED') return 'Backordered';
+  if (status === 'ORDERING') return 'Draft order';
+  return status ? 'Confirmed' : '';
+}
+
+function paymentWords(q: {
+  source?: string | null; number?: string | null; paid: boolean; paymentStatus?: string | null;
+  invoiceDate?: Date | null; invoiceNumber?: string | null; miscType?: string | null;
+}): string {
+  if (isHistory(q)) return '';
+  if (q.miscType) return 'No charge';
+  const pay = (q.paymentStatus ?? '').toUpperCase();
+  if (pay === 'PREPAID') return 'Prepaid';
+  if (q.paid) return 'Paid';
+  if (pay.includes('PARTIALLY')) return 'Part paid';
+  return q.invoiceDate || q.invoiceNumber ? 'Unpaid' : 'Not invoiced';
 }
 
 exportsRouter.get('/:type', async (req, res) => {
@@ -298,12 +332,217 @@ exportsRouter.get('/:type', async (req, res) => {
           e.quantity += l.quantity; e.total += l.lineTotal;
           bySku.set(l.sku, e);
         }
+        // Current prices and stock from crm.products (kept in sync with DEAR).
+        const products = new Map((await prisma.product.findMany({
+          where: { sku: { in: [...bySku.keys()] } },
+          select: { sku: true, prices: true, available: true },
+        })).map(p => [p.sku, p]));
+
         const rows = [...bySku.entries()]
-          .map(([sku, v]) => ({ SKU: sku, Product: v.productName, Brand: v.brand ?? 'Unbranded', Quantity: v.quantity, Total: Math.round(v.total * 100) / 100 }))
+          .map(([sku, v]) => {
+            const p = products.get(sku);
+            const prices = p?.prices as Record<string, number> | undefined;
+            return {
+              SKU: sku,
+              Product: v.productName,
+              Brand: v.brand ?? 'Unbranded',
+              Quantity: v.quantity,
+              Total: cents(v.total),
+              'Wholesale price': wholesalePrice(prices) ?? '',
+              'Retail price': retailPrice(prices) ?? '',
+              'Available now': p ? p.available : '',
+            };
+          })
           .sort((a, b) => b.Total - a.Total);
 
         const safeName = account.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
         return sendWorkbook(res, `${safeName}-products.xlsx`, [{ name: 'Products Purchased', rows }]);
+      }
+
+      // ---- One account's full order history: orders, then every line ----
+      case 'account-orders': {
+        const accountId = req.query.accountId as string;
+        if (!accountId) return res.status(400).json({ error: 'accountId required' });
+        const account = await prisma.account.findUnique({ where: { id: accountId }, select: { id: true, name: true, repId: true, region: true } });
+        if (!account) return res.status(404).json({ error: 'Account not found' });
+        if (!(await canSeeAccount(req.rep!, account))) return res.status(403).json({ error: 'This account is outside your states' });
+
+        const quotes = await prisma.quote.findMany({
+          where: { accountId },
+          include: { lines: true },
+          orderBy: { sentAt: 'desc' },
+        });
+
+        const orderRows = quotes.map(q => ({
+          Order: q.number,
+          Date: xlDate(q.sentAt),
+          'Invoice no.': q.invoiceNumber ?? '',
+          'Invoice date': xlDate(q.invoiceDate),
+          Status: orderStatusWords(q),
+          Payment: paymentWords(q),
+          Total: cents(q.total ?? q.amount),
+          'Paid so far': q.amountPaid != null ? cents(q.amountPaid) : '',
+          Type: q.miscType === 'marketing' ? 'Marketing' : q.miscType === 'warranty' ? 'Warranty' : isHistory(q) ? 'History' : 'Sale',
+          Reference: q.reference ?? '',
+          'Ship to': q.shippingCompany ?? q.shippingAddress ?? '',
+          Items: q.lines.length,
+        }));
+
+        const lineRows = quotes.flatMap(q => q.lines.map(l => ({
+          Order: q.number,
+          Date: xlDate(q.sentAt),
+          SKU: l.sku,
+          Product: l.productName,
+          Brand: l.brand ?? '',
+          Quantity: l.quantity,
+          'Unit price': cents(l.unitPrice),
+          'Discount %': l.discount || '',
+          'Line total': cents(l.lineTotal),
+        })));
+
+        const safeName = account.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+        return sendWorkbook(res, `${safeName}-order-history.xlsx`, [
+          { name: 'Orders', rows: orderRows },
+          { name: 'Order lines', rows: lineRows },
+        ]);
+      }
+
+      // ---- Monthly stocklist for one account ----
+      // Sheet 1: what they stock now (everything they've ordered).
+      // Sheet 2: products from the same brands they don't stock yet, in
+      // stock or on the way, newest first. Prices and stock are current.
+      case 'account-stocklist': {
+        const accountId = req.query.accountId as string;
+        if (!accountId) return res.status(400).json({ error: 'accountId required' });
+        const account = await prisma.account.findUnique({ where: { id: accountId }, select: { id: true, name: true, repId: true, region: true } });
+        if (!account) return res.status(404).json({ error: 'Account not found' });
+        if (!(await canSeeAccount(req.rep!, account))) return res.status(403).json({ error: 'This account is outside your states' });
+
+        const since12m = new Date(Date.now() - 365 * 86400000);
+        const NEW_WINDOW_DAYS = 90;
+        const newCutoff = new Date(Date.now() - NEW_WINDOW_DAYS * 86400000);
+
+        // What they've bought, per SKU (marketing/warranty aren't purchases).
+        const lines = await prisma.quoteLine.findMany({
+          where: { quote: { accountId, miscType: null } },
+          select: { sku: true, productName: true, brand: true, quantity: true, quote: { select: { sentAt: true } } },
+        });
+        const bought = new Map<string, { name: string; brand: string | null; lastOrdered: Date; units12m: number; unitsAll: number }>();
+        for (const l of lines) {
+          const b = bought.get(l.sku) ?? { name: l.productName, brand: l.brand, lastOrdered: l.quote.sentAt, units12m: 0, unitsAll: 0 };
+          b.unitsAll += l.quantity;
+          if (l.quote.sentAt >= since12m) b.units12m += l.quantity;
+          if (l.quote.sentAt > b.lastOrdered) b.lastOrdered = l.quote.sentAt;
+          bought.set(l.sku, b);
+        }
+
+        const boughtProducts = await prisma.product.findMany({ where: { sku: { in: [...bought.keys()] } } });
+        const productBySku = new Map(boughtProducts.map(p => [p.sku, p]));
+
+        // Brands they buy (from the catalogue, falling back to the order line).
+        const brands = new Set<string>();
+        for (const [sku, b] of bought) {
+          const brand = productBySku.get(sku)?.brand ?? b.brand;
+          if (brand) brands.add(brand);
+        }
+
+        // Same-brand products they don't stock yet, available or on order.
+        const candidates = brands.size
+          ? await prisma.product.findMany({
+              where: {
+                brand: { in: [...brands] },
+                sku: { notIn: [...bought.keys()] },
+                OR: [{ status: null }, { status: { not: 'Deprecated' } }],
+                AND: [{ OR: [{ available: { gt: 0 } }, { onOrder: { gt: 0 } }] }],
+              },
+            })
+          : [];
+
+        const allSkus = [...bought.keys(), ...candidates.map(c => c.sku)];
+
+        // "New" = first stock received in the last 90 days, and no sales
+        // to anyone before then.
+        const firstSeen = await prisma.$queryRaw<{ sku: string; first_received: Date | null; first_sold: Date | null }[]>`
+          select s.sku,
+            (select min(pl.last_received_at) from crm.purchase_lines pl where pl.sku = s.sku and pl.quantity_received > 0) as first_received,
+            (select min(q.sent_at) from crm.quote_lines l join crm.quotes q on q.id = l.quote_id where l.sku = s.sku) as first_sold
+          from unnest(${allSkus}::text[]) as s(sku)
+        `;
+        const isNew = new Map(firstSeen.map(f => [
+          f.sku,
+          !!f.first_received && f.first_received >= newCutoff && (!f.first_sold || f.first_sold >= newCutoff),
+        ]));
+
+        // Next expected delivery for anything on order.
+        const openPOs = await prisma.purchaseLine.findMany({
+          where: { sku: { in: allSkus }, purchase: { status: { notIn: ['VOIDED', 'CREDITED', 'DRAFT', 'COMPLETED'] } } },
+          select: { sku: true, quantityOrdered: true, quantityReceived: true, purchase: { select: { requiredBy: true } } },
+        });
+        const nextDue = new Map<string, Date>();
+        for (const po of openPOs) {
+          if (po.quantityOrdered - po.quantityReceived <= 0 || !po.purchase.requiredBy) continue;
+          const cur = nextDue.get(po.sku);
+          if (!cur || po.purchase.requiredBy < cur) nextDue.set(po.sku, po.purchase.requiredBy);
+        }
+
+        const availability = (p?: { available: number; onOrder: number } | null) => {
+          if (!p) return 'Not in catalogue';
+          if (p.available > 0) return 'In stock';
+          if (p.onOrder > 0) return 'On order';
+          return 'Out of stock';
+        };
+
+        const currentRows = [...bought.entries()]
+          .sort((a, b) => b[1].lastOrdered.getTime() - a[1].lastOrdered.getTime())
+          .map(([sku, b]) => {
+            const p = productBySku.get(sku);
+            const prices = p?.prices as Record<string, number> | undefined;
+            return {
+              SKU: sku,
+              Product: p?.name ?? b.name,
+              Brand: p?.brand ?? b.brand ?? '',
+              Stock: p?.status === 'Deprecated' ? 'Discontinued' : isNew.get(sku) ? 'New' : 'Existing',
+              'Wholesale price': wholesalePrice(prices) ?? '',
+              'Retail price': retailPrice(prices) ?? '',
+              Availability: availability(p),
+              'Available qty': p ? p.available : '',
+              'On order': p ? p.onOrder : '',
+              'Next delivery': xlDate(nextDue.get(sku)),
+              'Last ordered': xlDate(b.lastOrdered),
+              'Units, last 12 months': b.units12m,
+              'Units, all time': b.unitsAll,
+            };
+          });
+
+        const newRows = candidates
+          .sort((a, b) =>
+            Number(isNew.get(b.sku) ?? false) - Number(isNew.get(a.sku) ?? false)
+            || (a.brand ?? '').localeCompare(b.brand ?? '')
+            || b.available - a.available)
+          .slice(0, 500)
+          .map(p => {
+            const prices = p.prices as Record<string, number>;
+            return {
+              SKU: p.sku,
+              Product: p.name,
+              Brand: p.brand ?? '',
+              Category: p.category ?? '',
+              Stock: isNew.get(p.sku) ? 'New' : 'Existing',
+              'Wholesale price': wholesalePrice(prices) ?? '',
+              'Retail price': retailPrice(prices) ?? '',
+              Availability: availability(p),
+              'Available qty': p.available,
+              'On order': p.onOrder,
+              'Next delivery': xlDate(nextDue.get(p.sku)),
+            };
+          });
+
+        const month = new Date().toLocaleDateString('en-AU', { month: 'short', year: 'numeric' }).replace(' ', '-').toLowerCase();
+        const safeName = account.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+        return sendWorkbook(res, `${safeName}-stocklist-${month}.xlsx`, [
+          { name: 'Current range', rows: currentRows.length ? currentRows : [{ Note: 'No products ordered yet.' }] },
+          { name: 'New for you', rows: newRows.length ? newRows : [{ Note: 'Nothing new from their brands right now.' }] },
+        ]);
       }
 
       case 'misc-marketing':

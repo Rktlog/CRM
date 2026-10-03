@@ -66,6 +66,8 @@ export type Quote = {
   pickingStatus?: string | null;
   paymentStatus?: string | null;
   invoiceNumber?: string | null;
+  total?: number | null;       // exact order total from DEAR
+  amountPaid?: number | null;  // paid so far (part payments)
   lines?: QuoteLineItem[];
 };
 
@@ -128,8 +130,10 @@ export function daysBetween(iso: string): number {
   return Math.round((Date.now() - new Date(iso).getTime()) / 86400000);
 }
 
+// Always to the cent: rounding to whole dollars adds up across thousands
+// of orders and makes totals disagree with DEAR.
 export function fmtMoney(n: number): string {
-  return '$' + n.toLocaleString('en-AU');
+  return '$' + (Number(n) || 0).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export function fmtDate(iso: string): string {

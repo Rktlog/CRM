@@ -9,9 +9,13 @@ export default function AccountDetail() {
   const [account, setAccount] = useState<AccountDetailType | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState('');
+  // One-off email from this account: the draft plus starting templates.
   const [brandFilter, setBrandFilter] = useState('');
   const [productYear, setProductYear] = useState('all');
   const [exportingProducts, setExportingProducts] = useState(false);
+  const [exportingOrders, setExportingOrders] = useState(false);
+  const [exportingStocklist, setExportingStocklist] = useState(false);
+  const [showDue, setShowDue] = useState(false);
   const [type, setType] = useState<'call' | 'email' | 'visit'>('call');
   const [saving, setSaving] = useState(false);
   const [editingActivityId, setEditingActivityId] = useState<string | null>(null);
@@ -93,6 +97,26 @@ export default function AccountDetail() {
   const openQuote = liveQuotes.find(q => !q.paid) ?? liveQuotes[0];
   const hasBackorder = liveQuotes.some(q => (q.fulfillmentStatus ?? '').toUpperCase() === 'BACKORDERED');
 
+  // Amount due: live orders that have been invoiced and aren't fully paid.
+  // Part payments are taken off. Marketing/warranty orders owe nothing.
+  const dueOrders = liveQuotes
+    .filter(q => !q.paid && !q.miscType && (q.invoiceDate || q.invoiceNumber)
+      && !['VOIDED', 'CREDITED'].includes((q.fulfillmentStatus ?? '').toUpperCase()))
+    .map(q => ({ q, due: Math.max(0, (q.total ?? q.amount) - (q.amountPaid ?? 0)) }))
+    .filter(d => d.due > 0.005)
+    .sort((a, b) => new Date(a.q.invoiceDate ?? a.q.sentAt).getTime() - new Date(b.q.invoiceDate ?? b.q.sentAt).getTime());
+  const totalDue = dueOrders.reduce((s, d) => s + d.due, 0);
+
+  async function download(path: string, file: string, setBusy: (b: boolean) => void) {
+    setBusy(true);
+    try {
+      await apiDownload(path, file);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const safeName = account.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+
   return (
     <>
       <Link className="back-link" to="/accounts">&larr; All accounts</Link>
@@ -144,6 +168,40 @@ export default function AccountDetail() {
               <span>Stage</span>
               <span className="num">{STAGE_LABELS[account.stage]}</span>
             </div>
+          </div>
+
+          <div className="card">
+            <h3 className="due-head" onClick={() => dueOrders.length && setShowDue(!showDue)} style={{ cursor: dueOrders.length ? 'pointer' : 'default' }}>
+              <span>Amount due</span>
+              <span className={'num due-total' + (totalDue > 0 ? ' owing' : '')}>
+                {fmtMoney(totalDue)}
+                {dueOrders.length > 0 && <span className="due-caret">{showDue ? '▾' : '▸'}</span>}
+              </span>
+            </h3>
+            <div className="acct-region">
+              {dueOrders.length
+                ? `${dueOrders.length} unpaid ${dueOrders.length === 1 ? 'invoice' : 'invoices'}${showDue ? '' : ', click to see which'}`
+                : 'Nothing owing.'}
+            </div>
+            {showDue && dueOrders.length > 0 && (
+              <div className="due-list">
+                {dueOrders.map(({ q, due }) => {
+                  const days = daysBetween(q.invoiceDate ?? q.sentAt);
+                  return (
+                    <Link to={`/orders/${q.id}`} className="due-row" key={q.id}>
+                      <div>
+                        <div className="acct-name">{q.number}{q.invoiceNumber ? `, inv ${q.invoiceNumber}` : ''}</div>
+                        <div className="acct-region">
+                          Invoiced {fmtDateWithYear(q.invoiceDate ?? q.sentAt)}, {days} {days === 1 ? 'day' : 'days'} ago
+                          {q.amountPaid ? `, ${fmtMoney(q.amountPaid)} paid of ${fmtMoney(q.total ?? q.amount)}` : ''}
+                        </div>
+                      </div>
+                      <div className={'num' + (days > 30 ? ' overdue' : '')}>{fmtMoney(due)}</div>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className="card">
@@ -241,8 +299,8 @@ export default function AccountDetail() {
             <div className="card">
               <h3>Contact</h3>
               {account.contactName && <div className="kv"><span className="k">Name</span><span>{account.contactName}</span></div>}
-              {account.phone && <div className="kv"><span className="k">Phone</span><span>{account.phone}</span></div>}
-              {account.email && <div className="kv"><span className="k">Email</span><span>{account.email}</span></div>}
+              {account.phone && <div className="kv"><span className="k">Phone</span><span><a href={`tel:${account.phone}`} className="order-link">{account.phone}</a></span></div>}
+              {account.email && <div className="kv"><span className="k">Email</span><span><a href={`mailto:${account.email}`} className="order-link">{account.email}</a></span></div>}
               {account.address && <div className="kv"><span className="k">Address</span><span>{account.address}</span></div>}
             </div>
           )}
@@ -278,12 +336,24 @@ export default function AccountDetail() {
           </div>
 
           <div className="card">
-            <h3>Order history</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <h3>Order history</h3>
+              {account.quotes.length > 0 && (
+                <button
+                  className="btn secondary"
+                  style={{ padding: '4px 10px', fontSize: 11.5 }}
+                  disabled={exportingOrders}
+                  onClick={() => download(`/exports/account-orders?accountId=${account.id}`, `${safeName}-order-history.xlsx`, setExportingOrders)}
+                >
+                  {exportingOrders ? 'Downloading…' : '⬇ Excel'}
+                </button>
+              )}
+            </div>
             {account.quotes.length === 0 && (
               <div style={{ color: 'var(--muted)', fontSize: 13 }}>No past orders on record.</div>
             )}
             {account.quotes.length > 0 && (
-              <div className="scroll-capped-5">
+              <div className="scroll-capped-5 order-history-scroll">
               <div className="manifest" style={{ border: 'none' }}>
                 <div className="m-row head" style={{ gridTemplateColumns: '1.1fr 0.9fr 1fr', padding: '8px 0' }}>
                   <div>Order no.</div><div className="num">Price</div><div>Status</div>
@@ -362,6 +432,17 @@ export default function AccountDetail() {
                   }}
                 >
                   {exportingProducts ? 'Downloading…' : '⬇ Excel'}
+                </button>
+              </div>
+              <div className="stocklist-row">
+                <span className="acct-region">Monthly stocklist: their current range, plus new products from the brands they stock, with prices and availability.</span>
+                <button
+                  className="btn secondary"
+                  style={{ padding: '4px 10px', fontSize: 11.5, whiteSpace: 'nowrap' }}
+                  disabled={exportingStocklist}
+                  onClick={() => download(`/exports/account-stocklist?accountId=${account.id}`, `${safeName}-stocklist.xlsx`, setExportingStocklist)}
+                >
+                  {exportingStocklist ? 'Building…' : '⬇ Stocklist'}
                 </button>
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
