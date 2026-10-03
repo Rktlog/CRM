@@ -26,15 +26,20 @@ type ReportData = {
   comparisonReachesBeforeData: boolean;
 };
 
-export default function SalesComparisonCard() {
+// region: comma-separated states picked on the Sales Data page, so this
+// chart always covers the same states as the rest of the page.
+export default function SalesComparisonCard({ region }: { region?: string }) {
   const [range, setRange] = useState<Range>('3m');
   const [data, setData] = useState<ReportData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setData(null);
-    apiGet(`/reports/sales?range=${range}`).then(setData).catch(e => setError(e.message));
-  }, [range]);
+    setError(null);
+    const params = new URLSearchParams({ range });
+    if (region) params.set('region', region);
+    apiGet(`/reports/sales?${params.toString()}`).then(setData).catch(e => setError(e.message));
+  }, [range, region]);
 
   return (
     <div className="card">

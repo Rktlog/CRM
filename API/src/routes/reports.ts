@@ -121,6 +121,19 @@ function resolveRange(range: Range, now: Date) {
   return { currentStart, currentEnd, previousStart, previousEnd, bucketMonths };
 }
 
+// Who sees what on Sales Data: managers see every state; reps see the
+// states they're assigned to (rep_regions), and can only narrow within
+// them. A rep with no states assigned yet sees just their own accounts,
+// so nothing shows before a manager sets them up. Enforced here, not
+// only hidden in the page.
+async function salesScope(req: any, requested?: string[]): Promise<{ regions?: string[]; repId?: string; myRegions: string[] | null }> {
+  if (req.rep!.role === 'manager') return { regions: requested, myRegions: null };
+  const assigned = (await prisma.repRegion.findMany({ where: { repId: req.rep!.id }, select: { region: true } })).map(r => r.region);
+  if (!assigned.length) return { regions: requested, repId: req.rep!.id, myRegions: [] };
+  const regions = requested ? requested.filter(r => assigned.includes(r)) : assigned;
+  return { regions: regions.length ? regions : ['__none__'], myRegions: assigned };
+}
+
 reportsRouter.get('/sales', async (req, res) => {
   const range = (req.query.range as Range) || '3m';
   if (!['3m', '6m', '12m', 'fy_quarter', 'fy_year', 'last_fy_quarter', 'last_fy_year'].includes(range)) {
@@ -130,11 +143,19 @@ reportsRouter.get('/sales', async (req, res) => {
   const now = new Date();
   const { currentStart, currentEnd, previousStart, previousEnd } = resolveRange(range, now);
 
-  // Same as /ledger — Sales Data is company-wide for every team
-  // member, not scoped to "your own accounts." Excludes misc
-  // (marketing/warranty) accounts — real transactions, but shouldn't
-  // count toward performance.
-  const accounts = await prisma.account.findMany({ where: { misc: false }, select: { id: true } });
+  // Same scoping as /ledger (see salesScope). Optional ?region= follows
+  // the region picked on the page. Excludes misc (marketing/warranty)
+  // accounts: real transactions, but they don't count toward performance.
+  const regionParam = req.query.region as string | undefined;
+  const scope = await salesScope(req, regionParam ? regionParam.split(',') : undefined);
+  const accounts = await prisma.account.findMany({
+    where: {
+      misc: false,
+      ...(scope.regions ? { region: { in: scope.regions } } : {}),
+      ...(scope.repId ? { repId: scope.repId } : {}),
+    },
+    select: { id: true },
+  });
   const accountIds = accounts.map(a => a.id);
 
   const quotes = await prisma.quote.findMany({
@@ -286,15 +307,14 @@ reportsRouter.get('/ledger', async (req, res) => {
   const period = (['calendar', 'alltime'].includes(req.query.period as string) ? req.query.period : 'fiscal') as 'calendar' | 'fiscal' | 'alltime';
   const window = getPeriodWindow(year, period);
 
-  // Sales Data is intentionally company-wide and the same for every
-  // team member, rep or manager — not scoped to "your own accounts"
-  // the way the rest of the app is. Anyone can filter to a specific
-  // rep's slice via repId; nobody is restricted to only their own.
-  const effectiveRepId = requestedRepId || undefined;
+  // Managers see every state and can filter to one rep; reps see their
+  // assigned states (see salesScope).
+  const scope = await salesScope(req, regions);
+  const effectiveRepId = scope.repId ?? (isManager ? requestedRepId || undefined : undefined);
 
   const accountWhere: any = {
     ...(effectiveRepId ? { repId: effectiveRepId } : {}),
-    ...(regions ? { region: { in: regions } } : {}),
+    ...(scope.regions ? { region: { in: scope.regions } } : {}),
     misc: false, // marketing/warranty accounts don't count toward performance
   };
   const accounts = await prisma.account.findMany({
@@ -481,6 +501,7 @@ reportsRouter.get('/ledger', async (req, res) => {
     totalOrders: windowedQuotes.length,
     accountsWithActivity,
     newCustomerCount: newCount,
+    myRegions: scope.myRegions,
     newCustomerValue: Math.round(newValue * 100) / 100,
     period,
     periodLabel: window.label,

@@ -37,10 +37,25 @@ const REGION_GROUPS: { key: string; label: string; regions: string[] | null }[] 
   { key: 'NZ', label: 'NZ', regions: ['NZ'] },
 ];
 
+type Me = { role: 'rep' | 'manager'; regions: string[] };
+
+// Reps only get their assigned states to choose from: all of them
+// together first, then each one on its own if they cover several.
+// A rep with no states assigned sees just their own accounts.
+function regionOptionsFor(me: Me): typeof REGION_GROUPS {
+  if (me.role === 'manager') return REGION_GROUPS;
+  if (!me.regions.length) return [{ key: 'mine', label: 'My accounts', regions: null }];
+  const mine = [{ key: 'mine', label: me.regions.join(' / '), regions: me.regions }];
+  return me.regions.length > 1
+    ? [...mine, ...me.regions.map(r => ({ key: r, label: r, regions: [r] }))]
+    : mine;
+}
+
 export default function SalesData() {
   const [data, setData] = useState<LedgerData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [regionKey, setRegionKey] = useState('nsw-act');
+  const [me, setMe] = useState<Me | null>(null);
+  const [regionKey, setRegionKey] = useState('');
   // Defaults to the current FY: in Feb 2027 that's FY 2026/27, not 2027.
   const [year, setYear] = useState(() => {
     const d = new Date();
@@ -55,21 +70,31 @@ export default function SalesData() {
   const [invPage, setInvPage] = useState(0);
   const PAGE_SIZE = 25;
 
-  const activeGroup = REGION_GROUPS.find(g => g.key === regionKey)!;
+  const regionOptions = me ? regionOptionsFor(me) : [];
+  const activeGroup = regionOptions.find(g => g.key === regionKey) ?? regionOptions[0];
+  const isManager = me?.role === 'manager';
 
   useEffect(() => {
-    apiGet('/reports/reps').then(setReps).catch(() => {});
+    apiGet('/me')
+      .then((m: any) => {
+        const loaded: Me = { role: m.role, regions: m.regions ?? [] };
+        setMe(loaded);
+        setRegionKey(loaded.role === 'manager' ? 'nsw-act' : 'mine');
+        if (loaded.role === 'manager') apiGet('/reports/reps').then(setReps).catch(() => {});
+      })
+      .catch(e => setError(e.message));
   }, []);
 
   useEffect(() => {
+    if (!me || !activeGroup) return; // wait until we know which states this person covers
     setData(null);
     const params = new URLSearchParams();
     if (activeGroup.regions) params.set('region', activeGroup.regions.join(','));
     params.set('year', String(year));
     params.set('period', period);
-    if (repId) params.set('repId', repId);
+    if (repId && isManager) params.set('repId', repId);
     apiGet(`/reports/ledger?${params.toString()}`).then(setData).catch(e => setError(e.message));
-  }, [regionKey, year, period, repId]);
+  }, [me, regionKey, year, period, repId]);
 
   const topAccounts = useMemo(() => {
     if (!data) return [];
@@ -96,18 +121,22 @@ export default function SalesData() {
     <div className="ledger">
       <div className="ledger-head">
         <div>
-          <div className="ledger-tag">{activeGroup.label}</div>
+          <div className="ledger-tag">{activeGroup?.label ?? ''}</div>
           <h1 className="ledger-title">Sales Ledger</h1>
           <div className="ledger-sub">Live from synced DEAR orders and your own budget targets — updates with every sync</div>
         </div>
         <div className="ledger-controls">
-          <select value={repId} onChange={e => setRepId(e.target.value)}>
-            <option value="">All reps</option>
-            {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-          </select>
-          <select value={regionKey} onChange={e => setRegionKey(e.target.value)}>
-            {REGION_GROUPS.map(g => <option key={g.key} value={g.key}>{g.label}</option>)}
-          </select>
+          {isManager && (
+            <select value={repId} onChange={e => setRepId(e.target.value)}>
+              <option value="">All reps</option>
+              {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          )}
+          {regionOptions.length > 1 && (
+            <select value={regionKey} onChange={e => setRegionKey(e.target.value)}>
+              {regionOptions.map(g => <option key={g.key} value={g.key}>{g.label}</option>)}
+            </select>
+          )}
           <select value={year} onChange={e => setYear(Number(e.target.value))}>
             {Array.from({ length: new Date().getFullYear() - 2019 }, (_, i) => 2021 + i).reverse().map(y => <option key={y} value={y}>{period === 'fiscal' ? `FY ${y}/${String(y + 1).slice(2)}` : y}</option>)}
           </select>
@@ -152,7 +181,7 @@ export default function SalesData() {
 
           <div className="ledger-section-head"><h2>Compare periods</h2></div>
           <div className="ledger-chart">
-            <SalesComparisonCard />
+            <SalesComparisonCard region={activeGroup?.regions?.join(',')} />
           </div>
 
           <hr className="ledger-rule" />
@@ -282,7 +311,7 @@ export default function SalesData() {
             </div>
             <div>
               <div className="bd-title">New in {data.periodLabel} vs existing customers</div>
-              <BarRows items={data.typeBreakdown.map(t => ({ ...t, label: `${t.type}: ${t.count} ${t.count === 1 ? 'customer' : 'customers'}` }))} labelKey="label" />
+              <BarRows items={data.typeBreakdown.map(t => ({ ...t, label: t.type, sub: `${t.count} ${t.count === 1 ? 'customer' : 'customers'}` }))} labelKey="label" />
             </div>
           </div>
 
@@ -364,13 +393,18 @@ export default function SalesData() {
   );
 }
 
-function BarRows({ items, labelKey }: { items: (BreakdownRow & { label?: string })[]; labelKey: string }) {
+// sub: optional second line under the label (e.g. a customer count), so
+// it never gets cut off by the fixed-width label column.
+function BarRows({ items, labelKey }: { items: (BreakdownRow & { label?: string; sub?: string })[]; labelKey: string }) {
   const max = Math.max(...items.map(i => i.total), 1);
   return (
     <>
       {items.map((i: any, idx) => (
         <div className="bd-row" key={idx}>
-          <div className="bd-label">{i[labelKey]}</div>
+          <div className="bd-label">
+            {i[labelKey]}
+            {i.sub && <div className="bd-sub">{i.sub}</div>}
+          </div>
           <div className="bd-track"><div className="bd-fill" style={{ width: `${(i.total / max) * 100}%` }} /></div>
           <div className="bd-val num">{fmtMoney(i.total)}</div>
         </div>

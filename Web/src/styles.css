@@ -476,3 +476,12 @@ a.pd-list-card:hover { border-color: var(--teal); }
 .fulfilment:first-of-type { border-top: none; padding-top: 0; }
 .fulfilment-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
 .fulfilment-ship { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+
+/* ---- Abandoned carts ---- */
+.carts-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.carts-filters { display: flex; gap: 10px; align-items: center; margin: 14px 0; flex-wrap: wrap; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+.seg button { border: none; background: none; padding: 7px 14px; font: inherit; font-size: 13px; color: var(--ink-soft); cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: var(--teal-bg); color: var(--teal); font-weight: 600; }
+.bd-sub { font-size: 11px; color: var(--muted); }

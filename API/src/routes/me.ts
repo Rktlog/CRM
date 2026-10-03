@@ -6,13 +6,14 @@ export const meRouter = Router();
 meRouter.get('/', async (req, res) => {
   const rep = await prisma.rep.findUnique({
     where: { id: req.rep!.id },
-    select: { name: true, dailyColdCallLimit: true, dailyNewLeadCount: true, dailyInactiveCount: true },
+    select: { name: true, dailyColdCallLimit: true, dailyNewLeadCount: true, dailyInactiveCount: true, regions: { select: { region: true } } },
   });
   const syncState = await prisma.syncState.findUnique({ where: { key: 'sales' } });
   res.json({
     id: req.rep!.id,
     role: req.rep!.role,
     name: rep?.name,
+    regions: (rep?.regions ?? []).map(r => r.region),
     dailyColdCallLimit: rep?.dailyColdCallLimit ?? 10,
     dailyNewLeadCount: rep?.dailyNewLeadCount ?? 5,
     dailyInactiveCount: rep?.dailyInactiveCount ?? 5,
