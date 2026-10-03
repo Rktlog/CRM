@@ -71,6 +71,8 @@ export type Quote = {
   invoicedTotal?: number | null;
   creditedTotal?: number | null;
   amountDue?: number | null;   // DEAR balance: invoiced - paid - credited (null = not synced yet)
+  unappliedCredit?: number | null; // credit on account from this order (unused credit notes, unapplied prepayments)
+  creditNotes?: unknown;
   lines?: QuoteLineItem[];
 };
 

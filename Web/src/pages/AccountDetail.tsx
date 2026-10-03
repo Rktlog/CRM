@@ -108,6 +108,21 @@ export default function AccountDetail() {
     .sort((a, b) => new Date(a.q.invoiceDate ?? a.q.sentAt).getTime() - new Date(b.q.invoiceDate ?? b.q.sentAt).getTime());
   const totalDue = dueOrders.reduce((s, d) => s + d.due, 0);
 
+  // Credit on account (credit notes not yet applied or refunded, and
+  // prepayments not yet applied), from any live order, paid or not.
+  // Balance = owed - credit, as DEAR shows it: negative means in credit.
+  const creditOrders = liveQuotes
+    .filter(q => (q.unappliedCredit ?? 0) > 0.005)
+    .map(q => {
+      const notes = ((q.creditNotes ?? []) as { number: string | null; onAccount?: number }[])
+        .filter(n => (n.onAccount ?? 0) > 0.005);
+      const fromNotes = notes.reduce((s, n) => s + (n.onAccount ?? 0), 0);
+      return { q, credit: q.unappliedCredit!, notes, prepayment: Math.max(0, q.unappliedCredit! - fromNotes) };
+    });
+  const totalCredit = creditOrders.reduce((s, c) => s + c.credit, 0);
+  const balance = totalDue - totalCredit;
+  const hasMoneyDetail = dueOrders.length > 0 || creditOrders.length > 0;
+
   async function download(path: string, file: string, setBusy: (b: boolean) => void) {
     setBusy(true);
     try {
@@ -172,17 +187,19 @@ export default function AccountDetail() {
           </div>
 
           <div className="card">
-            <h3 className="due-head" onClick={() => dueOrders.length && setShowDue(!showDue)} style={{ cursor: dueOrders.length ? 'pointer' : 'default' }}>
-              <span>Amount due</span>
-              <span className={'num due-total' + (totalDue > 0 ? ' owing' : '')}>
-                {fmtMoney(totalDue)}
-                {dueOrders.length > 0 && <span className="due-caret">{showDue ? '▾' : '▸'}</span>}
+            <h3 className="due-head" onClick={() => hasMoneyDetail && setShowDue(!showDue)} style={{ cursor: hasMoneyDetail ? 'pointer' : 'default' }}>
+              <span>{balance < -0.005 ? 'In credit' : 'Balance'}</span>
+              <span className={'num due-total' + (balance > 0.005 ? ' owing' : balance < -0.005 ? ' credit' : '')}>
+                {fmtMoney(Math.abs(balance))}
+                {hasMoneyDetail && <span className="due-caret">{showDue ? '▾' : '▸'}</span>}
               </span>
             </h3>
             <div className="acct-region">
-              {dueOrders.length
-                ? `${dueOrders.length} unpaid ${dueOrders.length === 1 ? 'invoice' : 'invoices'}${showDue ? '' : ', click to see which'}`
-                : 'Nothing owing.'}
+              {[
+                dueOrders.length ? `${fmtMoney(totalDue)} owing on ${dueOrders.length} ${dueOrders.length === 1 ? 'invoice' : 'invoices'}` : '',
+                creditOrders.length ? `${fmtMoney(totalCredit)} credit on account` : '',
+              ].filter(Boolean).join(', ') || 'Nothing owing.'}
+              {hasMoneyDetail && !showDue ? '. Click for details.' : ''}
             </div>
             {showDue && dueOrders.length > 0 && (
               <div className="due-list">
@@ -208,6 +225,28 @@ export default function AccountDetail() {
                     </Link>
                   );
                 })}
+              </div>
+            )}
+            {showDue && creditOrders.length > 0 && (
+              <div className="due-list">
+                <div className="doc-title" style={{ marginTop: 10 }}>Credit on account</div>
+                {creditOrders.map(({ q, credit, notes, prepayment }) => (
+                  <Link to={`/orders/${q.id}`} className="due-row" key={q.id}>
+                    <div>
+                      <div className="acct-name">{q.number}</div>
+                      <div className="due-breakdown">
+                        {[
+                          ...notes.map(n => `credit note ${n.number ?? ''} not yet used`),
+                          prepayment > 0.005 ? `prepayment of ${fmtMoney(prepayment)} not yet applied` : '',
+                        ].filter(Boolean).join(', ')}
+                      </div>
+                    </div>
+                    <div className="due-amount">
+                      <div className="num credit-amount">−{fmtMoney(credit)}</div>
+                      <div className="acct-region">credit</div>
+                    </div>
+                  </Link>
+                ))}
               </div>
             )}
           </div>

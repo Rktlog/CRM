@@ -96,10 +96,12 @@ accountsRouter.get('/customers', async (req, res) => {
           bool_or(upper(coalesce(fulfillment_status, '')) in ('DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING')
                   and sent_at > now() - interval '90 days') as open_quote,
           bool_or(upper(coalesce(fulfillment_status, '')) = 'BACKORDERED') as backordered,
+          -- Balance as DEAR shows it: owed on invoices minus credit on account.
           coalesce(sum(case
             when amount_due is not null then amount_due
             when not paid and invoice_date is not null then coalesce(total, amount)
-            else 0 end), 0)::float8 as owing
+            else 0 end), 0)::float8
+            - coalesce(sum(unapplied_credit), 0)::float8 as owing
         from crm.quotes
         where account_id = any(${ids}::uuid[])
           and source <> 'rhino-history' and number not like 'Q%' and misc_type is null

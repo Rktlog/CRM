@@ -101,10 +101,11 @@ export default function Customers() {
                           {days === null ? 'No orders yet' : `Last order ${days} ${days === 1 ? 'day' : 'days'} ago`}
                           {c.avgOrderGapDays ? `, usually every ${c.avgOrderGapDays} days` : ''}
                         </div>
-                        {(c.openQuote || c.owing > 0.005 || c.backordered) && (
+                        {(c.openQuote || Math.abs(c.owing) > 0.005 || c.backordered) && (
                           <div className="dc-badges">
                             {c.openQuote && <span className="pill teal">Open quote</span>}
                             {c.owing > 0.005 && <span className="pill amber">Owes {fmtMoney(c.owing)}</span>}
+                            {c.owing < -0.005 && <span className="pill neutral">In credit {fmtMoney(-c.owing)}</span>}
                             {c.backordered && <span className="pill rust">Backorder</span>}
                           </div>
                         )}

@@ -222,6 +222,9 @@ model Quote {
   invoicedTotal   Float?   @map("invoiced_total")
   creditedTotal   Float?   @map("credited_total")
   amountDue       Float?   @map("amount_due") // null = not synced with invoice detail yet
+  // Credit the customer still has from this order (credit notes not applied
+  // or refunded, prepayments not applied). Balance = amount due - this.
+  unappliedCredit Float?   @map("unapplied_credit")
   memo            String?
 
   // Every account-list request filters/includes quotes by these
