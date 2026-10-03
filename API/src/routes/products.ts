@@ -106,7 +106,7 @@ productsRouter.get('/search', async (req, res) => {
       with lines as (
         select l.sku, l.quantity, l.line_total, q.sent_at,
           case
-            when q.source = ${HISTORY_SOURCE} then 1  -- spreadsheet history: counts in full, as stored
+            when q.source = ${HISTORY_SOURCE} or q.number like 'Q%' then 1  -- spreadsheet history: counts in full, as stored
             when q.line_fulfilment ? l.sku then least(1, greatest(0,
               coalesce((q.line_fulfilment -> l.sku ->> 'shipped')::float8, 0)
               / nullif(sum(l.quantity) over (partition by l.quote_id, l.sku), 0)))

@@ -9,7 +9,11 @@
 
 export const HISTORY_SOURCE = 'rhino-history';
 
-export const isHistory = (q: { source?: string | null }) => q.source === HISTORY_SOURCE;
+// History = tagged as the spreadsheet import, or numbered "Q…" (live DEAR
+// orders are "SQ…"). Checking the number too means a history order is
+// recognised even if its source tag was ever overwritten.
+export const isHistory = (q: { source?: string | null; number?: string | null }) =>
+  q.source === HISTORY_SOURCE || /^Q/.test(q.number ?? '');
 
 // Prisma filter: live DEAR orders only.
-export const LIVE_ORDER = { source: { not: HISTORY_SOURCE } };
+export const LIVE_ORDER = { source: { not: HISTORY_SOURCE }, NOT: { number: { startsWith: 'Q' } } };

@@ -159,4 +159,5 @@ export function flagFor(account: Account, quotes?: Quote[]): 'amber' | 'rust' | 
 // Orders imported from the old spreadsheet (numbers start "Q") count in
 // sales figures, but their statuses are frozen history: never show them
 // as unpaid, backordered or still to ship. Live DEAR orders start "SQ".
-export const isHistoryOrder = (q: { source?: string | null }) => q.source === 'rhino-history';
+export const isHistoryOrder = (q: { source?: string | null; number?: string | null }) =>
+  q.source === 'rhino-history' || /^Q/.test(q.number ?? '');

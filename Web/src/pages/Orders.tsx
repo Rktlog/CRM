@@ -26,7 +26,7 @@ type OrderRow = {
 const COLS = '1fr 1.8fr 0.9fr 0.8fr 1.1fr';
 
 export function orderStatusPills(o: {
-  paid: boolean; fulfillmentStatus: string | null; miscType: string | null; source?: string;
+  paid: boolean; fulfillmentStatus: string | null; miscType: string | null; source?: string; number?: string;
 }) {
   // Spreadsheet history: its old statuses mean nothing now, so show only
   // that it's history (plus marketing/warranty, which still matters).
