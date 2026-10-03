@@ -378,3 +378,22 @@ model PurchaseLine {
   @@map("purchase_lines")
   @@schema("crm")
 }
+
+// B2B portal abandoned carts, one row per cart line as Cin7 exports
+// them. A cart is all lines sharing abandonedAt + email. Accounts and
+// SKUs are matched at read time, not stored.
+model AbandonedCartLine {
+  id          String   @id @default(uuid()) @db.Uuid
+  abandonedAt DateTime @map("abandoned_at")
+  contact     String
+  email       String
+  productName String   @map("product_name")
+  quantity    Float    @default(0)
+  price       Float    @default(0)
+  total       Float    @default(0)
+  importedAt  DateTime @default(now()) @map("imported_at")
+
+  @@unique([abandonedAt, email, productName])
+  @@map("abandoned_cart_lines")
+  @@schema("crm")
+}
