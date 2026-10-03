@@ -32,6 +32,8 @@ export default function Settings() {
 
   // Manager: territory assignment
   const [territoryRep, setTerritoryRep] = useState<string>('');
+  // Shown under the Save button: what was saved, or why it failed.
+  const [territoryMsg, setTerritoryMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [assignedRegions, setAssignedRegions] = useState<string[]>([]);
   const [territorySaving, setTerritorySaving] = useState(false);
   const [territorySummary, setTerritorySummary] = useState<{ repId: string; repName: string; regions: string[] }[] | null>(null);
@@ -106,29 +108,54 @@ export default function Settings() {
     }
   }
 
-  function loadTerritory() {
-    if (!territoryRep) return;
-    apiGet(`/rep-regions?repId=${territoryRep}`).then(setAssignedRegions).catch(e => setError(e.message));
+  // Errors here show next to the territory picker, not as a full-page
+  // error, so a failed load or save is visible without losing the page.
+  async function loadTerritory(): Promise<string[] | null> {
+    if (!territoryRep) return null;
+    try {
+      const regions: string[] = await apiGet(`/rep-regions?repId=${territoryRep}`);
+      setAssignedRegions(regions);
+      return regions;
+    } catch (e: any) {
+      setTerritoryMsg({ ok: false, text: `Couldn't load this rep's states: ${e.message}` });
+      return null;
+    }
   }
-  useEffect(loadTerritory, [territoryRep]);
+  useEffect(() => { setTerritoryMsg(null); loadTerritory(); }, [territoryRep]);
 
-  function loadTerritorySummary() {
+  async function loadTerritorySummary() {
     if (!isManager) return;
-    apiGet('/rep-regions/all').then(setTerritorySummary).catch(() => {});
+    try {
+      setTerritorySummary(await apiGet('/rep-regions/all'));
+    } catch (e: any) {
+      setTerritoryMsg({ ok: false, text: `Couldn't load current assignments: ${e.message}` });
+    }
   }
-  useEffect(loadTerritorySummary, [isManager]);
+  useEffect(() => { loadTerritorySummary(); }, [isManager]);
 
   function toggleRegion(region: string) {
     setAssignedRegions(prev => prev.includes(region) ? prev.filter(r => r !== region) : [...prev, region]);
   }
 
   async function saveTerritory() {
+    if (!territoryRep) {
+      setTerritoryMsg({ ok: false, text: 'Pick a rep first.' });
+      return;
+    }
     setTerritorySaving(true);
+    setTerritoryMsg(null);
     try {
       await apiPut('/rep-regions', { repId: territoryRep, regions: assignedRegions });
-      loadTerritorySummary();
+      // Re-read from the server so what's shown is what was actually saved.
+      const saved = await loadTerritory();
+      await loadTerritorySummary();
+      const repName = reps?.find(r => r.id === territoryRep)?.name ?? 'Rep';
+      setTerritoryMsg({
+        ok: true,
+        text: saved && saved.length ? `Saved: ${repName} covers ${saved.sort().join(', ')}.` : `Saved: ${repName} has no states assigned.`,
+      });
     } catch (e: any) {
-      setError(e.message);
+      setTerritoryMsg({ ok: false, text: `Save failed: ${e.message}` });
     } finally {
       setTerritorySaving(false);
     }
@@ -190,7 +217,7 @@ export default function Settings() {
           <div className="panel-title">Assign reps to states</div>
           <div style={{ fontSize: 12.5, color: 'var(--muted)', marginBottom: 14, maxWidth: 560 }}>
             A rep can cover one state or several. This drives their suggested-outreach list on the
-            Planner — it doesn't restrict what accounts they can otherwise see.
+            Planner, and limits their Sales Data to these states.
           </div>
           <select value={territoryRep} onChange={e => setTerritoryRep(e.target.value)} style={{ marginBottom: 14 }}>
             {reps?.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
@@ -206,6 +233,9 @@ export default function Settings() {
           <button className="btn secondary" style={{ padding: '6px 14px', fontSize: 12.5 }} disabled={territorySaving} onClick={saveTerritory}>
             {territorySaving ? 'Saving…' : 'Save territory'}
           </button>
+          {territoryMsg && (
+            <div className={territoryMsg.ok ? 'save-msg ok' : 'save-msg err'}>{territoryMsg.text}</div>
+          )}
 
           {territorySummary && territorySummary.length > 0 && (
             <div style={{ marginTop: 20 }}>

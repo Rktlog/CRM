@@ -485,3 +485,6 @@ a.pd-list-card:hover { border-color: var(--teal); }
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button.on { background: var(--teal-bg); color: var(--teal); font-weight: 600; }
 .bd-sub { font-size: 11px; color: var(--muted); }
+.save-msg { font-size: 12.5px; margin-top: 8px; }
+.save-msg.ok { color: var(--teal); }
+.save-msg.err { color: var(--rust); }
