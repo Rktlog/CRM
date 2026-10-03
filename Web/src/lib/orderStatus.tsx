@@ -20,6 +20,9 @@ export type OrderLike = {
   paymentStatus?: string | null;     // DEAR CombinedPaymentStatus
   invoiceNumber?: string | null;
   invoiceDate?: string | null;
+  amountDue?: number | null;     // DEAR balance: invoiced - paid - credited
+  amountPaid?: number | null;
+  creditedTotal?: number | null;
 };
 
 export type Tag = { label: string; tone: 'teal' | 'amber' | 'rust' | 'neutral' };
@@ -58,6 +61,20 @@ export function paymentTag(o: OrderLike): Tag | null {
 
   const pay = up(o.paymentStatus);
   if (pay === 'PREPAID') return { label: 'Prepaid', tone: 'teal' };
+
+  // Once synced with invoice detail, DEAR's own balance decides.
+  if (o.amountDue != null) {
+    const paid = (o.amountPaid ?? 0) > 0.005;
+    const credited = (o.creditedTotal ?? 0) > 0.005;
+    if (o.amountDue <= 0.005) {
+      if (credited && !paid) return { label: 'Credited', tone: 'neutral' };
+      if (credited) return { label: 'Paid, part credited', tone: 'teal' };
+      return { label: 'Paid', tone: 'teal' };
+    }
+    if (paid || credited) return { label: 'Part paid', tone: 'amber' };
+    return { label: 'Unpaid', tone: 'amber' };
+  }
+
   if (o.paid || ['PAID', 'FULLY PAID', 'OVERPAID', 'OVERPAID / CREDITED'].includes(pay)) return { label: 'Paid', tone: 'teal' };
   if (pay.includes('PARTIALLY')) return { label: 'Part paid', tone: 'amber' };
   return o.invoiceNumber || o.invoiceDate

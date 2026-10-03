@@ -620,3 +620,16 @@ a.pd-list-card:hover { border-color: var(--teal); }
 .due-row .num { font-weight: 600; white-space: nowrap; }
 .due-row .num.overdue { color: var(--rust); }
 .stocklist-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: -2px 0 12px; padding: 8px 10px; background: var(--paper); border-radius: 6px; }
+
+/* ---- Amount due breakdowns, invoices and credit notes ---- */
+.due-breakdown { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+.due-amount { text-align: right; }
+.due-amount .acct-region { font-size: 11px; }
+.money-summary { margin: 8px 0 4px; padding: 8px 10px; background: var(--paper); border-radius: 6px; }
+.money-summary .kv { border-bottom: none; padding: 3px 0; }
+.money-due { font-weight: 700; border-top: 1px solid var(--line) !important; margin-top: 4px; padding-top: 6px !important; }
+.money-due.owing { color: var(--rust); }
+.doc-list { margin-top: 12px; }
+.doc-title { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+.doc-row { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.doc-row > .num { text-align: right; white-space: nowrap; }

@@ -214,7 +214,14 @@ model Quote {
   shipments       Json     @default("[]")           // [{ date, carrier, trackingNumber, trackingUrl }]
   taxTotal        Float?   @map("tax_total")
   total           Float?   // exact order total incl. tax, from DEAR
-  amountPaid      Float?   @map("amount_paid") // paid so far on the invoice (part payments)
+  amountPaid      Float?   @map("amount_paid") // paid so far, across all invoices
+  // Every invoice and credit note on the order, as DEAR records them, and
+  // the balance from them: invoiced - paid - credited (see sync-sales).
+  invoices        Json     @default("[]") // [{ number, date, dueDate, status, total, paid }]
+  creditNotes     Json     @default("[]") @map("credit_notes") // [{ number, date, status, total, refunded }]
+  invoicedTotal   Float?   @map("invoiced_total")
+  creditedTotal   Float?   @map("credited_total")
+  amountDue       Float?   @map("amount_due") // null = not synced with invoice detail yet
   memo            String?
 
   // Every account-list request filters/includes quotes by these

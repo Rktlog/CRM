@@ -20,6 +20,16 @@ type Fulfilment = {
   lines: { sku: string; name: string; qty: number }[];
   shipments: Shipment[];
 };
+// As DEAR records them: an invoice's payments split into cash and credit
+// notes; a credit note applied to an invoice, refunded, or still on account.
+type InvoiceDoc = {
+  number: string | null; date: string | null; dueDate: string | null; status: string | null;
+  total: number; paid: number; credited?: number; due?: number;
+};
+type CreditDoc = {
+  number: string | null; invoiceNumber?: string | null; date: string | null; status: string | null;
+  total: number; applied?: number; refunded: number; onAccount?: number;
+};
 type ToShip = { sku: string; productName: string; ordered: number; shipped: number; outstanding: number; backordered: number };
 type Order = {
   id: string; number: string; date: string;
@@ -32,6 +42,12 @@ type Order = {
   shipments: Shipment[];
   fulfilments: Fulfilment[];
   toShip: ToShip[] | null;
+  invoices: InvoiceDoc[];
+  creditNotes: CreditDoc[];
+  invoicedTotal: number | null;
+  amountPaid: number | null;
+  creditedTotal: number | null;
+  amountDue: number | null;
   account: { id: string; name: string; region: string };
   lines: Line[];
   subtotal: number; taxTotal: number | null; total: number;
@@ -228,8 +244,78 @@ export default function OrderDetail() {
           <div className="card">
             <h3>Payment</h3>
             <Row k="Payment" v={paymentTag(order)?.label ?? 'Nothing to pay'} />
-            <Row k="Invoice no." v={order.invoiceNumber && <span className="num">{order.invoiceNumber}</span>} />
-            <Row k="Invoice date" v={order.invoiceDate && fmtDateWithYear(order.invoiceDate)} />
+
+            {order.amountDue != null ? (
+              <div className="money-summary">
+                <div className="kv"><span className="k">Invoiced</span><span className="num">{money(order.invoicedTotal ?? 0)}</span></div>
+                <div className="kv"><span className="k">Paid</span><span className="num">{money(order.amountPaid ?? 0)}</span></div>
+                {(order.creditedTotal ?? 0) > 0 && (
+                  <div className="kv"><span className="k">Credited</span><span className="num">−{money(order.creditedTotal!)}</span></div>
+                )}
+                <div className={'kv money-due' + (order.amountDue > 0.005 ? ' owing' : '')}>
+                  <span>Amount due</span><span className="num">{money(order.amountDue)}</span>
+                </div>
+              </div>
+            ) : (
+              <>
+                <Row k="Invoice no." v={order.invoiceNumber && <span className="num">{order.invoiceNumber}</span>} />
+                <Row k="Invoice date" v={order.invoiceDate && fmtDateWithYear(order.invoiceDate)} />
+              </>
+            )}
+
+            {order.invoices.length > 0 && (
+              <div className="doc-list">
+                <div className="doc-title">Invoices</div>
+                {order.invoices.map((inv, i) => (
+                  <div className="doc-row" key={i}>
+                    <div>
+                      <span className="num">{inv.number ?? 'Invoice'}</span>
+                      <span className="acct-region">
+                        {inv.date ? `, ${fmtDateWithYear(inv.date)}` : ''}{inv.dueDate ? `, due ${fmtDateWithYear(inv.dueDate)}` : ''}
+                      </span>
+                    </div>
+                    <div className="num">
+                      {money(inv.total)}
+                      <div className="acct-region">
+                        {(() => {
+                          const due = inv.due ?? Math.max(0, inv.total - inv.paid - (inv.credited ?? 0));
+                          if (due <= 0.005) return (inv.credited ?? 0) > 0.005 && inv.paid <= 0.005 ? 'settled by credit' : 'paid';
+                          const parts = [
+                            inv.paid > 0.005 ? `${money(inv.paid)} paid` : '',
+                            (inv.credited ?? 0) > 0.005 ? `${money(inv.credited!)} credited` : '',
+                          ].filter(Boolean);
+                          return `${parts.length ? parts.join(', ') + ', ' : ''}${money(due)} due`;
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {order.creditNotes.length > 0 && (
+              <div className="doc-list">
+                <div className="doc-title">Credit notes</div>
+                {order.creditNotes.map((cn, i) => (
+                  <div className="doc-row" key={i}>
+                    <div>
+                      <span className="num">{cn.number ?? 'Credit note'}</span>
+                      <span className="acct-region">{cn.date ? `, ${fmtDateWithYear(cn.date)}` : ''}</span>
+                    </div>
+                    <div className="num">
+                      −{money(cn.total)}
+                      <div className="acct-region">
+                        {[
+                          (cn.applied ?? 0) > 0.005 ? `applied to ${cn.invoiceNumber ?? 'invoice'}` : '',
+                          cn.refunded > 0.005 ? `${money(cn.refunded)} refunded` : '',
+                          (cn.onAccount ?? 0) > 0.005 ? `${money(cn.onAccount!)} still on account` : '',
+                        ].filter(Boolean).join(', ') || 'credit note'}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="card">

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import * as XLSX from 'xlsx';
 import { prisma } from '../lib/prisma';
 import { territoryWhere, canSeeAccount } from '../lib/territory';
-import { LIVE_ORDER, isHistory } from '../lib/orderSource';
+import { LIVE_ORDER, isHistory, isOwing } from '../lib/orderSource';
 import { wholesalePrice, retailPrice } from '../lib/pricing';
 
 export const exportsRouter = Router();
@@ -61,11 +61,18 @@ function orderStatusWords(q: {
 function paymentWords(q: {
   source?: string | null; number?: string | null; paid: boolean; paymentStatus?: string | null;
   invoiceDate?: Date | null; invoiceNumber?: string | null; miscType?: string | null;
+  amountDue?: number | null; amountPaid?: number | null; creditedTotal?: number | null;
 }): string {
   if (isHistory(q)) return '';
   if (q.miscType) return 'No charge';
   const pay = (q.paymentStatus ?? '').toUpperCase();
   if (pay === 'PREPAID') return 'Prepaid';
+  // DEAR's balance, once synced: settled by payment, by credit, or part paid.
+  if (q.amountDue != null) {
+    if (q.amountDue <= 0.005) return (q.creditedTotal ?? 0) > 0 && (q.amountPaid ?? 0) <= 0.005 ? 'Credited' : 'Paid';
+    if ((q.amountPaid ?? 0) > 0.005 || (q.creditedTotal ?? 0) > 0.005) return 'Part paid';
+    return 'Unpaid';
+  }
   if (q.paid) return 'Paid';
   if (pay.includes('PARTIALLY')) return 'Part paid';
   return q.invoiceDate || q.invoiceNumber ? 'Unpaid' : 'Not invoiced';
@@ -173,15 +180,23 @@ exportsRouter.get('/:type', async (req, res) => {
       case 'unpaid-quotes': {
         const accounts = await scopedAccountIds(req, region, repId);
         const accountById = new Map(accounts.map(a => [a.id, a]));
-        const quotes = await prisma.quote.findMany({ where: { accountId: { in: accounts.map(a => a.id) }, paid: false, ...LIVE_ORDER }, orderBy: { sentAt: 'asc' } });
+        const quotes = (await prisma.quote.findMany({
+          where: { accountId: { in: accounts.map(a => a.id) }, ...LIVE_ORDER },
+          orderBy: { sentAt: 'asc' },
+        })).filter(q => isOwing(q));
         const rows = quotes.map(q => ({
           Order: q.number,
           Date: q.sentAt.toISOString().slice(0, 10),
           Account: accountById.get(q.accountId)?.name ?? 'Unknown',
           Contact: accountById.get(q.accountId)?.contactName ?? '',
           Phone: accountById.get(q.accountId)?.phone ?? '',
-          Status: q.fulfillmentStatus ?? '',
-          Amount: q.amount,
+          Status: orderStatusWords(q),
+          'Invoice no.': q.invoiceNumber ?? '',
+          'Invoice date': xlDate(q.invoiceDate),
+          'Order total': cents(q.total ?? q.amount),
+          Paid: q.amountPaid != null ? cents(q.amountPaid) : '',
+          Credited: q.creditedTotal != null ? cents(q.creditedTotal) : '',
+          'Amount due': cents(q.amountDue ?? q.amount),
         }));
         return sendWorkbook(res, 'unpaid-quotes.xlsx', [{ name: 'Unpaid Quotes', rows }]);
       }
@@ -382,6 +397,8 @@ exportsRouter.get('/:type', async (req, res) => {
           Payment: paymentWords(q),
           Total: cents(q.total ?? q.amount),
           'Paid so far': q.amountPaid != null ? cents(q.amountPaid) : '',
+          Credited: q.creditedTotal != null ? cents(q.creditedTotal) : '',
+          'Amount due': q.amountDue != null ? cents(q.amountDue) : '',
           Type: q.miscType === 'marketing' ? 'Marketing' : q.miscType === 'warranty' ? 'Warranty' : isHistory(q) ? 'History' : 'Sale',
           Reference: q.reference ?? '',
           'Ship to': q.shippingCompany ?? q.shippingAddress ?? '',

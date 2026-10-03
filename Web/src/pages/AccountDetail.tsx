@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, FormEvent } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPatch, apiDownload } from '../lib/api';
 import { orderStatusPills, stageTag, paymentTag } from '../lib/orderStatus';
-import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fmtDateWithYear, daysBetween, flagFor, isHistoryOrder } from '../lib/types';
+import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fmtDateWithYear, daysBetween, flagFor, isHistoryOrder, isOwingOrder, amountOwing } from '../lib/types';
 
 export default function AccountDetail() {
   const { id } = useParams<{ id: string }>();
@@ -99,10 +99,11 @@ export default function AccountDetail() {
 
   // Amount due: live orders that have been invoiced and aren't fully paid.
   // Part payments are taken off. Marketing/warranty orders owe nothing.
+  // DEAR's balance per order once synced (invoiced - paid - credited), so
+  // credit notes and part payments come off and it matches DEAR.
   const dueOrders = liveQuotes
-    .filter(q => !q.paid && !q.miscType && (q.invoiceDate || q.invoiceNumber)
-      && !['VOIDED', 'CREDITED'].includes((q.fulfillmentStatus ?? '').toUpperCase()))
-    .map(q => ({ q, due: Math.max(0, (q.total ?? q.amount) - (q.amountPaid ?? 0)) }))
+    .filter(q => isOwingOrder(q) && (q.amountDue != null || q.invoiceDate || q.invoiceNumber))
+    .map(q => ({ q, due: amountOwing(q) }))
     .filter(d => d.due > 0.005)
     .sort((a, b) => new Date(a.q.invoiceDate ?? a.q.sentAt).getTime() - new Date(b.q.invoiceDate ?? b.q.sentAt).getTime());
   const totalDue = dueOrders.reduce((s, d) => s + d.due, 0);
@@ -193,10 +194,17 @@ export default function AccountDetail() {
                         <div className="acct-name">{q.number}{q.invoiceNumber ? `, inv ${q.invoiceNumber}` : ''}</div>
                         <div className="acct-region">
                           Invoiced {fmtDateWithYear(q.invoiceDate ?? q.sentAt)}, {days} {days === 1 ? 'day' : 'days'} ago
-                          {q.amountPaid ? `, ${fmtMoney(q.amountPaid)} paid of ${fmtMoney(q.total ?? q.amount)}` : ''}
+                        </div>
+                        <div className="due-breakdown">
+                          Total {fmtMoney(q.invoicedTotal ?? q.total ?? q.amount)}
+                          {(q.amountPaid ?? 0) > 0.005 && <>, paid {fmtMoney(q.amountPaid!)}</>}
+                          {(q.creditedTotal ?? 0) > 0.005 && <>, credited {fmtMoney(q.creditedTotal!)}</>}
                         </div>
                       </div>
-                      <div className={'num' + (days > 30 ? ' overdue' : '')}>{fmtMoney(due)}</div>
+                      <div className="due-amount">
+                        <div className={'num' + (days > 30 ? ' overdue' : '')}>{fmtMoney(due)}</div>
+                        <div className="acct-region">due</div>
+                      </div>
                     </Link>
                   );
                 })}

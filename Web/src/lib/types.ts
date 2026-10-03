@@ -67,7 +67,10 @@ export type Quote = {
   paymentStatus?: string | null;
   invoiceNumber?: string | null;
   total?: number | null;       // exact order total from DEAR
-  amountPaid?: number | null;  // paid so far (part payments)
+  amountPaid?: number | null;  // paid so far, across all invoices
+  invoicedTotal?: number | null;
+  creditedTotal?: number | null;
+  amountDue?: number | null;   // DEAR balance: invoiced - paid - credited (null = not synced yet)
   lines?: QuoteLineItem[];
 };
 
@@ -162,7 +165,7 @@ export function isOverdueCustomer(account: Account): boolean {
 export function flagFor(account: Account, quotes?: Quote[]): 'amber' | 'rust' | null {
   // Live DEAR orders only: spreadsheet history's old unpaid flags would
   // otherwise mark the account amber forever.
-  const openQuote = quotes?.find(q => !q.paid && !isHistoryOrder(q));
+  const openQuote = quotes?.find(q => isOwingOrder(q));
   if (openQuote && daysBetween(openQuote.sentAt) > 5) return 'amber';
 
   if (isOverdueCustomer(account)) return 'rust';
@@ -174,3 +177,21 @@ export function flagFor(account: Account, quotes?: Quote[]): 'amber' | 'rust' | 
 // as unpaid, backordered or still to ship. Live DEAR orders start "SQ".
 export const isHistoryOrder = (q: { source?: string | null; number?: string | null }) =>
   q.source === 'rhino-history' || /^Q/.test(q.number ?? '');
+
+// Is money owed on this order? DEAR's balance (invoiced - paid - credited)
+// once synced; before that, the paid flag. Same rule as the API.
+export function isOwingOrder(q: {
+  source?: string | null; number?: string | null; paid: boolean; miscType?: string | null;
+  amountDue?: number | null; fulfillmentStatus?: string | null;
+}): boolean {
+  if (isHistoryOrder(q) || q.miscType) return false;
+  if (['VOIDED', 'CREDITED'].includes((q.fulfillmentStatus ?? '').toUpperCase())) return false;
+  if (q.amountDue != null) return q.amountDue > 0.005;
+  return !q.paid;
+}
+
+// What's actually still owed on an order.
+export function amountOwing(q: { amount: number; total?: number | null; amountPaid?: number | null; amountDue?: number | null }): number {
+  if (q.amountDue != null) return q.amountDue;
+  return Math.max(0, (q.total ?? q.amount) - (q.amountPaid ?? 0));
+}

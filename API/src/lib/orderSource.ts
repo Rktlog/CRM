@@ -17,3 +17,16 @@ export const isHistory = (q: { source?: string | null; number?: string | null })
 
 // Prisma filter: live DEAR orders only.
 export const LIVE_ORDER = { source: { not: HISTORY_SOURCE }, NOT: { number: { startsWith: 'Q' } } };
+
+// Is money owed on this order? Uses DEAR's balance (invoiced - paid -
+// credited) once the order has synced with invoice detail; before that,
+// falls back to the paid flag. History, marketing and warranty owe nothing.
+export function isOwing(q: {
+  source?: string | null; number?: string | null; paid: boolean; miscType?: string | null;
+  amountDue?: number | null; fulfillmentStatus?: string | null;
+}): boolean {
+  if (isHistory(q) || q.miscType) return false;
+  if (['VOIDED', 'CREDITED'].includes((q.fulfillmentStatus ?? '').toUpperCase())) return false;
+  if (q.amountDue != null) return q.amountDue > 0.005;
+  return !q.paid;
+}

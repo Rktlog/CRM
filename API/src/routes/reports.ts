@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
-import { isHistory } from '../lib/orderSource';
+import { isHistory, isOwing } from '../lib/orderSource';
 
 export const reportsRouter = Router();
 
@@ -396,12 +396,13 @@ reportsRouter.get('/ledger', async (req, res) => {
   // Live DEAR orders only: spreadsheet history keeps its old unpaid flag
   // but isn't something anyone can chase.
   const unpaidQuotes = allQuotes
-    .filter(q => !q.paid && !isHistory(q))
+    .filter(q => isOwing(q))
     .map(q => ({
       order: q.number,
       date: q.sentAt.toISOString().slice(0, 10),
       stockist: accountById.get(q.accountId)?.name ?? 'Unknown',
       amount: q.amount,
+      due: q.amountDue ?? q.amount, // DEAR balance once synced: invoiced - paid - credited
       status: q.fulfillmentStatus ?? 'Awaiting payment',
     }));
 
