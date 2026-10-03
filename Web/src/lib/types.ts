@@ -146,18 +146,22 @@ export function fmtDateWithYear(iso: string): string {
 // floor so a customer who orders every 3 days doesn't get flagged
 // after being 5 days late). Falls back to a flat 75 days for anyone
 // without enough order history to have a real pattern yet.
+// A customer is overdue when they haven't ordered for longer than usual
+// for them: 1.5x their own typical gap between orders (at least 14 days),
+// or 75 days if there isn't enough history to know their pattern.
+export function isOverdueCustomer(account: Account): boolean {
+  if (account.type !== 'customer' || !account.lastOrderAt) return false;
+  const threshold = account.avgOrderGapDays ? Math.max(account.avgOrderGapDays * 1.5, 14) : 75;
+  return daysBetween(account.lastOrderAt) > threshold;
+}
+
 export function flagFor(account: Account, quotes?: Quote[]): 'amber' | 'rust' | null {
   // Live DEAR orders only: spreadsheet history's old unpaid flags would
   // otherwise mark the account amber forever.
   const openQuote = quotes?.find(q => !q.paid && !isHistoryOrder(q));
   if (openQuote && daysBetween(openQuote.sentAt) > 5) return 'amber';
 
-  if (account.type === 'customer' && account.lastOrderAt) {
-    const threshold = account.avgOrderGapDays
-      ? Math.max(account.avgOrderGapDays * 1.5, 14)
-      : 75;
-    if (daysBetween(account.lastOrderAt) > threshold) return 'rust';
-  }
+  if (isOverdueCustomer(account)) return 'rust';
   return null;
 }
 

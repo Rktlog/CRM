@@ -6,6 +6,8 @@ import { useMe, ALL_STATES } from '../lib/useMe';
 // Pick an existing account, or add a new store on the spot. Shared by
 // Schedule task and Log a visit so both behave the same way.
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export type NewStore = { name: string; region: string; contactName: string; phone: string; email: string };
 
 // null = nothing usable chosen yet (no account, or a new store missing a
@@ -64,15 +66,22 @@ export default function AccountPicker({ accounts, onChange, autoFocus }: Props) 
     [addingNew, store.name, accounts],
   );
 
+  // A new store needs a way to reach it: a phone number or an email (or
+  // both), and an email has to look like one.
+  const emailValid = !store.email.trim() || EMAIL_PATTERN.test(store.email.trim());
+  const hasContact = store.phone.trim().length > 0 || store.email.trim().length > 0;
+
   // Tell the parent what's usable whenever anything changes.
   useEffect(() => {
     if (addingNew) {
-      const ready = store.name.trim().length > 0 && (possibleDuplicates.length === 0 || confirmedNotDuplicate);
+      const ready = store.name.trim().length > 0
+        && hasContact && emailValid
+        && (possibleDuplicates.length === 0 || confirmedNotDuplicate);
       onChange(ready ? { kind: 'new', store } : null);
     } else {
       onChange(selected ? { kind: 'existing', account: selected } : null);
     }
-  }, [addingNew, store, selected, possibleDuplicates.length, confirmedNotDuplicate]);
+  }, [addingNew, store, selected, possibleDuplicates.length, confirmedNotDuplicate, hasContact, emailValid]);
 
   // States a new store can go in: managers any, reps their own.
   const stateOptions = me && me.role !== 'manager' && me.regions.length ? me.regions : ALL_STATES;
@@ -124,14 +133,21 @@ export default function AccountPicker({ accounts, onChange, autoFocus }: Props) 
         <div style={{ display: 'flex', gap: 10 }}>
           <label className="modal-field" style={{ flex: 1 }}>
             Phone
-            <input value={store.phone} onChange={e => setStore({ ...store, phone: e.target.value })} />
+            <input type="tel" value={store.phone} onChange={e => setStore({ ...store, phone: e.target.value })} placeholder="e.g. 03 9123 4567" />
           </label>
           <label className="modal-field" style={{ flex: 1 }}>
             Email
-            <input type="email" value={store.email} onChange={e => setStore({ ...store, email: e.target.value })} />
+            <input type="email" value={store.email} onChange={e => setStore({ ...store, email: e.target.value })} placeholder="name@store.com.au" />
           </label>
         </div>
-        <div className="acct-region">Saved as a new lead in your name.</div>
+        {store.email.trim() && !emailValid && (
+          <div className="save-msg err" style={{ marginTop: -4, marginBottom: 6 }}>That email address doesn't look right.</div>
+        )}
+        <div className={'acct-region' + (!hasContact && store.name.trim() ? ' need-contact' : '')}>
+          {!hasContact && store.name.trim()
+            ? 'Add a phone number or an email so the store can be contacted.'
+            : 'Phone or email required (at least one). Saved as a new lead in your name.'}
+        </div>
       </div>
     );
   }

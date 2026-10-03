@@ -78,7 +78,7 @@ button { font-family: inherit; cursor: pointer; }
 .btn.secondary { background: var(--panel); color: var(--ink); border: 1px solid var(--line); }
 .btn:disabled { opacity: 0.6; cursor: default; }
 
-.stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 26px; }
+.stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 26px; }
 .stat { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--ink-soft); border-radius: 4px; padding: 16px 18px; }
 .stat.flag-amber { border-left-color: var(--amber); }
 .stat.flag-rust { border-left-color: var(--rust); }
@@ -572,3 +572,38 @@ a.pd-list-card:hover { border-color: var(--teal); }
 .task-new-store { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; background: var(--paper); }
 .task-dupe { background: var(--amber-bg); border: 1px solid var(--amber); border-radius: 5px; padding: 8px 10px; font-size: 12.5px; margin-bottom: 10px; color: var(--ink-soft); }
 .task-dupe label { display: flex; align-items: center; gap: 6px; margin-top: 6px; cursor: pointer; }
+
+/* ---- Dashboard stats ---- */
+.stat.flag-teal { border-left-color: var(--teal); }
+.stat.clickable { cursor: pointer; }
+.stat.clickable:hover { border-color: var(--ink-soft); }
+
+/* ---- Dashboard stat cards ---- */
+.stat.clickable { cursor: pointer; text-decoration: none; color: inherit; display: block; transition: box-shadow 0.12s; }
+.stat.clickable:hover { box-shadow: 0 2px 8px rgba(27, 36, 48, 0.08); }
+
+/* ---- Pop-up form fields: one consistent, comfortable size ---- */
+.modal-card .modal-field input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+.modal-card .modal-field select,
+.modal-card .modal-field textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 6px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.modal-card .modal-field input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+.modal-card .modal-field select { height: 42px; }
+.modal-card .modal-field textarea { min-height: 72px; resize: vertical; line-height: 1.45; }
+.modal-card .modal-field input:focus,
+.modal-card .modal-field select:focus,
+.modal-card .modal-field textarea:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px var(--teal-bg); }
+.modal-card .modal-field { margin-bottom: 12px; }
+.task-new-store .modal-field { margin-bottom: 10px; }
+.acct-region.need-contact { color: var(--amber); font-weight: 600; }
