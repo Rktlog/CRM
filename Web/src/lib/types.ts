@@ -142,7 +142,9 @@ export function fmtDateWithYear(iso: string): string {
 // after being 5 days late). Falls back to a flat 75 days for anyone
 // without enough order history to have a real pattern yet.
 export function flagFor(account: Account, quotes?: Quote[]): 'amber' | 'rust' | null {
-  const openQuote = quotes?.find(q => !q.paid);
+  // Live DEAR orders only: spreadsheet history's old unpaid flags would
+  // otherwise mark the account amber forever.
+  const openQuote = quotes?.find(q => !q.paid && !isHistoryOrder(q));
   if (openQuote && daysBetween(openQuote.sentAt) > 5) return 'amber';
 
   if (account.type === 'customer' && account.lastOrderAt) {
@@ -153,3 +155,8 @@ export function flagFor(account: Account, quotes?: Quote[]): 'amber' | 'rust' | 
   }
   return null;
 }
+
+// Orders imported from the old spreadsheet (numbers start "Q") count in
+// sales figures, but their statuses are frozen history: never show them
+// as unpaid, backordered or still to ship. Live DEAR orders start "SQ".
+export const isHistoryOrder = (q: { source?: string | null }) => q.source === 'rhino-history';

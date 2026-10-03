@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { createAccountSchema } from '../schemas';
 import { territoryWhere, canSeeAccount } from '../lib/territory';
+import { LIVE_ORDER } from '../lib/orderSource';
 
 export const accountsRouter = Router();
 
@@ -12,12 +13,12 @@ accountsRouter.get('/backorders', async (req, res) => {
     where: {
       AND: [
         await territoryWhere(req.rep!),
-        { quotes: { some: { fulfillmentStatus: 'BACKORDERED' } } },
+        { quotes: { some: { fulfillmentStatus: 'BACKORDERED', ...LIVE_ORDER } } },
       ],
     },
     include: {
       rep: { select: { name: true } },
-      quotes: { where: { fulfillmentStatus: 'BACKORDERED' }, orderBy: { sentAt: 'desc' } },
+      quotes: { where: { fulfillmentStatus: 'BACKORDERED', ...LIVE_ORDER }, orderBy: { sentAt: 'desc' } },
     },
     orderBy: { updatedAt: 'desc' },
   });

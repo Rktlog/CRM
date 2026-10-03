@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiGet } from '../lib/api';
-import { fmtMoney, fmtDateWithYear } from '../lib/types';
+import { fmtMoney, fmtDateWithYear, isHistoryOrder } from '../lib/types';
 
 type OrderRow = {
   id: string;
@@ -28,6 +28,17 @@ const COLS = '1fr 1.8fr 0.9fr 0.8fr 1.1fr';
 export function orderStatusPills(o: {
   paid: boolean; fulfillmentStatus: string | null; miscType: string | null; source?: string;
 }) {
+  // Spreadsheet history: its old statuses mean nothing now, so show only
+  // that it's history (plus marketing/warranty, which still matters).
+  if (isHistoryOrder(o)) {
+    return (
+      <>
+        {o.miscType === 'marketing' && <span className="pill marketing">Marketing order</span>}
+        {o.miscType === 'warranty' && <span className="pill neutral">Warranty</span>}
+        <span className="badge muted">History</span>
+      </>
+    );
+  }
   const status = (o.fulfillmentStatus ?? '').toUpperCase();
   return (
     <>
@@ -39,7 +50,6 @@ export function orderStatusPills(o: {
       {status && status !== 'BACKORDERED' && status !== 'COMPLETED' && (
         <span className="pill neutral">{o.fulfillmentStatus}</span>
       )}
-      {o.source === 'rhino-history' && <span className="badge muted">History</span>}
     </>
   );
 }

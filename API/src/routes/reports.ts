@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
+import { isHistory } from '../lib/orderSource';
 
 export const reportsRouter = Router();
 
@@ -392,8 +393,10 @@ reportsRouter.get('/ledger', async (req, res) => {
   });
 
   // ---- Unpaid quotes to chase ----
+  // Live DEAR orders only: spreadsheet history keeps its old unpaid flag
+  // but isn't something anyone can chase.
   const unpaidQuotes = allQuotes
-    .filter(q => !q.paid)
+    .filter(q => !q.paid && !isHistory(q))
     .map(q => ({
       order: q.number,
       date: q.sentAt.toISOString().slice(0, 10),
@@ -485,6 +488,7 @@ reportsRouter.get('/ledger', async (req, res) => {
     region: accountById.get(q.accountId)?.region ?? 'Unknown',
     amount: q.amount,
     paid: q.paid,
+    history: isHistory(q),
   }));
 
   // Stat cards now respect the same selected window as everything

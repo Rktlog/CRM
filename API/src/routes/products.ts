@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
+import { HISTORY_SOURCE, LIVE_ORDER, isHistory } from '../lib/orderSource';
 
 export const productsRouter = Router();
 
@@ -105,6 +106,7 @@ productsRouter.get('/search', async (req, res) => {
       with lines as (
         select l.sku, l.quantity, l.line_total, q.sent_at,
           case
+            when q.source = ${HISTORY_SOURCE} then 1  -- spreadsheet history: counts in full, as stored
             when q.line_fulfilment ? l.sku then least(1, greatest(0,
               coalesce((q.line_fulfilment -> l.sku ->> 'shipped')::float8, 0)
               / nullif(sum(l.quantity) over (partition by l.quote_id, l.sku), 0)))
@@ -133,6 +135,7 @@ productsRouter.get('/search', async (req, res) => {
         sku: { in: skus },
         quote: {
           AND: [
+            LIVE_ORDER, // spreadsheet history never holds stock
             { OR: [{ shippingStatus: null }, { shippingStatus: { not: 'SHIPPED' } }] },
             { OR: [{ fulfillmentStatus: null }, { fulfillmentStatus: { notIn: CLOSED_ORDER_STATUSES } }] },
           ],
@@ -162,7 +165,7 @@ productsRouter.get('/search', async (req, res) => {
         select: {
           quantity: true,
           quote: { select: {
-            id: true, number: true, sentAt: true, lineFulfilment: true, fulfillmentStatus: true, shippingStatus: true,
+            id: true, number: true, sentAt: true, lineFulfilment: true, fulfillmentStatus: true, shippingStatus: true, source: true,
             account: { select: { id: true, name: true } },
           } },
         },
@@ -255,7 +258,7 @@ productsRouter.get('/search', async (req, res) => {
       const progress = (q.lineFulfilment as Record<string, { picked: number; shipped: number }>)?.[p.sku];
       const unshipped = UNSHIPPED_ORDER_STATUSES.includes((q.fulfillmentStatus ?? '').toUpperCase())
         && (q.shippingStatus ?? '').toUpperCase() !== 'SHIPPED';
-      const shipped = progress ? Math.min(progress.shipped, ordered) : unshipped ? 0 : ordered;
+      const shipped = isHistory(q) ? ordered : progress ? Math.min(progress.shipped, ordered) : unshipped ? 0 : ordered;
       if (shipped <= 0) continue;
       recentOrders.push({
         quoteId,

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import * as XLSX from 'xlsx';
 import { prisma } from '../lib/prisma';
 import { territoryWhere, canSeeAccount } from '../lib/territory';
+import { LIVE_ORDER } from '../lib/orderSource';
 
 export const exportsRouter = Router();
 
@@ -138,7 +139,7 @@ exportsRouter.get('/:type', async (req, res) => {
       case 'unpaid-quotes': {
         const accounts = await scopedAccountIds(req, region, repId);
         const accountById = new Map(accounts.map(a => [a.id, a]));
-        const quotes = await prisma.quote.findMany({ where: { accountId: { in: accounts.map(a => a.id) }, paid: false }, orderBy: { sentAt: 'asc' } });
+        const quotes = await prisma.quote.findMany({ where: { accountId: { in: accounts.map(a => a.id) }, paid: false, ...LIVE_ORDER }, orderBy: { sentAt: 'asc' } });
         const rows = quotes.map(q => ({
           Order: q.number,
           Date: q.sentAt.toISOString().slice(0, 10),

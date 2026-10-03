@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
+import { isHistory } from '../lib/orderSource';
 import { searchWords } from './products';
 
 export const ordersRouter = Router();
@@ -114,7 +115,9 @@ ordersRouter.get('/:id', async (req, res) => {
   // captured), so the page hides the section rather than guess.
   const progress = (o.lineFulfilment ?? {}) as Record<string, { picked?: number; shipped?: number; backordered?: number }>;
   const fulfilments = (o.fulfilments ?? []) as any[];
-  const closed = ['COMPLETED', 'VOIDED', 'CREDITED'].includes((o.fulfillmentStatus ?? '').toUpperCase())
+  // Spreadsheet history is closed by definition: its statuses are frozen.
+  const closed = isHistory(o)
+    || ['COMPLETED', 'VOIDED', 'CREDITED'].includes((o.fulfillmentStatus ?? '').toUpperCase())
     || (o.shippingStatus ?? '').toUpperCase() === 'SHIPPED';
   const hasProgress = Object.keys(progress).length > 0 || fulfilments.length > 0 || !!o.shippingStatus;
 

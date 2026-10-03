@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, FormEvent } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPatch, apiDownload } from '../lib/api';
-import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fmtDateWithYear, daysBetween, flagFor } from '../lib/types';
+import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fmtDateWithYear, daysBetween, flagFor, isHistoryOrder } from '../lib/types';
 
 function statusPill(status: string | null) {
   if (!status) return null;
@@ -95,8 +95,11 @@ export default function AccountDetail() {
   if (!account) return <div className="empty-state">Loading…</div>;
 
   const flag = flagFor(account, account.quotes);
-  const openQuote = account.quotes.find(q => !q.paid) ?? account.quotes[0];
-  const hasBackorder = account.quotes.some(q => (q.fulfillmentStatus ?? '').toUpperCase() === 'BACKORDERED');
+  // Payment and backorder status come from live DEAR orders only;
+  // spreadsheet history keeps its frozen statuses out of this.
+  const liveQuotes = account.quotes.filter(q => !isHistoryOrder(q));
+  const openQuote = liveQuotes.find(q => !q.paid) ?? liveQuotes[0];
+  const hasBackorder = liveQuotes.some(q => (q.fulfillmentStatus ?? '').toUpperCase() === 'BACKORDERED');
 
   return (
     <>
@@ -313,9 +316,14 @@ export default function AccountDetail() {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
                             {q.miscType === 'marketing' && <span className="pill marketing">Marketing order</span>}
                             {q.miscType === 'warranty' && <span className="pill neutral">Warranty</span>}
-                            {q.paid ? <span className="pill teal">Paid</span> : <span className="pill amber">Unpaid</span>}
-                            {statusPill(q.fulfillmentStatus)}
-                            {q.source === 'rhino-history' && <span className="badge muted" style={{ fontSize: 10 }}>History</span>}
+                            {isHistoryOrder(q) ? (
+                              <span className="badge muted" style={{ fontSize: 10 }}>History</span>
+                            ) : (
+                              <>
+                                {q.paid ? <span className="pill teal">Paid</span> : <span className="pill amber">Unpaid</span>}
+                                {statusPill(q.fulfillmentStatus)}
+                              </>
+                            )}
                           </div>
                         </div>
 

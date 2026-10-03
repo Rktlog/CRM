@@ -13,7 +13,7 @@ type UnpaidQuote = { order: string; date: string; stockist: string; amount: numb
 type TopAccount = { customer: string; region: string; type: string; fyPrior: number; fyCurrent: number };
 type BreakdownRow = { type?: string; region?: string; category?: string; brand?: string; count?: number; total: number };
 type SkuRow = { sku: string; productName: string; quantity: number; total: number };
-type RecentInvoice = { invoice: string; date: string; customer: string; region: string; amount: number; paid: boolean };
+type RecentInvoice = { invoice: string; date: string; customer: string; region: string; amount: number; paid: boolean; history?: boolean };
 type LedgerData = {
   totalValue: number; totalOrders: number; accountsTracked: number; accountsWithActivity: number;
   newCustomerCount: number; newCustomerValue: number;
@@ -369,7 +369,9 @@ export default function SalesData() {
                     <td>{inv.date}</td>
                     <td>{inv.customer}</td>
                     <td>{inv.region}</td>
-                    <td><span className={`badge ${inv.paid ? 'teal' : 'amber'}`}>{inv.paid ? 'Paid' : 'Unpaid'}</span></td>
+                    <td>{inv.history
+                      ? <span className="badge muted">History</span>
+                      : <span className={`badge ${inv.paid ? 'teal' : 'amber'}`}>{inv.paid ? 'Paid' : 'Unpaid'}</span>}</td>
                     <td className="num-col num">{fmtMoney(inv.amount)}</td>
                   </tr>
                 ))}
