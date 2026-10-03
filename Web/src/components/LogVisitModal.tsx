@@ -1,7 +1,9 @@
-import { useState, useEffect, FormEvent, useMemo } from 'react';
+import { useState, useEffect, useRef, FormEvent } from 'react';
 import { apiGet, apiPost } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import { Account } from '../lib/types';
+import { useMe } from '../lib/useMe';
+import AccountPicker, { AccountSelection, resolveSelection } from './AccountPicker';
 
 type Props = {
   onCreated: () => void;
@@ -51,9 +53,14 @@ function compressImage(file: File, maxDim = 1280, quality = 0.7): Promise<Blob> 
 }
 
 export default function LogVisitModal({ onCreated, onClose }: Props) {
+  const me = useMe();
   const [accounts, setAccounts] = useState<Account[] | null>(null);
-  const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<Account | null>(null);
+  const [selection, setSelection] = useState<AccountSelection>(null);
+  // If a new store was saved but the next step failed, a retry reuses it
+  // instead of creating the store twice.
+  const savedStore = useRef<{ id: string; name: string } | null>(null);
+  // Name shown on the "Visit logged" confirmation, including new stores.
+  const [savedName, setSavedName] = useState('');
   const [note, setNote] = useState('');
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
@@ -83,18 +90,6 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
     return () => clearTimeout(t);
   }, [success, onCreated, onClose]);
 
-  const matches = useMemo(() => {
-    if (!accounts || selected) return [];
-    const q = search.trim().toLowerCase();
-    if (q.length < 2) return [];
-    return accounts.filter(a => a.name.toLowerCase().includes(q)).slice(0, 8);
-  }, [accounts, search, selected]);
-
-  function selectAccount(a: Account) {
-    setSelected(a);
-    setSearch('');
-  }
-
   function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0] ?? null;
     if (photoPreview) URL.revokeObjectURL(photoPreview);
@@ -110,15 +105,19 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!selected || !note.trim()) return;
+    if (!selection || !me || !note.trim()) return;
     setSaving(true);
     setError(null);
     try {
+      // A new store is saved as a new lead first, so the visit (and its
+      // photo) can attach to it.
+      const account = (selection.kind === 'new' && savedStore.current) || await resolveSelection(selection, me.id);
+      if (selection.kind === 'new') savedStore.current = account;
       let photoUrl: string | undefined;
 
       if (photoFile) {
         const compressed = await compressImage(photoFile);
-        const path = `${selected.id}/${Date.now()}.jpg`;
+        const path = `${account.id}/${Date.now()}.jpg`;
         const { error: uploadError } = await supabase.storage
           .from('Photo')
           .upload(path, compressed, { contentType: 'image/jpeg' });
@@ -129,11 +128,12 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
       }
 
       await apiPost('/activity', {
-        accountId: selected.id,
+        accountId: account.id,
         type: 'visit',
         note: note.trim(),
         ...(photoUrl ? { photoUrl } : {}),
       });
+      setSavedName(account.name);
       setSuccess(true);
     } catch (err: any) {
       setError(err.message);
@@ -149,7 +149,7 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
           <div style={{ fontSize: 28, marginBottom: 8 }}>✓</div>
           <div style={{ fontSize: 15, fontWeight: 600 }}>Visit logged</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
-            {selected?.name}{photoFile ? ' · photo attached' : ''}
+            {savedName}{photoFile ? ', photo attached' : ''}
           </div>
         </div>
       </div>
@@ -161,62 +161,7 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
       <form className="modal-card" onClick={e => e.stopPropagation()} onSubmit={handleSubmit}>
         <h3 style={{ marginBottom: 16 }}>Log a visit</h3>
 
-        <label className="modal-field">
-          Account
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Start typing a business name…"
-            autoFocus
-          />
-          {matches.length > 0 && (
-            <div style={{ border: '1px solid var(--line)', borderRadius: 5, marginTop: 4, maxHeight: 180, overflowY: 'auto' }}>
-              {matches.map(a => (
-                <div
-                  key={a.id}
-                  onMouseDown={e => { e.preventDefault(); selectAccount(a); }}
-                  style={{ padding: '8px 10px', cursor: 'pointer', fontSize: 13, borderBottom: '1px solid var(--line)' }}
-                >
-                  {a.name}
-                  <span style={{ color: 'var(--muted)', fontSize: 11.5, marginLeft: 6 }}>{a.region}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </label>
-
-        {/* Always-visible readout of the current selection — separate from
-            the search box above, so it's unmistakable whether a click
-            actually registered. */}
-        <div
-          style={{
-            marginTop: 8,
-            marginBottom: 4,
-            padding: '8px 10px',
-            borderRadius: 5,
-            fontSize: 13,
-            background: selected ? 'var(--accent-bg, #eef6f3)' : 'transparent',
-            border: selected ? '1px solid var(--line)' : '1px dashed var(--line)',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}
-        >
-          {selected ? (
-            <>
-              <span>Selected: <strong>{selected.name}</strong></span>
-              <button
-                type="button"
-                onClick={() => setSelected(null)}
-                style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}
-              >
-                Clear
-              </button>
-            </>
-          ) : (
-            <span style={{ color: 'var(--muted)' }}>No account selected yet</span>
-          )}
-        </div>
+        <AccountPicker accounts={accounts} onChange={setSelection} autoFocus />
 
         <label className="modal-field">
           Notes
@@ -254,8 +199,8 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
 
         <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
           <button type="button" className="btn secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn" disabled={saving || !selected || !note.trim()}>
-            {saving ? 'Saving…' : 'Log visit'}
+          <button type="submit" className="btn" disabled={saving || !selection || !me || !note.trim()}>
+            {saving ? 'Saving…' : selection?.kind === 'new' ? 'Add store and log visit' : 'Log visit'}
           </button>
         </div>
       </form>

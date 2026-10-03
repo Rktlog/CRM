@@ -77,6 +77,8 @@ model Rep {
   // scheduled tasks.
   dailyNewLeadCount  Int @default(5) @map("daily_new_lead_count")
   dailyInactiveCount Int @default(5) @map("daily_inactive_count")
+  // The day the planner last auto-filled this rep's list (once per day).
+  lastAutoPlanDate   DateTime? @map("last_auto_plan_date") @db.Date
   regions            RepRegion[]
   createdAt DateTime   @default(now()) @map("created_at")
 
@@ -274,6 +276,9 @@ model Task {
   completed     Boolean  @default(false)
   completedAt   DateTime? @map("completed_at")
   note          String?
+  // Why the planner added it automatically: 'new_lead' or 'inactive'.
+  // null = a person scheduled it.
+  reason        String?
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
