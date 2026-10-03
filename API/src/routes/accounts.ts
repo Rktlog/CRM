@@ -1,17 +1,19 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { createAccountSchema } from '../schemas';
+import { territoryWhere, canSeeAccount } from '../lib/territory';
 
 export const accountsRouter = Router();
 
 // Registered before '/:id' — otherwise Express would treat
 // "backorders" as an :id value and this route would never match.
 accountsRouter.get('/backorders', async (req, res) => {
-  const isManager = req.rep!.role === 'manager';
   const accounts = await prisma.account.findMany({
     where: {
-      ...(isManager ? {} : { repId: req.rep!.id }),
-      quotes: { some: { fulfillmentStatus: 'BACKORDERED' } },
+      AND: [
+        await territoryWhere(req.rep!),
+        { quotes: { some: { fulfillmentStatus: 'BACKORDERED' } } },
+      ],
     },
     include: {
       rep: { select: { name: true } },
@@ -24,30 +26,31 @@ accountsRouter.get('/backorders', async (req, res) => {
   res.json(flattened);
 });
 
-// Reps see only their own accounts, managers see everything.
-// This mirrors the RLS policy — belt and suspenders, not a
-// replacement for it. Archived accounts (one-off buyers, sports
-// clubs — not real sales targets) are excluded by default; pass
-// ?archived=true to see them.
+// Accounts this person can see (lib/territory: managers everything,
+// reps their assigned states plus their own accounts). ?region= narrows
+// further. Archived accounts (one-off buyers, sports clubs, not real
+// sales targets) are excluded by default; pass ?archived=true to see
+// them. ?scope=all is still accepted from older pages but no longer
+// widens a rep's view beyond their territory.
 accountsRouter.get('/', async (req, res) => {
-  const isManager = req.rep!.role === 'manager';
   const showArchived = req.query.archived === 'true';
-  const showAll = req.query.scope === 'all'; // opt-in company-wide view (e.g. Pipeline) — everything else stays "your own accounts" by default
   const region = req.query.region as string | undefined;
   const accounts = await prisma.account.findMany({
     where: {
-      ...((isManager || showAll) ? {} : { repId: req.rep!.id }),
-      ...(region ? { region: { in: region.split(',') } } : {}),
-      archived: showArchived,
-      misc: false, // manual "Mark as Misc" override — always respected
-      // An account is hidden automatically only if EVERY order it has
-      // is marketing/warranty-tagged — one real order (even mixed in
-      // with a mostly-personal history, like a one-off business
-      // purchase) is enough to keep it visible. A fresh account with
-      // no orders yet always shows too, since there's nothing to judge it by.
-      OR: [
-        { quotes: { none: {} } },
-        { quotes: { some: { miscType: null } } },
+      AND: [
+        await territoryWhere(req.rep!),
+        ...(region ? [{ region: { in: region.split(',') } }] : []),
+        {
+          archived: showArchived,
+          misc: false, // manual "Mark as Misc" override, always respected
+          // An account is hidden automatically only if EVERY order it has
+          // is marketing/warranty-tagged. One real order is enough to keep
+          // it visible, and a fresh account with no orders always shows.
+          OR: [
+            { quotes: { none: {} } },
+            { quotes: { some: { miscType: null } } },
+          ],
+        },
       ],
     },
     include: {
@@ -79,9 +82,8 @@ accountsRouter.get('/:id', async (req, res) => {
 
   if (!account) return res.status(404).json({ error: 'Account not found' });
 
-  const isManager = req.rep!.role === 'manager';
-  if (!isManager && account.repId !== req.rep!.id) {
-    return res.status(403).json({ error: 'Not your account' });
+  if (!(await canSeeAccount(req.rep!, account))) {
+    return res.status(403).json({ error: 'This account is outside your states' });
   }
 
   const { rep, activity, ...rest } = account;
@@ -128,6 +130,9 @@ accountsRouter.post('/', async (req, res) => {
 accountsRouter.patch('/:id/misc', async (req, res) => {
   const account = await prisma.account.findUnique({ where: { id: req.params.id } });
   if (!account) return res.status(404).json({ error: 'Account not found' });
+  if (!(await canSeeAccount(req.rep!, account))) {
+    return res.status(403).json({ error: 'This account is outside your states' });
+  }
 
   const misc = typeof req.body.misc === 'boolean' ? req.body.misc : !account.misc;
   const updated = await prisma.account.update({ where: { id: req.params.id }, data: { misc } });

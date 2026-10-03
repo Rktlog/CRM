@@ -57,3 +57,14 @@ export async function apiDownload(path: string, filename: string) {
   a.click();
   URL.revokeObjectURL(url);
 }
+// Sends a file's text as-is (e.g. a CSV import), not wrapped in JSON.
+export async function apiPostText(path: string, text: string, contentType = 'text/csv') {
+  const res = await fetch(`${API_URL}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': contentType, ...(await authHeader()) },
+    body: text,
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `POST ${path} failed: ${res.status}`);
+  return body;
+}

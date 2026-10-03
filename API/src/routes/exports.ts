@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as XLSX from 'xlsx';
 import { prisma } from '../lib/prisma';
+import { territoryWhere, canSeeAccount } from '../lib/territory';
 
 export const exportsRouter = Router();
 
@@ -28,9 +29,9 @@ function sendWorkbook(res: any, filename: string, sheets: { name: string; rows: 
 
 async function scopedAccountIds(req: any, region?: string, repId?: string) {
   const isManager = req.rep!.role === 'manager';
-  const where: any = { ...(isManager ? {} : { repId: req.rep!.id }) };
-  if (region) where.region = { in: region.split(',') };
-  if (isManager && repId) where.repId = repId;
+  const where: any = { AND: [await territoryWhere(req.rep!)] };
+  if (region) where.AND.push({ region: { in: region.split(',') } });
+  if (isManager && repId) where.AND.push({ repId });
   const accounts = await prisma.account.findMany({ where, select: { id: true, name: true, region: true, type: true, stage: true, category: true, contactName: true, phone: true, email: true, spend30: true, spend90: true, spend365: true, lastOrderAt: true, avgOrderGapDays: true, repId: true, archived: true } });
   return accounts;
 }
@@ -283,10 +284,9 @@ exportsRouter.get('/:type', async (req, res) => {
         const accountId = req.query.accountId as string;
         if (!accountId) return res.status(400).json({ error: 'accountId required' });
 
-        const account = await prisma.account.findUnique({ where: { id: accountId }, select: { id: true, name: true, repId: true } });
+        const account = await prisma.account.findUnique({ where: { id: accountId }, select: { id: true, name: true, repId: true, region: true } });
         if (!account) return res.status(404).json({ error: 'Account not found' });
-        const isManager = req.rep!.role === 'manager';
-        if (!isManager && account.repId !== req.rep!.id) return res.status(403).json({ error: 'Not your account' });
+        if (!(await canSeeAccount(req.rep!, account))) return res.status(403).json({ error: 'This account is outside your states' });
 
         const quotes = await prisma.quote.findMany({ where: { accountId }, select: { id: true } });
         const lines = await prisma.quoteLine.findMany({ where: { quoteId: { in: quotes.map(q => q.id) } } });

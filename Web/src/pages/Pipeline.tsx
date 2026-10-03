@@ -2,18 +2,20 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiGet } from '../lib/api';
 import { Account, STAGES, STAGE_LABELS, fmtMoney, flagFor } from '../lib/types';
-
-const ALL_STATES = ['NSW', 'ACT', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'NT', 'NZ'];
+import { useMe, stateOptionsFor, territoryLabel } from '../lib/useMe';
 
 export default function Pipeline() {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [region, setRegion] = useState('');
   const navigate = useNavigate();
+  const me = useMe();
+  const stateOptions = stateOptionsFor(me);
 
   useEffect(() => {
     setAccounts(null);
-    const params = new URLSearchParams({ scope: 'all' });
+    // The API limits reps to their states; region only narrows further.
+    const params = new URLSearchParams();
     if (region) params.set('region', region);
     apiGet(`/accounts?${params.toString()}`).then(setAccounts).catch(e => setError(e.message));
   }, [region]);
@@ -23,11 +25,16 @@ export default function Pipeline() {
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <h1>Pipeline</h1>
-        <select value={region} onChange={e => setRegion(e.target.value)}>
-          <option value="">All states</option>
-          {ALL_STATES.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
+        <div>
+          <h1>Pipeline</h1>
+          {territoryLabel(me) && <div className="territory-note">{territoryLabel(me)}</div>}
+        </div>
+        {stateOptions.length > 1 && (
+          <select value={region} onChange={e => setRegion(e.target.value)}>
+            <option value="">{me?.role === 'manager' ? 'All states' : 'All my states'}</option>
+            {stateOptions.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        )}
       </div>
       {!accounts ? (
         <div className="empty-state">Loading…</div>

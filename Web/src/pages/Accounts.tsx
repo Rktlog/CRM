@@ -4,10 +4,10 @@ import { Account, STAGES, STAGE_LABELS } from '../lib/types';
 import { useAuth } from '../context/AuthContext';
 import AccountTable, { SortKey } from '../components/AccountTable';
 import NewLeadModal from '../components/NewLeadModal';
+import { useMe, stateOptionsFor, territoryLabel } from '../lib/useMe';
 
 type Tab = 'customer' | 'prospect' | 'all' | 'archived';
 
-const ALL_STATES = ['NSW', 'ACT', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'NT', 'NZ'];
 
 export default function Accounts() {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
@@ -22,14 +22,17 @@ export default function Accounts() {
   const [search, setSearch] = useState('');
   const [stageFilter, setStageFilter] = useState<string>('all');
   const [regionFilter, setRegionFilter] = useState<string>('');
+  const me = useMe();
+  const stateOptions = stateOptionsFor(me);
   const [sortKey, setSortKey] = useState<SortKey>('spend90');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
   function load() {
-    // scope=all — Accounts is visible to every rep, same as Pipeline
+    // The API returns what this person can see: managers everything,
+    // reps their assigned states plus their own accounts.
     // and Sales Data, not just "your own" by default.
-    apiGet('/accounts?scope=all').then(setAccounts).catch(e => setError(e.message));
-    apiGet('/accounts?scope=all&archived=true').then(setArchived).catch(() => {});
+    apiGet('/accounts').then(setAccounts).catch(e => setError(e.message));
+    apiGet('/accounts?archived=true').then(setArchived).catch(() => {});
   }
 
   useEffect(load, []);
@@ -89,7 +92,10 @@ export default function Accounts() {
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <h1>Accounts</h1>
+        <div>
+          <h1>Accounts</h1>
+          {territoryLabel(me) && <div className="territory-note">{territoryLabel(me)}</div>}
+        </div>
         <button className="btn" onClick={() => setShowNewLead(true)}>+ New lead</button>
       </div>
 
@@ -125,10 +131,12 @@ export default function Accounts() {
           <option value="all">All stages</option>
           {STAGES.map(s => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}
         </select>
-        <select value={regionFilter} onChange={e => setRegionFilter(e.target.value)}>
-          <option value="">All states</option>
-          {ALL_STATES.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
+        {stateOptions.length > 1 && (
+          <select value={regionFilter} onChange={e => setRegionFilter(e.target.value)}>
+            <option value="">{me?.role === 'manager' ? 'All states' : 'All my states'}</option>
+            {stateOptions.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        )}
         <span className="toolbar-count">{visible.length} shown</span>
       </div>
 

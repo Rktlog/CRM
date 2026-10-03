@@ -488,3 +488,4 @@ a.pd-list-card:hover { border-color: var(--teal); }
 .save-msg { font-size: 12.5px; margin-top: 8px; }
 .save-msg.ok { color: var(--teal); }
 .save-msg.err { color: var(--rust); }
+.territory-note { font-size: 12px; color: var(--muted); margin-top: -6px; }

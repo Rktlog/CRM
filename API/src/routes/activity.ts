@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
+import { territoryWhere, canSeeAccount } from '../lib/territory';
 import { createActivitySchema, updateActivitySchema } from '../schemas';
 import { parseFollowUp } from '../lib/followup';
 
@@ -12,12 +13,11 @@ export const activityRouter = Router();
 // few hundred).
 activityRouter.get('/', async (req, res) => {
   const type = req.query.type as string | undefined;
-  const isManager = req.rep!.role === 'manager';
 
   const activities = await prisma.activity.findMany({
     where: {
       ...(type ? { type: type as any } : {}),
-      account: isManager ? {} : { repId: req.rep!.id },
+      account: await territoryWhere(req.rep!),
     },
     include: {
       account: { select: { id: true, name: true, region: true } },
@@ -49,9 +49,8 @@ activityRouter.post('/', async (req, res) => {
   });
   if (!account) return res.status(404).json({ error: 'Account not found' });
 
-  const isManager = req.rep!.role === 'manager';
-  if (!isManager && account.repId !== req.rep!.id) {
-    return res.status(403).json({ error: 'Not your account' });
+  if (!(await canSeeAccount(req.rep!, account))) {
+    return res.status(403).json({ error: 'This account is outside your states' });
   }
 
   const activity = await prisma.activity.create({

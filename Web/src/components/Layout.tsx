@@ -8,6 +8,7 @@ const NAV = [
   { to: '/accounts', label: 'Accounts' },
   { to: '/orders', label: 'Orders' },
   { to: '/products', label: 'Products' },
+  { to: '/abandoned-carts', label: 'Abandoned carts' },
   { to: '/sales-data', label: 'Sales Data' },
   { to: '/reports', label: 'Reports' },
   { to: '/visits', label: 'Visit log' },

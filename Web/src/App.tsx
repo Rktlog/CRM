@@ -15,6 +15,7 @@ import Misc from './pages/Misc';
 import ProductSearch from './pages/ProductSearch';
 import Orders from './pages/Orders';
 import OrderDetail from './pages/OrderDetail';
+import AbandonedCarts from './pages/Abandonedcarts';
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { session, loading } = useAuth();
@@ -47,6 +48,7 @@ function Routed() {
         <Route path="products" element={<ProductSearch />} />
         <Route path="orders" element={<Orders />} />
         <Route path="orders/:id" element={<OrderDetail />} />
+        <Route path="abandoned-carts" element={<AbandonedCarts />} />
         <Route path="settings" element={<Settings />} />
         <Route path="visits" element={<Visits />} />
       </Route>

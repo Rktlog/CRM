@@ -13,6 +13,7 @@ import { exportsRouter } from './routes/exports';
 import { miscRouter } from './routes/misc';
 import { productsRouter } from './routes/products';
 import { ordersRouter } from './routes/orders';
+import { abandonedCartsRouter } from './routes/Abandonedcarts';
 
 const app = express();
 // Restricts which origins can call this API — wide-open cors() would
@@ -36,6 +37,7 @@ app.use('/exports', requireAuth, exportsRouter);
 app.use('/misc-orders', requireAuth, miscRouter);
 app.use('/products', requireAuth, productsRouter);
 app.use('/orders', requireAuth, ordersRouter);
+app.use('/abandoned-carts', requireAuth, abandonedCartsRouter);
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => console.log(`API listening on :${port}`));
