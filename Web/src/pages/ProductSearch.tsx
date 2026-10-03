@@ -6,6 +6,7 @@ type Location = { location: string; onHand: number; allocated: number; available
 type OrderRef = {
   quoteId: string; number: string; date: string; accountId: string; accountName: string; qty: number;
   miscType?: string | null; status?: string | null;
+  paid?: boolean; partial?: boolean;
 };
 type PurchaseOrder = {
   number: string | null; supplier: string | null;
@@ -223,9 +224,12 @@ function ProductDetail({ product: p }: { product: Product }) {
         </div>
       </div>
 
-      {/* ---- Allocated sales orders ---- */}
+      {/* ---- Allocated: on an order and not shipped yet ---- */}
       <div className="pd-section amber">
         <div className="pd-section-title">Allocated sales orders ({p.allocatedOrders.length})</div>
+        {p.allocatedOrders.length > 0 && (
+          <div className="pd-note">On these orders and not shipped yet, so it can't go to another customer.</div>
+        )}
         {p.allocatedOrders.length ? (
           <div className="pd-cards">
             {p.allocatedOrders.map(o => (
@@ -236,15 +240,18 @@ function ProductDetail({ product: p }: { product: Product }) {
                 </div>
                 <div className="pd-card-bottom">
                   <span className="pd-sub">{o.accountName}</span>
-                  {o.miscType === 'marketing'
-                    ? <span className="pill marketing">Marketing</span>
-                    : o.status && <span className={'pill ' + (o.status.toUpperCase() === 'BACKORDERED' ? 'rust' : 'amber')}>{o.status}</span>}
+                  <span className="pd-sub num">{shortDate(o.date)}</span>
+                </div>
+                <div className="pd-card-tags">
+                  {o.miscType === 'marketing' && <span className="pill marketing">Marketing</span>}
+                  {o.paid === false && <span className="pill amber">Unpaid</span>}
+                  {o.status && o.status.toUpperCase() === 'BACKORDERED' && <span className="pill rust">Backordered</span>}
                 </div>
               </Link>
             ))}
           </div>
         ) : (
-          <Empty>{p.allocated > 0 ? 'Allocated in DEAR, but not to an order in this app (customer not in the CRM yet).' : 'Nothing allocated.'}</Empty>
+          <Empty>{p.allocated > 0 ? 'DEAR shows stock allocated, but not to an order in this app (customer not in the CRM yet).' : 'Nothing allocated.'}</Empty>
         )}
       </div>
 
@@ -264,7 +271,7 @@ function ProductDetail({ product: p }: { product: Product }) {
       {/* ---- Sales and purchases side by side ---- */}
       <div className="pd-two">
         <div>
-          <div className="pd-col-title">Recent sales</div>
+          <div className="pd-col-title">Recent sales (shipped)</div>
           {p.recentOrders.length ? p.recentOrders.map(s => (
             <Link to={`/orders/${s.quoteId}`} className="pd-list-card" key={s.quoteId}>
               <div>
@@ -272,7 +279,7 @@ function ProductDetail({ product: p }: { product: Product }) {
                 <div className="pd-sub">{s.accountName}</div>
               </div>
               <div className="pd-right">
-                <div className="pd-qty rust num">−{qty(s.qty)}{unit}</div>
+                <div className="pd-qty rust num">−{qty(s.qty)}{unit}{s.partial && <span className="pill neutral">Part shipped</span>}</div>
                 <div className="pd-sub num">{shortDate(s.date)}</div>
               </div>
             </Link>

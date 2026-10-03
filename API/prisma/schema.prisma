@@ -203,6 +203,8 @@ model Quote {
   paymentStatus   String?  @map("payment_status")   // DEAR CombinedPaymentStatus
   shippingStatus  String?  @map("shipping_status")  // DEAR CombinedShippingStatus
   pickingStatus   String?  @map("picking_status")   // DEAR CombinedPickingStatus; allocation ends at pick
+  lineFulfilment  Json     @default("{}") @map("line_fulfilment") // { "<sku>": { picked, shipped, backordered } }
+  fulfilments     Json     @default("[]") // [{ number, pick, pack, ship, shippedAt, lines: [{ sku, name, qty }], shipments }]
   orderContact    String?  @map("order_contact")
   orderEmail      String?  @map("order_email")
   orderPhone      String?  @map("order_phone")

@@ -21,6 +21,9 @@ const OPEN_PICKING_STATUSES = ['NOT PICKED', 'PARTIALLY PICKED'];
 // Fallback for orders synced before picking status was captured.
 const OPEN_SHIPPING_STATUSES = ['NOT SHIPPED', 'PARTIALLY SHIPPED'];
 const DEAD_PURCHASE_STATUSES = ['VOIDED', 'CREDITED', 'DRAFT'];
+// Order statuses where nothing has necessarily shipped yet. Used for
+// older orders synced before per-SKU ship quantities were captured.
+const UNSHIPPED_ORDER_STATUSES = ['DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING', 'ORDERED', 'BACKORDERED'];
 const PURCHASES_SHOWN = 10;
 
 // DEAR's own receiving status is the source of truth for "is anything
@@ -93,31 +96,44 @@ productsRouter.get('/search', async (req, res) => {
   const since12m = new Date(Date.now() - 365 * 86400000);
 
   const [salesTotals, allocatedLines, purchaseLines, recentBySku] = await Promise.all([
-    // Sales totals per SKU, all time and last 12 months. Marketing and
-    // warranty orders aren't sales, so they're left out.
+    // Sales totals per SKU, all time and last 12 months. Like DEAR, a
+    // sale counts when it ships, fulfilment by fulfilment: an order for 48
+    // with 24 shipped counts 24. Orders synced before per-SKU ship qty was
+    // captured count in full unless their status says nothing has gone.
+    // Marketing and warranty orders aren't sales, so they're left out.
     prisma.$queryRaw<{ sku: string; units_all: number; value_all: number; units_12m: number; value_12m: number }[]>`
-      select l.sku,
-        coalesce(sum(l.quantity), 0)::float8 as units_all,
-        coalesce(sum(l.line_total), 0)::float8 as value_all,
-        coalesce(sum(l.quantity) filter (where q.sent_at >= ${since12m}), 0)::float8 as units_12m,
-        coalesce(sum(l.line_total) filter (where q.sent_at >= ${since12m}), 0)::float8 as value_12m
-      from crm.quote_lines l
-      join crm.quotes q on q.id = l.quote_id
-      where l.sku = any(${skus}) and q.misc_type is null
-      group by l.sku
+      with lines as (
+        select l.sku, l.quantity, l.line_total, q.sent_at,
+          case
+            when q.line_fulfilment ? l.sku then least(1, greatest(0,
+              coalesce((q.line_fulfilment -> l.sku ->> 'shipped')::float8, 0)
+              / nullif(sum(l.quantity) over (partition by l.quote_id, l.sku), 0)))
+            when upper(coalesce(q.fulfillment_status, '')) = any(${UNSHIPPED_ORDER_STATUSES})
+              and upper(coalesce(q.shipping_status, '')) <> 'SHIPPED' then 0
+            else 1
+          end as shipped_share
+        from crm.quote_lines l
+        join crm.quotes q on q.id = l.quote_id
+        where l.sku = any(${skus}) and q.misc_type is null
+      )
+      select sku,
+        coalesce(sum(quantity * shipped_share), 0)::float8 as units_all,
+        coalesce(sum(line_total * shipped_share), 0)::float8 as value_all,
+        coalesce(sum(quantity * shipped_share) filter (where sent_at >= ${since12m}), 0)::float8 as units_12m,
+        coalesce(sum(line_total * shipped_share) filter (where sent_at >= ${since12m}), 0)::float8 as value_12m
+      from lines
+      group by sku
     `,
 
-    // Open orders holding stock: not shipped yet and not closed.
-    // Marketing/warranty orders count here, since they hold stock too.
+    // Candidate orders for "reserved for orders": not closed and not
+    // fully shipped. The exact per-SKU qty still to go is worked out below
+    // from each order's own pick/ship progress.
     prisma.quoteLine.findMany({
       where: {
         sku: { in: skus },
         quote: {
           AND: [
-            { OR: [
-              { pickingStatus: { in: OPEN_PICKING_STATUSES } },
-              { pickingStatus: null, shippingStatus: { in: OPEN_SHIPPING_STATUSES } },
-            ] },
+            { OR: [{ shippingStatus: null }, { shippingStatus: { not: 'SHIPPED' } }] },
             { OR: [{ fulfillmentStatus: null }, { fulfillmentStatus: { notIn: CLOSED_ORDER_STATUSES } }] },
           ],
         },
@@ -127,6 +143,7 @@ productsRouter.get('/search', async (req, res) => {
         quantity: true,
         quote: { select: {
           id: true, number: true, sentAt: true, miscType: true, fulfillmentStatus: true,
+          pickingStatus: true, shippingStatus: true, lineFulfilment: true, paid: true,
           account: { select: { id: true, name: true } },
         } },
       },
@@ -144,10 +161,13 @@ productsRouter.get('/search', async (req, res) => {
         where: { sku, quote: { miscType: null } },
         select: {
           quantity: true,
-          quote: { select: { id: true, number: true, sentAt: true, account: { select: { id: true, name: true } } } },
+          quote: { select: {
+            id: true, number: true, sentAt: true, lineFulfilment: true, fulfillmentStatus: true, shippingStatus: true,
+            account: { select: { id: true, name: true } },
+          } },
         },
         orderBy: { quote: { sentAt: 'desc' } },
-        take: HISTORY_SHOWN * 2,
+        take: HISTORY_SHOWN * 4,
       }),
     )),
   ]);
@@ -159,22 +179,43 @@ productsRouter.get('/search', async (req, res) => {
     const prices = (p.prices as Record<string, number>) ?? {};
     const totals = totalsBySku.get(p.sku);
 
-    // One order can carry the same SKU on several lines: sum per order.
-    const allocatedOrders = new Map<string, any>();
+    // Per order, how much of THIS item is still to go out. An order can
+    // be backordered on another item while this one is already allocated
+    // or picked, so this is judged per SKU, not by the order's status.
+    const ordersForSku = new Map<string, { quote: (typeof allocatedLines)[number]['quote']; ordered: number }>();
     for (const l of allocatedLines.filter(l => l.sku === p.sku)) {
-      const o = allocatedOrders.get(l.quote.id);
-      if (o) o.qty += l.quantity;
-      else allocatedOrders.set(l.quote.id, {
-        quoteId: l.quote.id,
-        number: l.quote.number,
-        date: l.quote.sentAt,
-        accountId: l.quote.account.id,
-        accountName: l.quote.account.name,
-        miscType: l.quote.miscType,
-        status: l.quote.fulfillmentStatus,
-        qty: l.quantity,
-      });
+      const o = ordersForSku.get(l.quote.id);
+      if (o) o.ordered += l.quantity;
+      else ordersForSku.set(l.quote.id, { quote: l.quote, ordered: l.quantity });
     }
+
+    // Allocated = ordered minus shipped, for whatever reason it's held
+    // (unpaid, waiting to pick, waiting on another item). Other customers
+    // can't have this stock.
+    const allocatedOrders = [...ordersForSku.values()].flatMap(({ quote, ordered }) => {
+      const progress = (quote.lineFulfilment as Record<string, { picked: number; shipped: number }>)?.[p.sku];
+      let allocated: number;
+      if (progress) {
+        allocated = ordered - Math.min(progress.shipped, ordered);
+      } else {
+        // Nothing of this item shipped yet. For orders synced before
+        // per-SKU progress was captured, trust the order-level status.
+        const shippedAll = (quote.shippingStatus ?? '').toUpperCase() === 'SHIPPED';
+        allocated = shippedAll ? 0 : ordered;
+      }
+      if (allocated <= 0) return [];
+      return [{
+        quoteId: quote.id,
+        number: quote.number,
+        date: quote.sentAt,
+        accountId: quote.account.id,
+        accountName: quote.account.name,
+        miscType: quote.miscType,
+        status: quote.fulfillmentStatus,
+        paid: quote.paid,
+        qty: allocated,
+      }];
+    });
 
     const skuPurchases = purchaseLines.filter(l => l.sku === p.sku);
     // One list of POs for this SKU, newest first: incoming ones show
@@ -204,17 +245,26 @@ productsRouter.get('/search', async (req, res) => {
     const incomingRefs = purchaseOrders.filter(po => po.outstanding > 0).map(po => po.number).filter(Boolean);
     const incomingQty = purchaseOrders.reduce((sum, po) => sum + po.outstanding, 0);
 
-    const recentOrders = new Map<string, any>();
-    for (const l of recentBySku[idx]) {
-      const o = recentOrders.get(l.quote.id);
-      if (o) o.qty += l.quantity;
-      else if (recentOrders.size < HISTORY_SHOWN) recentOrders.set(l.quote.id, {
-        quoteId: l.quote.id,
-        number: l.quote.number,
-        date: l.quote.sentAt,
-        accountId: l.quote.account.id,
-        accountName: l.quote.account.name,
-        qty: l.quantity,
+    // Recent sales = what actually shipped, newest first.
+    const orderedOnQuote = new Map<string, number>();
+    for (const l of recentBySku[idx]) orderedOnQuote.set(l.quote.id, (orderedOnQuote.get(l.quote.id) ?? 0) + l.quantity);
+    const recentOrders: any[] = [];
+    for (const [quoteId, ordered] of orderedOnQuote) {
+      if (recentOrders.length >= HISTORY_SHOWN) break;
+      const q = recentBySku[idx].find(l => l.quote.id === quoteId)!.quote;
+      const progress = (q.lineFulfilment as Record<string, { picked: number; shipped: number }>)?.[p.sku];
+      const unshipped = UNSHIPPED_ORDER_STATUSES.includes((q.fulfillmentStatus ?? '').toUpperCase())
+        && (q.shippingStatus ?? '').toUpperCase() !== 'SHIPPED';
+      const shipped = progress ? Math.min(progress.shipped, ordered) : unshipped ? 0 : ordered;
+      if (shipped <= 0) continue;
+      recentOrders.push({
+        quoteId,
+        number: q.number,
+        date: q.sentAt,
+        accountId: q.account.id,
+        accountName: q.account.name,
+        qty: shipped,
+        partial: shipped < ordered,
       });
     }
 
@@ -242,7 +292,7 @@ productsRouter.get('/search', async (req, res) => {
       purchaseOrders: purchaseOrders.slice(0, PURCHASES_SHOWN),
       incomingRefs,
       incomingQty,
-      recentOrders: [...recentOrders.values()],
+      recentOrders,
     };
   });
 

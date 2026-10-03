@@ -13,6 +13,14 @@ type ShipDetails = {
   company: string | null; contact: string | null; line1: string | null; line2: string | null;
   city: string | null; state: string | null; postcode: string | null; country: string | null;
 };
+type Fulfilment = {
+  number: number | string;
+  pick: string | null; pack: string | null; ship: string | null;
+  shippedAt: string | null;
+  lines: { sku: string; name: string; qty: number }[];
+  shipments: Shipment[];
+};
+type ToShip = { sku: string; productName: string; ordered: number; shipped: number; outstanding: number; backordered: number };
 type Order = {
   id: string; number: string; date: string;
   invoiceDate: string | null; invoiceNumber: string | null;
@@ -22,13 +30,25 @@ type Order = {
   contact: { name: string | null; email: string | null; phone: string | null };
   shipTo: { company: string | null; address: string | null; details: ShipDetails | null };
   shipments: Shipment[];
+  fulfilments: Fulfilment[];
+  toShip: ToShip[] | null;
   account: { id: string; name: string; region: string };
   lines: Line[];
   subtotal: number; taxTotal: number | null; total: number;
 };
 
 const money = (n: number) => fmtMoney(Math.round(n * 100) / 100);
+const qty = (n: number) => n.toLocaleString('en-AU', { maximumFractionDigits: 2 });
+
+// Where a fulfilment has got to, as one plain label.
+function fulfilmentStage(f: Fulfilment): { label: string; tone: string } {
+  if (f.ship === 'AUTHORISED') return { label: 'Shipped', tone: 'teal' };
+  if (f.pack === 'AUTHORISED') return { label: 'Packed, not shipped', tone: 'amber' };
+  if (f.pick === 'AUTHORISED') return { label: 'Picked, not packed', tone: 'amber' };
+  return { label: 'Not picked yet', tone: 'neutral' };
+}
 const LINE_COLS = '0.9fr 2fr 0.6fr 0.8fr 0.6fr 0.9fr';
+const TOSHIP_COLS = '0.9fr 2fr 0.7fr 0.7fr 0.7fr 1.2fr';
 
 function Row({ k, v }: { k: string; v: ReactNode }) {
   if (v === null || v === undefined || v === '') return null;
@@ -109,6 +129,67 @@ export default function OrderDetail() {
             </div>
           </div>
 
+          {order.toShip && order.toShip.length > 0 && (
+            <div className="card backorder-card">
+              <h3>
+                Still to ship ({order.toShip.length} {order.toShip.length === 1 ? 'item' : 'items'})
+                {order.toShip.some(t => t.backordered > 0) && <span className="pill rust" style={{ marginLeft: 8 }}>Backorder</span>}
+              </h3>
+              <div className="manifest" style={{ border: 'none' }}>
+                <div className="m-row head" style={{ gridTemplateColumns: TOSHIP_COLS, padding: '8px 0' }}>
+                  <div>SKU</div><div>Product</div>
+                  <div className="num">Ordered</div><div className="num">Shipped</div><div className="num">To ship</div><div></div>
+                </div>
+                {order.toShip.map(t => (
+                  <div className="m-row" key={t.sku} style={{ gridTemplateColumns: TOSHIP_COLS, padding: '8px 0', cursor: 'default' }}>
+                    <div className="num">{t.sku}</div>
+                    <div>{t.productName}</div>
+                    <div className="num">{qty(t.ordered)}</div>
+                    <div className="num">{qty(t.shipped)}</div>
+                    <div className="num" style={{ fontWeight: 600 }}>{qty(t.outstanding)}</div>
+                    <div style={{ textAlign: 'right' }}>
+                      {t.backordered > 0
+                        ? <span className="pill rust">{qty(t.backordered)} backordered</span>
+                        : <span className="pill amber">Allocated</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {order.fulfilments.length > 0 && (
+            <div className="card">
+              <h3>Fulfilments ({order.fulfilments.length})</h3>
+              {order.fulfilments.map((f, i) => {
+                const stage = fulfilmentStage(f);
+                return (
+                  <div className="fulfilment" key={i}>
+                    <div className="fulfilment-head">
+                      <span className="acct-name">Fulfilment {f.number}</span>
+                      <span className={'pill ' + stage.tone}>{stage.label}</span>
+                      {f.shippedAt && <span className="acct-region">{fmtDateWithYear(f.shippedAt)}</span>}
+                    </div>
+                    {f.lines.map(l => (
+                      <div className="kv" key={l.sku}>
+                        <span><span className="num k">{l.sku}</span> {l.name}</span>
+                        <span className="num">{qty(l.qty)}</span>
+                      </div>
+                    ))}
+                    {f.shipments.map((s, j) => (
+                      <div className="fulfilment-ship" key={j}>
+                        {s.carrier ?? 'Shipment'}{s.trackingNumber ? ': ' : ''}
+                        {s.trackingUrl && s.trackingNumber
+                          ? <a href={s.trackingUrl} target="_blank" rel="noreferrer" className="order-link num">{s.trackingNumber}</a>
+                          : <span className="num">{s.trackingNumber}</span>}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {order.memo && (
             <div className="card">
               <h3>Notes</h3>
@@ -129,7 +210,7 @@ export default function OrderDetail() {
 
             <div style={{ marginTop: 12 }}>
               <Row k="Shipping status" v={order.shippingStatus} />
-              {order.shipments.map((s, i) => (
+              {order.fulfilments.length === 0 && order.shipments.map((s, i) => (
                 <div className="kv" key={i}>
                   <span className="k">
                     {s.date ? fmtDateWithYear(s.date) : 'Shipment'}{s.carrier ? `, ${s.carrier}` : ''}

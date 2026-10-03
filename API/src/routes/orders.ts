@@ -108,6 +108,36 @@ ordersRouter.get('/:id', async (req, res) => {
   }));
   const subtotal = Math.round(lines.reduce((s, l) => s + l.lineTotal, 0) * 100) / 100;
 
+  // What's still to ship, per item: ordered minus shipped across all
+  // fulfilments, with DEAR's backorder qty where it can't fill it yet.
+  // null = no fulfilment data for this order (synced before it was
+  // captured), so the page hides the section rather than guess.
+  const progress = (o.lineFulfilment ?? {}) as Record<string, { picked?: number; shipped?: number; backordered?: number }>;
+  const fulfilments = (o.fulfilments ?? []) as any[];
+  const closed = ['COMPLETED', 'VOIDED', 'CREDITED'].includes((o.fulfillmentStatus ?? '').toUpperCase())
+    || (o.shippingStatus ?? '').toUpperCase() === 'SHIPPED';
+  const hasProgress = Object.keys(progress).length > 0 || fulfilments.length > 0 || !!o.shippingStatus;
+
+  let toShip: { sku: string; productName: string; ordered: number; shipped: number; outstanding: number; backordered: number }[] | null = null;
+  if (closed) {
+    toShip = [];
+  } else if (hasProgress) {
+    const bySku = new Map<string, { sku: string; productName: string; ordered: number }>();
+    for (const l of o.lines) {
+      const row = bySku.get(l.sku) ?? { sku: l.sku, productName: l.productName, ordered: 0 };
+      row.ordered += l.quantity;
+      bySku.set(l.sku, row);
+    }
+    toShip = [...bySku.values()]
+      .map(r => {
+        const shipped = Math.min(progress[r.sku]?.shipped ?? 0, r.ordered);
+        const outstanding = r.ordered - shipped;
+        return { ...r, shipped, outstanding, backordered: Math.min(progress[r.sku]?.backordered ?? 0, outstanding) };
+      })
+      .filter(r => r.outstanding > 0)
+      .sort((a, b) => b.backordered - a.backordered);
+  }
+
   res.json({
     id: o.id,
     number: o.number,
@@ -134,6 +164,8 @@ ordersRouter.get('/:id', async (req, res) => {
       details: o.shippingDetails,
     },
     shipments: o.shipments ?? [],
+    fulfilments,
+    toShip,
     account: { id: o.account.id, name: o.account.name, region: o.account.region },
     lines,
     subtotal,

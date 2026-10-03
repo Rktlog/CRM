@@ -465,3 +465,14 @@ a.pd-list-card:hover { border-color: var(--teal); }
   .pd-row, .pd-two { grid-template-columns: 1fr; }
   .pd-stats.four { grid-template-columns: repeat(2, 1fr); }
 }
+.pd-note { font-size: 12px; color: var(--amber); margin: -4px 0 10px; }
+.pd-card-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.pd-card-tags .pill { font-size: 10.5px; }
+
+/* ---- Order detail: still to ship and fulfilments ---- */
+.backorder-card { border-color: #EBD3A8; background: #FDF8EE; }
+.backorder-card h3 { display: flex; align-items: center; }
+.fulfilment { border-top: 1px solid var(--line); padding: 10px 0; }
+.fulfilment:first-of-type { border-top: none; padding-top: 0; }
+.fulfilment-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.fulfilment-ship { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
