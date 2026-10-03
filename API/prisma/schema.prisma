@@ -202,6 +202,7 @@ model Quote {
   invoiceNumber   String?  @map("invoice_number")
   paymentStatus   String?  @map("payment_status")   // DEAR CombinedPaymentStatus
   shippingStatus  String?  @map("shipping_status")  // DEAR CombinedShippingStatus
+  pickingStatus   String?  @map("picking_status")   // DEAR CombinedPickingStatus; allocation ends at pick
   orderContact    String?  @map("order_contact")
   orderEmail      String?  @map("order_email")
   orderPhone      String?  @map("order_phone")

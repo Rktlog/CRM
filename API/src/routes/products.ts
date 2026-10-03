@@ -15,9 +15,21 @@ const HISTORY_SHOWN = 8;
 
 // Order statuses that never hold stock.
 const CLOSED_ORDER_STATUSES = ['COMPLETED', 'VOIDED', 'CREDITED', 'DRAFT', 'ESTIMATING', 'ESTIMATED'];
-// DEAR shipping statuses where allocated stock hasn't left yet.
+// DEAR releases allocated stock when the order is picked (not when it
+// ships), so "allocated" means authorised and not yet fully picked.
+const OPEN_PICKING_STATUSES = ['NOT PICKED', 'PARTIALLY PICKED'];
+// Fallback for orders synced before picking status was captured.
 const OPEN_SHIPPING_STATUSES = ['NOT SHIPPED', 'PARTIALLY SHIPPED'];
-const CLOSED_PURCHASE_STATUSES = ['VOIDED', 'COMPLETED', 'CREDITED', 'DRAFT'];
+const DEAD_PURCHASE_STATUSES = ['VOIDED', 'CREDITED', 'DRAFT'];
+const PURCHASES_SHOWN = 10;
+
+// DEAR's own receiving status is the source of truth for "is anything
+// still to come", even if the line-level received qty didn't parse.
+function fullyReceived(status: string | null, receivingStatus: string | null): boolean {
+  const r = (receivingStatus ?? '').toUpperCase();
+  const s = (status ?? '').toUpperCase();
+  return r.includes('FULLY RECEIVED') || s === 'COMPLETED' || s === 'RECEIVED';
+}
 
 type Location = { location: string; onHand: number; allocated: number; available: number; onOrder: number };
 
@@ -101,14 +113,22 @@ productsRouter.get('/search', async (req, res) => {
       where: {
         sku: { in: skus },
         quote: {
-          shippingStatus: { in: OPEN_SHIPPING_STATUSES },
-          OR: [{ fulfillmentStatus: null }, { fulfillmentStatus: { notIn: CLOSED_ORDER_STATUSES } }],
+          AND: [
+            { OR: [
+              { pickingStatus: { in: OPEN_PICKING_STATUSES } },
+              { pickingStatus: null, shippingStatus: { in: OPEN_SHIPPING_STATUSES } },
+            ] },
+            { OR: [{ fulfillmentStatus: null }, { fulfillmentStatus: { notIn: CLOSED_ORDER_STATUSES } }] },
+          ],
         },
       },
       select: {
         sku: true,
         quantity: true,
-        quote: { select: { id: true, number: true, sentAt: true, miscType: true, account: { select: { id: true, name: true } } } },
+        quote: { select: {
+          id: true, number: true, sentAt: true, miscType: true, fulfillmentStatus: true,
+          account: { select: { id: true, name: true } },
+        } },
       },
       orderBy: { quote: { sentAt: 'asc' } },
     }),
@@ -151,35 +171,38 @@ productsRouter.get('/search', async (req, res) => {
         accountId: l.quote.account.id,
         accountName: l.quote.account.name,
         miscType: l.quote.miscType,
+        status: l.quote.fulfillmentStatus,
         qty: l.quantity,
       });
     }
 
     const skuPurchases = purchaseLines.filter(l => l.sku === p.sku);
-    const incoming = skuPurchases
-      .filter(l => !CLOSED_PURCHASE_STATUSES.includes((l.purchase.status ?? '').toUpperCase()))
-      .map(l => ({
-        number: l.purchase.number,
-        supplier: l.purchase.supplier,
-        orderDate: l.purchase.orderDate,
-        expected: l.purchase.requiredBy,
-        status: l.purchase.status,
-        ordered: l.quantityOrdered,
-        outstanding: Math.max(0, l.quantityOrdered - l.quantityReceived),
-      }))
-      .filter(l => l.outstanding > 0)
-      .sort((a, b) => (a.expected?.getTime() ?? Infinity) - (b.expected?.getTime() ?? Infinity));
-
-    const purchaseHistory = skuPurchases
-      .filter(l => l.quantityReceived > 0)
-      .map(l => ({
-        number: l.purchase.number,
-        supplier: l.purchase.supplier,
-        received: l.lastReceivedAt ?? l.purchase.orderDate,
-        qty: l.quantityReceived,
-      }))
-      .sort((a, b) => (b.received?.getTime() ?? 0) - (a.received?.getTime() ?? 0))
-      .slice(0, HISTORY_SHOWN);
+    // One list of POs for this SKU, newest first: incoming ones show
+    // what's still to come, received ones show what arrived.
+    const purchaseOrders = skuPurchases
+      .filter(l => !DEAD_PURCHASE_STATUSES.includes((l.purchase.status ?? '').toUpperCase()))
+      .map(l => {
+        const done = fullyReceived(l.purchase.status, l.purchase.receivingStatus);
+        const received = done ? Math.max(l.quantityReceived, l.quantityOrdered) : l.quantityReceived;
+        const outstanding = done ? 0 : Math.max(0, l.quantityOrdered - l.quantityReceived);
+        return {
+          number: l.purchase.number,
+          supplier: l.purchase.supplier,
+          orderDate: l.purchase.orderDate,
+          expected: l.purchase.requiredBy,
+          receivedAt: l.lastReceivedAt,
+          ordered: l.quantityOrdered,
+          received,
+          outstanding,
+          state: outstanding > 0 ? (received > 0 ? 'partial' : 'incoming') : 'received',
+        };
+      })
+      .sort((a, b) => {
+        const t = (x: typeof a) => (x.receivedAt ?? x.expected ?? x.orderDate)?.getTime() ?? 0;
+        return t(b) - t(a);
+      });
+    const incomingRefs = purchaseOrders.filter(po => po.outstanding > 0).map(po => po.number).filter(Boolean);
+    const incomingQty = purchaseOrders.reduce((sum, po) => sum + po.outstanding, 0);
 
     const recentOrders = new Map<string, any>();
     for (const l of recentBySku[idx]) {
@@ -216,8 +239,9 @@ productsRouter.get('/search', async (req, res) => {
         valueAll: round2(totals?.value_all ?? 0),
       },
       allocatedOrders: [...allocatedOrders.values()],
-      incoming,
-      purchaseHistory,
+      purchaseOrders: purchaseOrders.slice(0, PURCHASES_SHOWN),
+      incomingRefs,
+      incomingQty,
       recentOrders: [...recentOrders.values()],
     };
   });

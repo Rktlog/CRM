@@ -1,12 +1,18 @@
 import { FormEvent, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet } from '../lib/api';
-import { fmtMoney, fmtDateWithYear } from '../lib/types';
 
 type Location = { location: string; onHand: number; allocated: number; available: number; onOrder: number };
-type OrderRef = { quoteId: string; number: string; date: string; accountId: string; accountName: string; qty: number; miscType?: string | null };
-type Incoming = { number: string | null; supplier: string | null; orderDate: string | null; expected: string | null; status: string | null; ordered: number; outstanding: number };
-type Received = { number: string | null; supplier: string | null; received: string | null; qty: number };
+type OrderRef = {
+  quoteId: string; number: string; date: string; accountId: string; accountName: string; qty: number;
+  miscType?: string | null; status?: string | null;
+};
+type PurchaseOrder = {
+  number: string | null; supplier: string | null;
+  orderDate: string | null; expected: string | null; receivedAt: string | null;
+  ordered: number; received: number; outstanding: number;
+  state: 'incoming' | 'partial' | 'received';
+};
 type Price = { tier: string; price: number } | null;
 type Product = {
   sku: string;
@@ -24,8 +30,9 @@ type Product = {
   prices: Record<string, number>;
   sales: { units12m: number; value12m: number; unitsAll: number; valueAll: number };
   allocatedOrders: OrderRef[];
-  incoming: Incoming[];
-  purchaseHistory: Received[];
+  purchaseOrders: PurchaseOrder[];
+  incomingRefs: string[];
+  incomingQty: number;
   recentOrders: OrderRef[];
 };
 
@@ -150,118 +157,154 @@ export default function ProductSearch() {
 }
 
 function Empty({ children }: { children: ReactNode }) {
-  return <div style={{ fontSize: 13, color: 'var(--muted)' }}>{children}</div>;
+  return <div className="pd-empty">{children}</div>;
 }
 
+const shortDate = (d: string | null) =>
+  d ? new Date(d).toLocaleDateString('en-AU', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
+
 function ProductDetail({ product: p }: { product: Product }) {
+  const unit = p.uom ? ` ${p.uom}` : '';
   const otherPrices = Object.entries(p.prices).filter(
     ([tier]) => tier !== p.wholesale?.tier && tier !== p.retail?.tier,
   );
 
   return (
-    <div className="product-detail">
-      <div className="card">
-        <h3>Pricing</h3>
-        <div className="spend-grid two">
-          <div className="spend-cell">
-            <div className="v num">{p.wholesale ? price(p.wholesale.price) : '—'}</div>
-            <div className="l">Wholesale</div>
-          </div>
-          <div className="spend-cell">
-            <div className="v num">{p.retail ? price(p.retail.price) : '—'}</div>
-            <div className="l">Retail</div>
-          </div>
+    <div className="pd">
+      {/* ---- Stock tiles ---- */}
+      <div className="pd-tiles">
+        <div className="pd-tile">
+          <div className="pd-tile-label">On hand</div>
+          <div className="pd-tile-value num">{qty(p.onHand)}{unit}</div>
         </div>
-        {/* If DEAR's tier names don't say wholesale/retail, show them all. */}
-        {otherPrices.length > 0 && !(p.wholesale && p.retail) && otherPrices.map(([tier, v]) => (
-          <div className="kv" key={tier}><span className="k">{tier}</span><span className="num">{price(v)}</span></div>
-        ))}
-      </div>
-
-      <div className="card">
-        <h3>Stock</h3>
-        <div className="kv"><span className="k">On hand</span><span className="num">{qty(p.onHand)}{p.uom ? ` ${p.uom}` : ''}</span></div>
-        <div className="kv"><span className="k">Allocated</span><span className="num">{qty(p.allocated)}</span></div>
-        <div className="kv"><span className="k">Available</span><span className="num">{qty(p.available)}</span></div>
-        <div className="kv"><span className="k">On order</span><span className="num">{qty(p.onOrder)}</span></div>
-        {p.locations.length > 1 && p.locations.map(l => (
-          <div className="kv" key={l.location}>
-            <span className="k">{l.location}</span>
-            <span className="num">{qty(l.onHand)} on hand, {qty(l.available)} available</span>
-          </div>
-        ))}
-      </div>
-
-      <div className="card product-detail-wide">
-        <h3>Total sales</h3>
-        <div className="spend-grid four">
-          <div className="spend-cell"><div className="v num">{qty(p.sales.units12m)}</div><div className="l">Units, 12 months</div></div>
-          <div className="spend-cell"><div className="v num">{fmtMoney(p.sales.value12m)}</div><div className="l">Sales, 12 months</div></div>
-          <div className="spend-cell"><div className="v num">{qty(p.sales.unitsAll)}</div><div className="l">Units, all time</div></div>
-          <div className="spend-cell"><div className="v num">{fmtMoney(p.sales.valueAll)}</div><div className="l">Sales, all time</div></div>
+        <div className="pd-tile amber">
+          <div className="pd-tile-label">Allocated</div>
+          <div className="pd-tile-value num">{qty(p.allocated)}{unit}</div>
+        </div>
+        <div className="pd-tile teal">
+          <div className="pd-tile-label">Available</div>
+          <div className="pd-tile-value num">{qty(p.available)}{unit}</div>
+        </div>
+        <div className="pd-tile">
+          <div className="pd-tile-label">On order</div>
+          <div className="pd-tile-value num">{qty(p.onOrder)}{unit}</div>
+          {p.incomingRefs.length > 0 && (
+            <>
+              <div className="pd-tile-sub">PO ref</div>
+              <div className="pd-chips">
+                {p.incomingRefs.map(ref => <span className="pd-chip num" key={ref}>{ref}</span>)}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
-      <div className="card product-detail-wide">
-        <h3>Incoming POs</h3>
-        {p.incoming.length ? p.incoming.map((po, i) => (
-          <div className="kv" key={i}>
-            <span>
-              <span className="acct-name num">{po.number ?? 'PO'}</span>
-              <span className="k">
-                {po.supplier ? `, ${po.supplier}` : ''}
-                {po.expected ? `, expected ${fmtDateWithYear(po.expected)}` : po.orderDate ? `, ordered ${fmtDateWithYear(po.orderDate)}` : ''}
-              </span>
-            </span>
-            <span className="num">{qty(po.outstanding)} incoming</span>
+      {/* ---- Pricing and sales totals ---- */}
+      <div className="pd-row">
+        <div className="pd-box">
+          <div className="pd-box-title">Pricing</div>
+          <div className="pd-stats">
+            <div><div className="pd-stat-v num">{p.wholesale ? price(p.wholesale.price) : '—'}</div><div className="pd-stat-l">Wholesale</div></div>
+            <div><div className="pd-stat-v num">{p.retail ? price(p.retail.price) : '—'}</div><div className="pd-stat-l">Retail</div></div>
           </div>
-        )) : <Empty>No open purchase orders for this item.</Empty>}
+          {/* If DEAR's tier names don't say wholesale/retail, list them all. */}
+          {otherPrices.length > 0 && !(p.wholesale && p.retail) && otherPrices.map(([tier, v]) => (
+            <div className="kv" key={tier}><span className="k">{tier}</span><span className="num">{price(v)}</span></div>
+          ))}
+        </div>
+        <div className="pd-box">
+          <div className="pd-box-title">Total sales</div>
+          <div className="pd-stats four">
+            <div><div className="pd-stat-v num">{qty(p.sales.units12m)}</div><div className="pd-stat-l">Units, 12 mo</div></div>
+            <div><div className="pd-stat-v num">{price(p.sales.value12m)}</div><div className="pd-stat-l">Sales, 12 mo</div></div>
+            <div><div className="pd-stat-v num">{qty(p.sales.unitsAll)}</div><div className="pd-stat-l">Units, all time</div></div>
+            <div><div className="pd-stat-v num">{price(p.sales.valueAll)}</div><div className="pd-stat-l">Sales, all time</div></div>
+          </div>
+        </div>
       </div>
 
-      <div className="card product-detail-wide">
-        <h3>Allocated to orders</h3>
-        {p.allocatedOrders.length ? p.allocatedOrders.map(o => (
-          <div className="kv" key={o.quoteId}>
-            <span>
-              <Link to={`/accounts/${o.accountId}`} className="acct-name">{o.accountName}</Link>
-              <span className="k"> </span>
-              <Link to={`/orders/${o.quoteId}`} className="k order-link">#{o.number}</Link>
-              <span className="k">, {fmtDateWithYear(o.date)}</span>
-              {o.miscType === 'marketing' && <span className="pill marketing" style={{ marginLeft: 6 }}>Marketing</span>}
-            </span>
-            <span className="num">{qty(o.qty)}</span>
+      {/* ---- Allocated sales orders ---- */}
+      <div className="pd-section amber">
+        <div className="pd-section-title">Allocated sales orders ({p.allocatedOrders.length})</div>
+        {p.allocatedOrders.length ? (
+          <div className="pd-cards">
+            {p.allocatedOrders.map(o => (
+              <Link to={`/orders/${o.quoteId}`} className="pd-card" key={o.quoteId}>
+                <div className="pd-card-top">
+                  <span className="pd-ref num">#{o.number}</span>
+                  <span className="pd-qty amber num">{qty(o.qty)}{unit}</span>
+                </div>
+                <div className="pd-card-bottom">
+                  <span className="pd-sub">{o.accountName}</span>
+                  {o.miscType === 'marketing'
+                    ? <span className="pill marketing">Marketing</span>
+                    : o.status && <span className={'pill ' + (o.status.toUpperCase() === 'BACKORDERED' ? 'rust' : 'amber')}>{o.status}</span>}
+                </div>
+              </Link>
+            ))}
           </div>
-        )) : <Empty>{p.allocated > 0 ? 'Allocated in DEAR, but not to any order in this app.' : 'Nothing allocated.'}</Empty>}
+        ) : (
+          <Empty>{p.allocated > 0 ? 'Allocated in DEAR, but not to an order in this app (customer not in the CRM yet).' : 'Nothing allocated.'}</Empty>
+        )}
       </div>
 
-      <div className="card product-detail-wide">
-        <h3>Purchase history</h3>
-        {p.purchaseHistory.length ? p.purchaseHistory.map((r, i) => (
-          <div className="kv" key={i}>
-            <span>
-              <span className="acct-name num">{r.number ?? 'PO'}</span>
-              <span className="k">
-                {r.supplier ? `, ${r.supplier}` : ''}{r.received ? `, received ${fmtDateWithYear(r.received)}` : ''}
-              </span>
-            </span>
-            <span className="num">{qty(r.qty)}</span>
-          </div>
-        )) : <Empty>No stock received in the last 12 months.</Empty>}
-      </div>
+      {/* ---- Locations, only when there's more than one ---- */}
+      {p.locations.length > 1 && (
+        <div className="pd-section">
+          <div className="pd-section-title">Stock locations ({p.locations.length})</div>
+          {p.locations.map(l => (
+            <div className="pd-list-row" key={l.location}>
+              <span>{l.location}</span>
+              <span className="num">On hand: <b>{qty(l.onHand)}</b> | Avail: <b className="teal-text">{qty(l.available)}</b></span>
+            </div>
+          ))}
+        </div>
+      )}
 
-      <div className="card product-detail-wide">
-        <h3>Recent orders</h3>
-        {p.recentOrders.length ? p.recentOrders.map(s => (
-          <div className="kv" key={s.quoteId}>
-            <span>
-              <Link to={`/accounts/${s.accountId}`} className="acct-name">{s.accountName}</Link>
-              <span className="k"> </span>
-              <Link to={`/orders/${s.quoteId}`} className="k order-link">#{s.number}</Link>
-              <span className="k">, {fmtDateWithYear(s.date)}</span>
-            </span>
-            <span className="num">{qty(s.qty)}</span>
-          </div>
-        )) : <Empty>No orders yet.</Empty>}
+      {/* ---- Sales and purchases side by side ---- */}
+      <div className="pd-two">
+        <div>
+          <div className="pd-col-title">Recent sales</div>
+          {p.recentOrders.length ? p.recentOrders.map(s => (
+            <Link to={`/orders/${s.quoteId}`} className="pd-list-card" key={s.quoteId}>
+              <div>
+                <div className="pd-ref-lg">Order #{s.number}</div>
+                <div className="pd-sub">{s.accountName}</div>
+              </div>
+              <div className="pd-right">
+                <div className="pd-qty rust num">−{qty(s.qty)}{unit}</div>
+                <div className="pd-sub num">{shortDate(s.date)}</div>
+              </div>
+            </Link>
+          )) : <Empty>No sales yet.</Empty>}
+        </div>
+
+        <div>
+          <div className="pd-col-title">Recent purchase orders</div>
+          {p.purchaseOrders.length ? p.purchaseOrders.map((po, i) => (
+            <div className="pd-list-card static" key={i}>
+              <div>
+                <div className="pd-ref-lg">PO #{po.number ?? '—'}</div>
+                <div className="pd-sub">{po.supplier ?? ''}</div>
+              </div>
+              <div className="pd-right">
+                {po.state === 'received' ? (
+                  <>
+                    <div className="pd-qty teal num">+{qty(po.received || po.ordered)}{unit}</div>
+                    <div className="pd-sub num">{shortDate(po.receivedAt ?? po.orderDate)}</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="pd-qty num">
+                      +{qty(po.outstanding)}{unit} <span className="pill amber">{po.state === 'partial' ? 'Part received' : 'Incoming'}</span>
+                    </div>
+                    <div className="pd-sub num">{po.expected ? `Due ${shortDate(po.expected)}` : shortDate(po.orderDate)}</div>
+                  </>
+                )}
+              </div>
+            </div>
+          )) : <Empty>No purchase orders on record.</Empty>}
+        </div>
       </div>
     </div>
   );
