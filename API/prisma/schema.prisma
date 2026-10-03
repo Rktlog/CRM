@@ -337,9 +337,41 @@ model Product {
   available     Float     @default(0)
   onOrder       Float     @default(0) @map("on_order")
   locations     Json      @default("[]")
+  prices        Json      @default("{}") // { "<DEAR price tier name>": price }
   updatedAt     DateTime  @default(now()) @map("updated_at")
   stockSyncedAt DateTime? @map("stock_synced_at")
 
   @@map("products")
+  @@schema("crm")
+}
+
+// DEAR purchase orders, kept current by the sync-purchases Edge
+// Function. Powers incoming POs and purchase history on Products.
+model Purchase {
+  id              String         @id // DEAR purchase ID
+  number          String?
+  supplier        String?
+  status          String?
+  receivingStatus String?        @map("receiving_status")
+  orderDate       DateTime?      @map("order_date")
+  requiredBy      DateTime?      @map("required_by")
+  syncedAt        DateTime       @default(now()) @map("synced_at")
+  lines           PurchaseLine[]
+
+  @@map("purchases")
+  @@schema("crm")
+}
+
+model PurchaseLine {
+  id               String    @id @default(uuid()) @db.Uuid
+  purchaseId       String    @map("purchase_id")
+  purchase         Purchase  @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  sku              String
+  productName      String    @map("product_name")
+  quantityOrdered  Float     @default(0) @map("quantity_ordered")
+  quantityReceived Float     @default(0) @map("quantity_received")
+  lastReceivedAt   DateTime? @map("last_received_at")
+
+  @@map("purchase_lines")
   @@schema("crm")
 }

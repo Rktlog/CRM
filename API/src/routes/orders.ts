@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
+import { searchWords } from './products';
 
 export const ordersRouter = Router();
 
@@ -12,21 +13,27 @@ const SEARCH_LIMIT = 50;
 // GET /orders/search?q=   (empty q = most recent orders)
 // Matches order number, invoice number, customer reference, the
 // account's name, the ship-to store name, or any SKU / product name
-// on the order.
+// on the order. Multiple words are matched independently.
 ordersRouter.get('/search', async (req, res) => {
   const q = String(req.query.q ?? '').trim();
 
-  const where = q.length >= 2
+  // Every word must match somewhere on the order, in any order:
+  // "miffy brisbane" finds Miffy orders for the Brisbane store.
+  const words = q.length >= 2 ? searchWords(q) : [];
+  const contains = (w: string) => ({ contains: w, mode: 'insensitive' as const });
+  const where = words.length
     ? {
-        OR: [
-          { number: { contains: q, mode: 'insensitive' as const } },
-          { invoiceNumber: { contains: q, mode: 'insensitive' as const } },
-          { reference: { contains: q, mode: 'insensitive' as const } },
-          { shippingCompany: { contains: q, mode: 'insensitive' as const } },
-          { account: { name: { contains: q, mode: 'insensitive' as const } } },
-          { lines: { some: { sku: { contains: q, mode: 'insensitive' as const } } } },
-          { lines: { some: { productName: { contains: q, mode: 'insensitive' as const } } } },
-        ],
+        AND: words.map(w => ({
+          OR: [
+            { number: contains(w) },
+            { invoiceNumber: contains(w) },
+            { reference: contains(w) },
+            { shippingCompany: contains(w) },
+            { account: { name: contains(w) } },
+            { lines: { some: { sku: contains(w) } } },
+            { lines: { some: { productName: contains(w) } } },
+          ],
+        })),
       }
     : {};
 
