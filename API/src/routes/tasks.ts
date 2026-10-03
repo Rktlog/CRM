@@ -146,9 +146,8 @@ tasksRouter.get('/suggested', async (req, res) => {
   const inactiveCount = rep?.dailyInactiveCount ?? 5;
 
   const assignedRegions = (await prisma.repRegion.findMany({ where: { repId }, select: { region: true } })).map(r => r.region);
-  // No assigned territory yet — fall back to whatever the rep already
-  // owns, so this isn't just empty while waiting on a manager.
-  const regionFilter = assignedRegions.length ? { region: { in: assignedRegions } } : { repId };
+  // No states assigned yet means no suggestions, same as everywhere else.
+  const regionFilter = assignedRegions.length ? { region: { in: assignedRegions } } : { id: { in: [] } };
 
   const today = new Date();
   const todayOnly = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));

@@ -25,5 +25,5 @@ export function stateOptionsFor(me: Me | null): string[] {
 // One line describing whose accounts are showing, for page headers.
 export function territoryLabel(me: Me | null): string | null {
   if (!me || me.role === 'manager') return null;
-  return me.regions.length ? `Your states: ${me.regions.join(', ')}` : 'Your accounts (no states assigned yet)';
+  return me.regions.length ? `Your states: ${me.regions.join(', ')}` : 'No states assigned yet. Ask a manager to assign you in Settings.';
 }

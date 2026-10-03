@@ -123,13 +123,12 @@ function resolveRange(range: Range, now: Date) {
 
 // Who sees what on Sales Data: managers see every state; reps see the
 // states they're assigned to (rep_regions), and can only narrow within
-// them. A rep with no states assigned yet sees just their own accounts,
-// so nothing shows before a manager sets them up. Enforced here, not
-// only hidden in the page.
+// them. A rep with no states assigned sees nothing until a manager sets
+// them up. Enforced here, not only hidden in the page.
 async function salesScope(req: any, requested?: string[]): Promise<{ regions?: string[]; repId?: string; myRegions: string[] | null }> {
   if (req.rep!.role === 'manager') return { regions: requested, myRegions: null };
   const assigned = (await prisma.repRegion.findMany({ where: { repId: req.rep!.id }, select: { region: true } })).map(r => r.region);
-  if (!assigned.length) return { regions: requested, repId: req.rep!.id, myRegions: [] };
+  if (!assigned.length) return { regions: ['__none__'], myRegions: [] };
   const regions = requested ? requested.filter(r => assigned.includes(r)) : assigned;
   return { regions: regions.length ? regions : ['__none__'], myRegions: assigned };
 }

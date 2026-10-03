@@ -158,12 +158,10 @@ abandonedCartsRouter.get('/', async (req, res) => {
   }));
 
   // Same territory rule as Accounts (lib/territory): reps see carts for
-  // accounts in their assigned states plus their own; managers see
-  // everything, including carts from customers not in the CRM yet.
+  // accounts in their assigned states only; managers see everything,
+  // including carts from customers not in the CRM yet.
   const myRegions = isManager ? [] : await assignedRegions(req.rep!.id);
-  const visible = matched.filter(c => isManager || (c.account && (
-    c.account.repId === req.rep?.id || myRegions.includes(c.account.region)
-  )));
+  const visible = matched.filter(c => isManager || (c.account && myRegions.includes(c.account.region)));
 
   // ---- Ordered since: first order by that account after the cart ----
   const accountIds = [...new Set(visible.map(c => c.account?.id).filter(Boolean))] as string[];

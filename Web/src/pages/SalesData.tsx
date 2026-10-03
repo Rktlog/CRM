@@ -41,10 +41,10 @@ type Me = { role: 'rep' | 'manager'; regions: string[] };
 
 // Reps only get their assigned states to choose from: all of them
 // together first, then each one on its own if they cover several.
-// A rep with no states assigned sees just their own accounts.
+// A rep with no states assigned sees nothing (the API returns empty).
 function regionOptionsFor(me: Me): typeof REGION_GROUPS {
   if (me.role === 'manager') return REGION_GROUPS;
-  if (!me.regions.length) return [{ key: 'mine', label: 'My accounts', regions: null }];
+  if (!me.regions.length) return [{ key: 'mine', label: 'No states assigned', regions: null }];
   const mine = [{ key: 'mine', label: me.regions.join(' / '), regions: me.regions }];
   return me.regions.length > 1
     ? [...mine, ...me.regions.map(r => ({ key: r, label: r, regions: [r] }))]
