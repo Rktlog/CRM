@@ -61,6 +61,11 @@ export type Quote = {
   shippingAddress: string | null;
   source?: string;
   miscType?: string | null;
+  // DEAR's separate shipping/picking/payment progress (see lib/orderStatus)
+  shippingStatus?: string | null;
+  pickingStatus?: string | null;
+  paymentStatus?: string | null;
+  invoiceNumber?: string | null;
   lines?: QuoteLineItem[];
 };
 

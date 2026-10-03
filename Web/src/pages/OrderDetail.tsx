@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiGet } from '../lib/api';
 import { fmtMoney, fmtDateWithYear } from '../lib/types';
-import { orderStatusPills } from './Orders';
+import { orderStatusPills, paymentTag, stageTag } from '../lib/orderStatus';
 
 type Line = {
   sku: string; productName: string; brand: string | null;
@@ -25,7 +25,7 @@ type Order = {
   id: string; number: string; date: string;
   invoiceDate: string | null; invoiceNumber: string | null;
   reference: string | null; memo: string | null; source: string; miscType: string | null;
-  paid: boolean; paymentStatus: string | null; fulfillmentStatus: string | null; shippingStatus: string | null;
+  paid: boolean; paymentStatus: string | null; fulfillmentStatus: string | null; shippingStatus: string | null; pickingStatus: string | null;
   syncedAt: string;
   contact: { name: string | null; email: string | null; phone: string | null };
   shipTo: { company: string | null; address: string | null; details: ShipDetails | null };
@@ -227,7 +227,7 @@ export default function OrderDetail() {
 
           <div className="card">
             <h3>Payment</h3>
-            <Row k="Payment status" v={order.paymentStatus ?? (order.paid ? 'Paid' : 'Unpaid')} />
+            <Row k="Payment" v={paymentTag(order)?.label ?? 'Nothing to pay'} />
             <Row k="Invoice no." v={order.invoiceNumber && <span className="num">{order.invoiceNumber}</span>} />
             <Row k="Invoice date" v={order.invoiceDate && fmtDateWithYear(order.invoiceDate)} />
           </div>
@@ -236,7 +236,8 @@ export default function OrderDetail() {
             <h3>Order</h3>
             <Row k="Order date" v={fmtDateWithYear(order.date)} />
             <Row k="Customer reference" v={order.reference} />
-            <Row k="Order status" v={order.fulfillmentStatus} />
+            <Row k="Status" v={stageTag(order)?.label} />
+            <Row k="DEAR status" v={order.fulfillmentStatus && <span className="num" style={{ color: 'var(--muted)' }}>{order.fulfillmentStatus}</span>} />
             <Row k="Contact" v={order.contact.name} />
             <Row k="Email" v={order.contact.email && <a href={`mailto:${order.contact.email}`} className="order-link">{order.contact.email}</a>} />
             <Row k="Phone" v={order.contact.phone && <a href={`tel:${order.contact.phone}`} className="order-link">{order.contact.phone}</a>} />

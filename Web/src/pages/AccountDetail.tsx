@@ -1,16 +1,8 @@
 import { useEffect, useState, useMemo, FormEvent } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPatch, apiDownload } from '../lib/api';
+import { orderStatusPills, stageTag, paymentTag } from '../lib/orderStatus';
 import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fmtDateWithYear, daysBetween, flagFor, isHistoryOrder } from '../lib/types';
-
-function statusPill(status: string | null) {
-  if (!status) return null;
-  const s = status.toUpperCase();
-  if (s === 'BACKORDERED') return <span className="pill rust">Backordered</span>;
-  if (s === 'COMPLETED') return <span className="pill teal">Completed</span>;
-  if (s === 'SHIPPING' || s === 'PACKING' || s === 'PICKING') return <span className="pill amber">{status}</span>;
-  return <span className="pill neutral">{status}</span>;
-}
 
 export default function AccountDetail() {
   const { id } = useParams<{ id: string }>();
@@ -131,12 +123,22 @@ export default function AccountDetail() {
             <div className="status-line">
               <span>Payment</span>
               <span className="num">
-                {openQuote ? (openQuote.paid ? 'Paid' : `Unpaid — ${daysBetween(openQuote.sentAt)} days`) : '—'}
+                {(() => {
+                  const pay = openQuote ? paymentTag(openQuote) : null;
+                  if (!pay) return '—';
+                  // Days unpaid counts from the invoice: before that, nothing is owed yet.
+                  return pay.label === 'Unpaid'
+                    ? `Unpaid, ${daysBetween(openQuote!.invoiceDate ?? openQuote!.sentAt)} days`
+                    : pay.label;
+                })()}
               </span>
             </div>
             <div className="status-line">
-              <span>Fulfillment</span>
-              <span>{openQuote?.fulfillmentStatus ? statusPill(openQuote.fulfillmentStatus) : <span className="num">—</span>}</span>
+              <span>Status</span>
+              <span>{(() => {
+                const stage = openQuote ? stageTag(openQuote) : null;
+                return stage ? <span className={`pill ${stage.tone}`}>{stage.label}</span> : <span className="num">—</span>;
+              })()}</span>
             </div>
             <div className="status-line">
               <span>Stage</span>
@@ -314,16 +316,7 @@ export default function AccountDetail() {
                           </div>
                           <div className="num">{fmtMoney(q.amount)}</div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
-                            {q.miscType === 'marketing' && <span className="pill marketing">Marketing order</span>}
-                            {q.miscType === 'warranty' && <span className="pill neutral">Warranty</span>}
-                            {isHistoryOrder(q) ? (
-                              <span className="badge muted" style={{ fontSize: 10 }}>History</span>
-                            ) : (
-                              <>
-                                {q.paid ? <span className="pill teal">Paid</span> : <span className="pill amber">Unpaid</span>}
-                                {statusPill(q.fulfillmentStatus)}
-                              </>
-                            )}
+                            {orderStatusPills(q)}
                           </div>
                         </div>
 

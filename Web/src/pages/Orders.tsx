@@ -1,7 +1,8 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiGet } from '../lib/api';
-import { fmtMoney, fmtDateWithYear, isHistoryOrder } from '../lib/types';
+import { fmtMoney, fmtDateWithYear } from '../lib/types';
+import { orderStatusPills } from '../lib/orderStatus';
 
 type OrderRow = {
   id: string;
@@ -12,6 +13,7 @@ type OrderRow = {
   paymentStatus: string | null;
   fulfillmentStatus: string | null;
   shippingStatus: string | null;
+  pickingStatus: string | null;
   shipTo: string | null;
   reference: string | null;
   invoiceNumber: string | null;
@@ -25,34 +27,8 @@ type OrderRow = {
 
 const COLS = '1fr 1.8fr 0.9fr 0.8fr 1.1fr';
 
-export function orderStatusPills(o: {
-  paid: boolean; fulfillmentStatus: string | null; miscType: string | null; source?: string; number?: string;
-}) {
-  // Spreadsheet history: its old statuses mean nothing now, so show only
-  // that it's history (plus marketing/warranty, which still matters).
-  if (isHistoryOrder(o)) {
-    return (
-      <>
-        {o.miscType === 'marketing' && <span className="pill marketing">Marketing order</span>}
-        {o.miscType === 'warranty' && <span className="pill neutral">Warranty</span>}
-        <span className="badge muted">History</span>
-      </>
-    );
-  }
-  const status = (o.fulfillmentStatus ?? '').toUpperCase();
-  return (
-    <>
-      {o.miscType === 'marketing' && <span className="pill marketing">Marketing order</span>}
-      {o.miscType === 'warranty' && <span className="pill neutral">Warranty</span>}
-      {o.paid ? <span className="pill teal">Paid</span> : <span className="pill amber">Unpaid</span>}
-      {status === 'BACKORDERED' && <span className="pill rust">Backordered</span>}
-      {status === 'COMPLETED' && <span className="pill teal">Completed</span>}
-      {status && status !== 'BACKORDERED' && status !== 'COMPLETED' && (
-        <span className="pill neutral">{o.fulfillmentStatus}</span>
-      )}
-    </>
-  );
-}
+// Re-exported so the order page keeps importing it from here.
+export { orderStatusPills };
 
 export default function Orders() {
   const [term, setTerm] = useState('');

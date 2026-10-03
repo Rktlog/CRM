@@ -52,6 +52,7 @@ ordersRouter.get('/search', async (req, res) => {
       paymentStatus: true,
       fulfillmentStatus: true,
       shippingStatus: true,
+      pickingStatus: true,
       shippingCompany: true,
       reference: true,
       invoiceNumber: true,
@@ -73,6 +74,7 @@ ordersRouter.get('/search', async (req, res) => {
       paymentStatus: o.paymentStatus,
       fulfillmentStatus: o.fulfillmentStatus,
       shippingStatus: o.shippingStatus,
+      pickingStatus: o.pickingStatus,
       shipTo: o.shippingCompany,
       reference: o.reference,
       invoiceNumber: o.invoiceNumber,
@@ -155,6 +157,7 @@ ordersRouter.get('/:id', async (req, res) => {
     paymentStatus: o.paymentStatus,
     fulfillmentStatus: o.fulfillmentStatus,
     shippingStatus: o.shippingStatus,
+    pickingStatus: o.pickingStatus,
     syncedAt: o.syncedAt,
     contact: {
       name: o.orderContact ?? o.account.contactName,
