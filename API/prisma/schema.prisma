@@ -359,6 +359,7 @@ model Product {
   prices        Json      @default("{}") // { "<DEAR price tier name>": price }
   barcode       String?
   attributes    Json      @default("{}") // DEAR custom fields, e.g. { "AdditionalAttribute1": "2" }
+  imageUrl      String?   @map("image_url") // loaded from the team's price lists; the DEAR sync never touches it
   updatedAt     DateTime  @default(now()) @map("updated_at")
   stockSyncedAt DateTime? @map("stock_synced_at")
 
