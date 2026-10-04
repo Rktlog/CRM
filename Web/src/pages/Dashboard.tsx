@@ -11,6 +11,8 @@ import TeamActivityCard from '../components/TeamActivityCard';
 export default function Dashboard() {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   // Same list as the Customers board, so the counts always match it.
+  // Money owed across the person's accounts (same figures as Orders → Balances).
+  const [owed, setOwed] = useState<{ balance: number; over60: number; d30: number; d60: number } | null>(null);
   const [customers, setCustomers] = useState<{ lastOrderAt: string | null; avgOrderGapDays: number | null; spend365: number }[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -19,6 +21,7 @@ export default function Dashboard() {
   useEffect(() => {
     apiGet('/accounts').then(setAccounts).catch(e => setError(e.message));
     apiGet('/accounts/customers').then(setCustomers).catch(() => {});
+    apiGet('/orders/views/balances').then(b => setOwed(b.totals)).catch(() => {});
   }, []);
 
   if (error) return <div className="empty-state">Couldn't load accounts: {error}</div>;
@@ -65,6 +68,13 @@ export default function Dashboard() {
           <div className="stat-value num">{dueFollowUps.length}</div>
           <div className="stat-sub">from notes or set manually</div>
         </a>
+        {owed && (
+          <div className="stat flag-amber clickable" onClick={() => navigate('/orders?tab=balances')} title="Open Orders → Balances">
+            <div className="stat-label">Owed to us</div>
+            <div className="stat-value num">{fmtMoney(Math.round(owed.balance))}</div>
+            <div className="stat-sub">{fmtMoney(Math.round(owed.over60))} more than 60 days overdue</div>
+          </div>
+        )}
         <a className="stat flag-rust clickable" href="#needs-attention">
           <div className="stat-label">Inactive customers</div>
           <div className="stat-value num">{inactive.length}</div>

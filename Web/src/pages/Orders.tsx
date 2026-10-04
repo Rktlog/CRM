@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import OrderViews, { ViewKey } from '../components/OrderViews';
 import { apiGet } from '../lib/api';
 import { fmtMoney, fmtDateWithYear } from '../lib/types';
 import { orderStatusPills } from '../lib/orderStatus';
@@ -30,7 +31,42 @@ const COLS = '1fr 1.8fr 0.9fr 0.8fr 1.1fr';
 // Re-exported so the order page keeps importing it from here.
 export { orderStatusPills };
 
+// Orders: every order-related list in one place. "All orders" is the search;
+// the other tabs track what needs doing (quotes to chase, orders to ship,
+// invoices to collect, balances per customer). ?tab= opens a tab directly,
+// e.g. from the Dashboard's "Owed to us" card.
+const TABS: { key: 'all' | ViewKey; label: string }[] = [
+  { key: 'all', label: 'All orders' },
+  { key: 'quotes', label: 'Open quotes' },
+  { key: 'to-ship', label: 'To ship' },
+  { key: 'unpaid', label: 'Unpaid invoices' },
+  { key: 'balances', label: 'Balances' },
+];
+
 export default function Orders() {
+  const [params, setParams] = useSearchParams();
+  const tab = (TABS.find(t => t.key === params.get('tab'))?.key ?? 'all');
+
+  return (
+    <>
+      <h1>Orders</h1>
+      <div className="tab-bar">
+        {TABS.map(t => (
+          <button
+            key={t.key}
+            className={'tab' + (tab === t.key ? ' active' : '')}
+            onClick={() => setParams(t.key === 'all' ? {} : { tab: t.key })}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === 'all' ? <AllOrders /> : <OrderViews view={tab} />}
+    </>
+  );
+}
+
+function AllOrders() {
   const [term, setTerm] = useState('');
   const [searched, setSearched] = useState('');
   const [rows, setRows] = useState<OrderRow[] | null>(null);
@@ -61,8 +97,6 @@ export default function Orders() {
 
   return (
     <>
-      <h1>Orders</h1>
-
       <form className="product-search-form" onSubmit={onSubmit}>
         <input
           type="text"

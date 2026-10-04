@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { isHistory } from '../lib/orderSource';
 import { searchWords } from './products';
+import * as XLSX from 'xlsx';
+import { openQuotes, toShip, unpaidInvoices, balances, AGE_BUCKETS } from '../lib/receivables';
 
 export const ordersRouter = Router();
 
@@ -95,6 +97,72 @@ ordersRouter.get('/search', async (req, res) => {
 });
 
 // GET /orders/:id   full detail for one order
+// ---------- Order tracking views (tabs on the Orders page) ----------
+// GET /orders/views/quotes | to-ship | unpaid | balances
+//   ?region=VIC,NSW  &format=xlsx (download exactly what's on screen)
+// Scoped by territory: reps see their states.
+const xlDate = (d: Date | null | undefined) => (d ? new Date(d).toISOString().slice(0, 10) : '');
+
+ordersRouter.get('/views/:view', async (req, res) => {
+  const regions = typeof req.query.region === 'string' && req.query.region ? req.query.region.split(',') : undefined;
+  const rep = req.rep!;
+  let data: any;
+  let sheet: Record<string, unknown>[] = [];
+  let name = '';
+
+  switch (req.params.view) {
+    case 'quotes': {
+      data = await openQuotes(rep, regions);
+      name = 'open-quotes';
+      sheet = data.rows.map((r: any) => ({
+        Order: r.number, Date: xlDate(r.date), 'Age (days)': r.ageDays, Customer: r.customer, State: r.region,
+        Rep: r.repName ?? '', Stage: r.stage, Reference: r.reference ?? '', Amount: r.amount,
+      }));
+      break;
+    }
+    case 'to-ship': {
+      data = await toShip(rep, regions);
+      name = 'to-ship';
+      sheet = data.rows.map((r: any) => ({
+        Order: r.number, Date: xlDate(r.date), 'Age (days)': r.ageDays, Customer: r.customer, State: r.region,
+        Rep: r.repName ?? '', Status: r.stage, Type: r.type, Amount: r.amount,
+      }));
+      break;
+    }
+    case 'unpaid': {
+      data = await unpaidInvoices(rep, regions);
+      name = 'unpaid-invoices';
+      sheet = data.rows.map((r: any) => ({
+        Invoice: r.invoice, Order: r.number, Customer: r.customer, State: r.region, Rep: r.repName ?? '',
+        'Invoice date': xlDate(r.invoiceDate), 'Due date': xlDate(r.dueDate), 'Days overdue': r.daysOverdue,
+        Total: r.total, Paid: r.paid, Credited: r.credited, Due: r.due, Type: r.type,
+      }));
+      break;
+    }
+    case 'balances': {
+      data = await balances(rep, regions);
+      name = 'customer-balances';
+      sheet = data.rows.map((r: any) => ({
+        Customer: r.customer, State: r.region, Rep: r.repName ?? '', 'Unpaid invoices': r.invoices,
+        ...Object.fromEntries(AGE_BUCKETS.map(b => [b.label, r[b.key]])),
+        Owing: r.owing, 'Credit on account': r.credit, Balance: r.balance, 'Oldest overdue (days)': r.oldestDays,
+      }));
+      break;
+    }
+    default:
+      return res.status(404).json({ error: 'Unknown view' });
+  }
+
+  if (req.query.format === 'xlsx') {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheet.length ? sheet : [{ Note: 'Nothing to show.' }]), name.slice(0, 31));
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    return res.send(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+  }
+  res.json(data);
+});
+
 ordersRouter.get('/:id', async (req, res) => {
   const o = await prisma.quote.findUnique({
     where: { id: req.params.id },

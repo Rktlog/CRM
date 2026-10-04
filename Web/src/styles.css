@@ -682,3 +682,26 @@ a.pd-list-card:hover { border-color: var(--teal); }
 /* ---- Sales Data: links to accounts, orders and products ---- */
 .ledger-link { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }
 .ledger-link:hover { color: var(--teal); border-bottom-color: var(--teal); }
+
+/* ---- Orders: tracking tabs ---- */
+.ov-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 8px; }
+.ov-toolbar input { flex: 1; min-width: 220px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 13px; }
+.ov-toolbar select { padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 13px; }
+.ov-toolbar .btn.secondary { padding: 7px 12px; font-size: 12.5px; }
+.ov-summary { font-size: 13px; color: var(--ink-soft); margin-bottom: 10px; font-weight: 600; }
+.ov-table { width: 100%; }
+.ov-table td { vertical-align: top; }
+.ov-click { cursor: pointer; }
+.ov-click:hover td { background: var(--paper); }
+.ov-late-d30 { color: var(--amber); }
+.ov-late-d60 { color: #C2410C; }
+.ov-late-d90, .ov-late-d90plus { color: var(--rust); font-weight: 600; }
+.ov-balance { font-weight: 700; }
+.ov-balance.in-credit { color: var(--teal); font-weight: 600; }
+.ov-ageing { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 12px; }
+.ov-age { background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--teal); border-radius: 8px; padding: 10px 12px; }
+.ov-age .num { font-size: 17px; font-weight: 700; margin-top: 2px; }
+.ov-age-d30 { border-top-color: var(--amber); }
+.ov-age-d60 { border-top-color: #C2410C; }
+.ov-age-d90, .ov-age-d90plus { border-top-color: var(--rust); }
+@media (max-width: 760px) { .ov-ageing { grid-template-columns: repeat(2, 1fr); } }

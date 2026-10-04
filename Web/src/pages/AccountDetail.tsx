@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, FormEvent } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPatch, apiDownload } from '../lib/api';
 import { orderStatusPills, stageTag, paymentTag } from '../lib/orderStatus';
-import PriceListModal from '../components/Pricelistmodal';
+import PriceListModal from '../components/PriceListModal';
 import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fmtDateWithYear, daysBetween, flagFor, isHistoryOrder, isOwingOrder, amountOwing } from '../lib/types';
 
 export default function AccountDetail() {
@@ -113,12 +113,15 @@ export default function AccountDetail() {
   // prepayments not yet applied), from any live order, paid or not.
   // Balance = owed - credit, as DEAR shows it: negative means in credit.
   const creditOrders = liveQuotes
-    .filter(q => (q.unappliedCredit ?? 0) > 0.005)
+    .filter(q => (q.unappliedCredit ?? 0) > 0.005 || (q.amountDue ?? 0) < -0.005)
     .map(q => {
       const notes = ((q.creditNotes ?? []) as { number: string | null; onAccount?: number }[])
         .filter(n => (n.onAccount ?? 0) > 0.005);
       const fromNotes = notes.reduce((s, n) => s + (n.onAccount ?? 0), 0);
-      return { q, credit: q.unappliedCredit!, notes, prepayment: Math.max(0, q.unappliedCredit! - fromNotes) };
+      const unapplied = q.unappliedCredit ?? 0;
+      // Overpaid: DEAR's balance on the order is below zero.
+      const overpaid = (q.amountDue ?? 0) < -0.005 ? -q.amountDue! : 0;
+      return { q, credit: unapplied + overpaid, notes, prepayment: Math.max(0, unapplied - fromNotes), overpaid };
     });
   const totalCredit = creditOrders.reduce((s, c) => s + c.credit, 0);
   const balance = totalDue - totalCredit;
@@ -231,7 +234,7 @@ export default function AccountDetail() {
             {showDue && creditOrders.length > 0 && (
               <div className="due-list">
                 <div className="doc-title" style={{ marginTop: 10 }}>Credit on account</div>
-                {creditOrders.map(({ q, credit, notes, prepayment }) => (
+                {creditOrders.map(({ q, credit, notes, prepayment, overpaid }) => (
                   <Link to={`/orders/${q.id}`} className="due-row" key={q.id}>
                     <div>
                       <div className="acct-name">{q.number}</div>
@@ -239,6 +242,7 @@ export default function AccountDetail() {
                         {[
                           ...notes.map(n => `credit note ${n.number ?? ''} not yet used`),
                           prepayment > 0.005 ? `prepayment of ${fmtMoney(prepayment)} not yet applied` : '',
+                          overpaid > 0.005 ? `overpaid by ${fmtMoney(overpaid)}` : '',
                         ].filter(Boolean).join(', ')}
                       </div>
                     </div>
