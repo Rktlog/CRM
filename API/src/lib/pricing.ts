@@ -7,7 +7,7 @@ export function pickPrice(prices: Prices | null | undefined, pattern: RegExp): {
   return hit ? { tier: hit[0], price: hit[1] } : null;
 }
 
-export const WHOLESALE = /wholesale|trade/i;
+export const WHOLESALE = /^wholesale$/i;
 export const RETAIL = /retail|rrp/i;
 
 export const wholesalePrice = (p: Prices | null | undefined) => pickPrice(p, WHOLESALE)?.price ?? null;
