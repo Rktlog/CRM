@@ -678,3 +678,7 @@ a.pd-list-card:hover { border-color: var(--teal); }
 .pl-check { display: flex; align-items: center; gap: 7px; font-size: 13px; padding: 3px 0; cursor: pointer; }
 .pl-check .acct-region { margin-left: auto; font-size: 11px; }
 @media (max-width: 760px) { .pl-row, .pl-brands { grid-template-columns: 1fr; } }
+
+/* ---- Sales Data: links to accounts, orders and products ---- */
+.ledger-link { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }
+.ledger-link:hover { color: var(--teal); border-bottom-color: var(--teal); }

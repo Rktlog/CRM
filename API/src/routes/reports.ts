@@ -398,6 +398,8 @@ reportsRouter.get('/ledger', async (req, res) => {
   const unpaidQuotes = allQuotes
     .filter(q => isOwing(q))
     .map(q => ({
+      id: q.id,               // links to the order page
+      accountId: q.accountId, // links to the account page
       order: q.number,
       date: q.sentAt.toISOString().slice(0, 10),
       stockist: accountById.get(q.accountId)?.name ?? 'Unknown',
@@ -412,7 +414,7 @@ reportsRouter.get('/ledger', async (req, res) => {
       const acctQuotes = paidQuotes.filter(q => q.accountId === a.id);
       const fyCurrent = acctQuotes.filter(q => q.sentAt >= window.start && q.sentAt < window.end).reduce((s, q) => s + q.amount, 0);
       const fyPrior = acctQuotes.filter(q => q.sentAt >= window.priorStart && q.sentAt < window.priorEnd).reduce((s, q) => s + q.amount, 0);
-      return { customer: a.name, region: a.region, type: a.type, fyPrior: Math.round(fyPrior*100)/100, fyCurrent: Math.round(fyCurrent*100)/100 };
+      return { accountId: a.id, customer: a.name, region: a.region, type: a.type, fyPrior: Math.round(fyPrior*100)/100, fyCurrent: Math.round(fyCurrent*100)/100 };
     })
     .filter(a => a.fyCurrent > 0 || a.fyPrior > 0)
     .sort((a, b) => b.fyCurrent - a.fyCurrent)
@@ -483,6 +485,8 @@ reportsRouter.get('/ledger', async (req, res) => {
 
   // ---- Recent invoices (most recent 100, paid or not) ----
   const recentInvoices = allQuotes.slice(0, 100).map(q => ({
+    id: q.id,
+    accountId: q.accountId,
     invoice: q.number,
     date: q.sentAt.toISOString().slice(0, 10),
     customer: accountById.get(q.accountId)?.name ?? 'Unknown',

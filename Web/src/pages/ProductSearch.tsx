@@ -1,5 +1,5 @@
-import { FormEvent, useState, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { FormEvent, useEffect, useState, type ReactNode } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { apiGet } from '../lib/api';
 
 type Location = { location: string; onHand: number; allocated: number; available: number; onOrder: number };
@@ -58,7 +58,22 @@ export default function ProductSearch() {
 
   async function search(e: FormEvent) {
     e.preventDefault();
-    const q = term.trim();
+    await runSearch(term);
+  }
+
+  // Arriving from a link like /products?q=SKU (e.g. Sales Data's top
+  // products): search straight away. One match opens its detail.
+  const [params] = useSearchParams();
+  useEffect(() => {
+    const q = params.get('q');
+    if (q && q.trim().length >= 2) {
+      setTerm(q);
+      runSearch(q);
+    }
+  }, [params]);
+
+  async function runSearch(raw: string) {
+    const q = raw.trim();
     if (q.length < 2) return;
     setLoading(true);
     setError(null);

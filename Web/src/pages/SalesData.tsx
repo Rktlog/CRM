@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { apiGet } from '../lib/api';
 import { fmtMoney } from '../lib/types';
@@ -9,11 +10,11 @@ type Quarter = {
   invoicedCurrent: number; invoicedPrior: number; varianceDollar: number; variancePct: number | null;
   newBusinessCount: number; newBusinessValue: number;
 };
-type UnpaidQuote = { order: string; date: string; stockist: string; amount: number; status: string };
-type TopAccount = { customer: string; region: string; type: string; fyPrior: number; fyCurrent: number };
+type UnpaidQuote = { id: string; accountId: string; order: string; date: string; stockist: string; amount: number; due: number; status: string };
+type TopAccount = { accountId: string; customer: string; region: string; type: string; fyPrior: number; fyCurrent: number };
 type BreakdownRow = { type?: string; region?: string; category?: string; brand?: string; count?: number; total: number };
 type SkuRow = { sku: string; productName: string; quantity: number; total: number };
-type RecentInvoice = { invoice: string; date: string; customer: string; region: string; amount: number; paid: boolean; history?: boolean };
+type RecentInvoice = { id: string; accountId: string; invoice: string; date: string; customer: string; region: string; amount: number; paid: boolean; history?: boolean };
 type LedgerData = {
   totalValue: number; totalOrders: number; accountsTracked: number; accountsWithActivity: number;
   newCustomerCount: number; newCustomerValue: number;
@@ -244,14 +245,14 @@ export default function SalesData() {
 
           <div className="ledger-section-head">
             <h2>Unpaid quotes to chase</h2>
-            <span className="ledger-note">{data.unpaidQuotes.length} quotes · {fmtMoney(data.unpaidQuotes.reduce((s, q) => s + q.amount, 0))}</span>
+            <span className="ledger-note">{data.unpaidQuotes.length} quotes · {fmtMoney(data.unpaidQuotes.reduce((s, q) => s + q.due, 0))} due</span>
           </div>
           <div className="ledger-table-scroll tall" style={{ maxHeight: 420 }}>
             {data.unpaidQuotes.length === 0 ? (
               <div className="empty-state">Nothing unpaid right now.</div>
             ) : (
               <table>
-                <thead><tr><th>Order</th><th>Date</th><th>Stockist</th><th className="num-col">Amount</th><th>Status</th></tr></thead>
+                <thead><tr><th>Order</th><th>Date</th><th>Stockist</th><th className="num-col">Due</th><th>Status</th></tr></thead>
                 <tbody>
                   {data.unpaidQuotes.map(q => {
                     const lower = q.status.toLowerCase();
@@ -260,10 +261,13 @@ export default function SalesData() {
                     else if (lower.includes('backorder')) cls = 'rust';
                     return (
                       <tr key={q.order}>
-                        <td className="num">{q.order}</td>
+                        <td className="num"><Link to={`/orders/${q.id}`} className="order-link">{q.order}</Link></td>
                         <td>{q.date}</td>
-                        <td>{q.stockist}</td>
-                        <td className="num-col num">{fmtMoney(q.amount)}</td>
+                        <td><Link to={`/accounts/${q.accountId}`} className="ledger-link">{q.stockist}</Link></td>
+                        <td className="num-col num">
+                          {fmtMoney(q.due)}
+                          {q.due < q.amount - 0.005 && <div className="cust-meta">of {fmtMoney(q.amount)}</div>}
+                        </td>
                         <td><span className={`badge ${cls}`}>{q.status}</span></td>
                       </tr>
                     );
@@ -290,8 +294,8 @@ export default function SalesData() {
               </thead>
               <tbody>
                 {topAccounts.map(a => (
-                  <tr key={a.customer}>
-                    <td><div className="cust-name">{a.customer}</div><div className="cust-meta">{a.type}</div></td>
+                  <tr key={a.accountId}>
+                    <td><Link to={`/accounts/${a.accountId}`} className="cust-name ledger-link">{a.customer}</Link><div className="cust-meta">{a.type}</div></td>
                     <td>{a.region}</td>
                     <td className="num-col num">{fmtMoney(a.fyPrior)}</td>
                     <td className="num-col num">{fmtMoney(a.fyCurrent)}</td>
@@ -330,8 +334,8 @@ export default function SalesData() {
                 <tbody>
                   {data.skuBreakdown.map(s => (
                     <tr key={s.sku}>
-                      <td className="num">{s.sku}</td>
-                      <td>{s.productName}</td>
+                      <td className="num"><Link to={`/products?q=${encodeURIComponent(s.sku)}`} className="order-link">{s.sku}</Link></td>
+                      <td><Link to={`/products?q=${encodeURIComponent(s.sku)}`} className="ledger-link">{s.productName}</Link></td>
                       <td className="num-col num">{s.quantity.toLocaleString()}</td>
                       <td className="num-col num">{fmtMoney(s.total)}</td>
                     </tr>
@@ -364,10 +368,10 @@ export default function SalesData() {
               <thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Region</th><th>Status</th><th className="num-col">Total</th></tr></thead>
               <tbody>
                 {invoicePage.map(inv => (
-                  <tr key={inv.invoice}>
-                    <td className="num">{inv.invoice}</td>
+                  <tr key={inv.id}>
+                    <td className="num"><Link to={`/orders/${inv.id}`} className="order-link">{inv.invoice}</Link></td>
                     <td>{inv.date}</td>
-                    <td>{inv.customer}</td>
+                    <td><Link to={`/accounts/${inv.accountId}`} className="ledger-link">{inv.customer}</Link></td>
                     <td>{inv.region}</td>
                     <td>{inv.history
                       ? <span className="badge muted">History</span>
