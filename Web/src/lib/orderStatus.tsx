@@ -55,7 +55,8 @@ export function stageTag(o: OrderLike): Tag | null {
 
 // Has it been paid? null = nothing to pay (quotes, cancelled, marketing, warranty).
 export function paymentTag(o: OrderLike): Tag | null {
-  if (o.miscType) return null;
+  // Warranty/marketing: nothing to pay, unless DEAR invoiced it.
+  if (o.miscType && !((o.amountDue ?? 0) > 0.005)) return null;
   const status = up(o.fulfillmentStatus);
   if (QUOTE_STATUSES.includes(status) || status === 'VOIDED' || status === 'CREDITED') return null;
 

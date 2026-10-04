@@ -65,7 +65,7 @@ function paymentWords(q: {
   amountDue?: number | null; amountPaid?: number | null; creditedTotal?: number | null;
 }): string {
   if (isHistory(q)) return '';
-  if (q.miscType) return 'No charge';
+  if (q.miscType && !((q.amountDue ?? 0) > 0.005)) return 'No charge';
   const pay = (q.paymentStatus ?? '').toUpperCase();
   if (pay === 'PREPAID') return 'Prepaid';
   // DEAR's balance, once synced: settled by payment, by credit, or part paid.

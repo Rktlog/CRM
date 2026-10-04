@@ -25,8 +25,11 @@ export function isOwing(q: {
   source?: string | null; number?: string | null; paid: boolean; miscType?: string | null;
   amountDue?: number | null; fulfillmentStatus?: string | null;
 }): boolean {
-  if (isHistory(q) || q.miscType) return false;
+  if (isHistory(q)) return false;
   if (['VOIDED', 'CREDITED'].includes((q.fulfillmentStatus ?? '').toUpperCase())) return false;
+  // DEAR's balance decides, including on warranty and marketing orders:
+  // usually $0, but if DEAR invoiced one, it's owed.
   if (q.amountDue != null) return q.amountDue > 0.005;
+  if (q.miscType) return false; // not synced with a balance yet: assume no charge
   return !q.paid;
 }

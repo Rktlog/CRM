@@ -186,9 +186,11 @@ export function isOwingOrder(q: {
   source?: string | null; number?: string | null; paid: boolean; miscType?: string | null;
   amountDue?: number | null; fulfillmentStatus?: string | null;
 }): boolean {
-  if (isHistoryOrder(q) || q.miscType) return false;
+  if (isHistoryOrder(q)) return false;
   if (['VOIDED', 'CREDITED'].includes((q.fulfillmentStatus ?? '').toUpperCase())) return false;
+  // DEAR's balance decides, including on warranty and marketing orders.
   if (q.amountDue != null) return q.amountDue > 0.005;
+  if (q.miscType) return false;
   return !q.paid;
 }
 

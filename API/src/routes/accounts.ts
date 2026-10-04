@@ -105,7 +105,8 @@ accountsRouter.get('/customers', async (req, res) => {
             - coalesce(sum(unapplied_credit), 0)::float8 as owing
         from crm.quotes
         where account_id = any(${ids}::uuid[])
-          and source <> 'rhino-history' and number not like 'Q%' and misc_type is null
+          and source <> 'rhino-history' and number not like 'Q%'
+          and (misc_type is null or amount_due > 0.005) -- warranty/marketing only if DEAR invoiced them
           and upper(coalesce(fulfillment_status, '')) not in ('VOIDED', 'CREDITED')
         group by account_id`
     : [];
