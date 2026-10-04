@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, FormEvent } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPatch, apiDownload } from '../lib/api';
 import { orderStatusPills, stageTag, paymentTag } from '../lib/orderStatus';
+import PriceListModal from '../components/PriceListModal';
 import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fmtDateWithYear, daysBetween, flagFor, isHistoryOrder, isOwingOrder, amountOwing } from '../lib/types';
 
 export default function AccountDetail() {
@@ -14,7 +15,7 @@ export default function AccountDetail() {
   const [productYear, setProductYear] = useState('all');
   const [exportingProducts, setExportingProducts] = useState(false);
   const [exportingOrders, setExportingOrders] = useState(false);
-  const [exportingStocklist, setExportingStocklist] = useState(false);
+  const [showPriceList, setShowPriceList] = useState(false);
   const [showDue, setShowDue] = useState(false);
   const [type, setType] = useState<'call' | 'email' | 'visit'>('call');
   const [saving, setSaving] = useState(false);
@@ -482,14 +483,13 @@ export default function AccountDetail() {
                 </button>
               </div>
               <div className="stocklist-row">
-                <span className="acct-region">Monthly stocklist: their current range, plus new products from the brands they stock, with prices and availability.</span>
+                <span className="acct-region">Price list to send them: every product in their brands, with their current range and new arrivals highlighted, prices, increments and availability.</span>
                 <button
                   className="btn secondary"
                   style={{ padding: '4px 10px', fontSize: 11.5, whiteSpace: 'nowrap' }}
-                  disabled={exportingStocklist}
-                  onClick={() => download(`/exports/account-stocklist?accountId=${account.id}`, `${safeName}-stocklist.xlsx`, setExportingStocklist)}
+                  onClick={() => setShowPriceList(true)}
                 >
-                  {exportingStocklist ? 'Building…' : '⬇ Stocklist'}
+                  ⬇ Price list…
                 </button>
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
@@ -538,6 +538,9 @@ export default function AccountDetail() {
           )}
         </div>
       </div>
+      {showPriceList && (
+        <PriceListModal accountId={account.id} accountName={account.name} onClose={() => setShowPriceList(false)} />
+      )}
     </>
   );
 }

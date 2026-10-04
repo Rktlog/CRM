@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma';
 import { territoryWhere, canSeeAccount } from '../lib/territory';
 import { LIVE_ORDER, isHistory, isOwing } from '../lib/orderSource';
 import { wholesalePrice, retailPrice } from '../lib/pricing';
+import { buildPriceList, priceListWorkbook, PriceListAvailability, PriceListStatus } from '../lib/priceList';
 
 export const exportsRouter = Router();
 
@@ -560,6 +561,29 @@ exportsRouter.get('/:type', async (req, res) => {
           { name: 'Current range', rows: currentRows.length ? currentRows : [{ Note: 'No products ordered yet.' }] },
           { name: 'New for you', rows: newRows.length ? newRows : [{ Note: 'Nothing new from their brands right now.' }] },
         ]);
+      }
+
+      // ---- Customer price list (the report sent to stores), with filters ----
+      // ?accountId=  &brands=A|B|C  &status=new,current,other  &availability=available,preorder,discontinued
+      case 'account-pricelist': {
+        const accountId = req.query.accountId as string;
+        if (!accountId) return res.status(400).json({ error: 'accountId required' });
+        const account = await prisma.account.findUnique({ where: { id: accountId }, select: { id: true, name: true, repId: true, region: true } });
+        if (!account) return res.status(404).json({ error: 'Account not found' });
+        if (!(await canSeeAccount(req.rep!, account))) return res.status(403).json({ error: 'This account is outside your states' });
+
+        const list = (v: unknown, sep: string) => (typeof v === 'string' && v.trim() ? v.split(sep).map(s => s.trim()).filter(Boolean) : undefined);
+        const { rows } = await buildPriceList(account.id, {
+          brands: list(req.query.brands, '|'),
+          statuses: list(req.query.status, ',') as PriceListStatus[] | undefined,
+          availability: list(req.query.availability, ',') as PriceListAvailability[] | undefined,
+        });
+
+        const buffer = await priceListWorkbook(rows);
+        const safeName = account.name.replace(/[^a-z0-9]+/gi, ' ').trim().replace(/\s+/g, ' ');
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${safeName}.xlsx"`);
+        return res.send(buffer);
       }
 
       case 'misc-marketing':

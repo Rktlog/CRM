@@ -357,6 +357,8 @@ model Product {
   onOrder       Float     @default(0) @map("on_order")
   locations     Json      @default("[]")
   prices        Json      @default("{}") // { "<DEAR price tier name>": price }
+  barcode       String?
+  attributes    Json      @default("{}") // DEAR custom fields, e.g. { "AdditionalAttribute1": "2" }
   updatedAt     DateTime  @default(now()) @map("updated_at")
   stockSyncedAt DateTime? @map("stock_synced_at")
 

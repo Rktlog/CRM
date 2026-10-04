@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { createAccountSchema } from '../schemas';
 import { territoryWhere, canSeeAccount } from '../lib/territory';
+import { priceListOptions } from '../lib/priceList';
 import { LIVE_ORDER } from '../lib/orderSource';
 
 export const accountsRouter = Router();
@@ -120,6 +121,15 @@ accountsRouter.get('/customers', async (req, res) => {
       owing: Math.round((f?.owing ?? 0) * 100) / 100,
     };
   }));
+});
+
+// Filter choices for the customer price list: every brand, with the ones
+// this store has bought first and ticked by default.
+accountsRouter.get('/:id/pricelist-options', async (req, res) => {
+  const account = await prisma.account.findUnique({ where: { id: req.params.id }, select: { id: true, repId: true, region: true } });
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  if (!(await canSeeAccount(req.rep!, account))) return res.status(403).json({ error: 'This account is outside your states' });
+  res.json(await priceListOptions(account.id));
 });
 
 accountsRouter.get('/:id', async (req, res) => {
