@@ -31,6 +31,7 @@ type Product = {
   prices: Record<string, number>;
   sales: { units12m: number; value12m: number; unitsAll: number; valueAll: number };
   allocatedOrders: OrderRef[];
+  draftOrders?: OrderRef[]; // draft orders: demand, not holding stock yet
   purchaseOrders: PurchaseOrder[];
   // Completed stock adjustments: + stock added, - removed (write-offs, recounts, returns)
   adjustments?: { number: string | null; date: string | null; reference: string | null; quantity: number | null; location: string | null; kind: string }[];
@@ -271,6 +272,34 @@ function ProductDetail({ product: p }: { product: Product }) {
           <Empty>{p.allocated > 0 ? 'DEAR shows stock allocated, but not to an order in this app (customer not in the CRM yet).' : 'Nothing allocated.'}</Empty>
         )}
       </div>
+
+      {/* ---- Draft orders: demand, but not holding stock until authorised ---- */}
+      {(p.draftOrders?.length ?? 0) > 0 && (
+        <div className="pd-section">
+          <div className="pd-section-title">
+            Draft orders ({p.draftOrders!.length}, {qty(p.draftOrders!.reduce((s, o) => s + o.qty, 0))}{unit})
+          </div>
+          <div className="pd-note">Not authorised in DEAR yet, so no stock is held for them. Stock is reserved once they're confirmed.</div>
+          <div className="pd-cards">
+            {p.draftOrders!.map(o => (
+              <Link to={`/orders/${o.quoteId}`} className="pd-card" key={o.quoteId}>
+                <div className="pd-card-top">
+                  <span className="pd-ref num">#{o.number}</span>
+                  <span className="pd-qty num">{qty(o.qty)}{unit}</span>
+                </div>
+                <div className="pd-card-bottom">
+                  <span className="pd-sub">{o.accountName}</span>
+                  <span className="pd-sub num">{shortDate(o.date)}</span>
+                </div>
+                <div className="pd-card-tags">
+                  <span className="pill neutral">Draft</span>
+                  {o.miscType === 'marketing' && <span className="pill marketing">Marketing</span>}
+                </div>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ---- Locations, only when there's more than one ---- */}
       {p.locations.length > 1 && (

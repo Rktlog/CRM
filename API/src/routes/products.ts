@@ -207,7 +207,19 @@ productsRouter.get('/search', async (req, res) => {
     // Allocated = ordered minus shipped, for whatever reason it's held
     // (unpaid, waiting to pick, waiting on another item). Other customers
     // can't have this stock.
-    const allocatedOrders = [...ordersForSku.values()].flatMap(({ quote, ordered }) => {
+    // Draft orders (DEAR status ORDERING) aren't authorised yet, so DEAR
+    // doesn't reserve stock for them. They're listed separately as demand,
+    // and left out of "allocated" so the list matches DEAR's Allocated figure.
+    const isDraft = (s: string | null) => (s ?? '').toUpperCase() === 'ORDERING';
+    const draftOrders = [...ordersForSku.values()]
+      .filter(({ quote }) => isDraft(quote.fulfillmentStatus))
+      .map(({ quote, ordered }) => ({
+        quoteId: quote.id, number: quote.number, date: quote.sentAt,
+        accountId: quote.account.id, accountName: quote.account.name,
+        miscType: quote.miscType, status: quote.fulfillmentStatus, paid: quote.paid, qty: ordered,
+      }));
+
+    const allocatedOrders = [...ordersForSku.values()].filter(({ quote }) => !isDraft(quote.fulfillmentStatus)).flatMap(({ quote, ordered }) => {
       const progress = (quote.lineFulfilment as Record<string, { picked: number; shipped: number }>)?.[p.sku];
       let allocated: number;
       if (progress) {
@@ -304,6 +316,7 @@ productsRouter.get('/search', async (req, res) => {
         valueAll: round2(totals?.value_all ?? 0),
       },
       allocatedOrders: [...allocatedOrders.values()],
+      draftOrders,
       purchaseOrders: purchaseOrders.slice(0, PURCHASES_SHOWN),
       adjustments: (adjustmentsBySku.get(p.sku) ?? []).map(a => ({
         number: a.number, date: a.date, reference: a.reference, quantity: a.quantity, location: a.location, kind: a.kind,
