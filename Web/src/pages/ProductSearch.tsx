@@ -32,6 +32,8 @@ type Product = {
   sales: { units12m: number; value12m: number; unitsAll: number; valueAll: number };
   allocatedOrders: OrderRef[];
   purchaseOrders: PurchaseOrder[];
+  // Completed stock adjustments: + stock added, - removed (write-offs, recounts, returns)
+  adjustments?: { number: string | null; date: string | null; reference: string | null; quantity: number | null; location: string | null; kind: string }[];
   incomingRefs: string[];
   incomingQty: number;
   recentOrders: OrderRef[];
@@ -326,6 +328,26 @@ function ProductDetail({ product: p }: { product: Product }) {
               </div>
             </div>
           )) : <Empty>No purchase orders on record.</Empty>}
+
+          {(p.adjustments?.length ?? 0) > 0 && (
+            <>
+              <div className="pd-col-title" style={{ marginTop: 16 }}>Stock adjustments</div>
+              {p.adjustments!.map((a, i) => (
+                <div className="pd-list-card static" key={`adj-${i}`}>
+                  <div>
+                    <div className="pd-ref-lg">{a.number ?? 'Adjustment'}</div>
+                    <div className="pd-sub">{a.reference || (a.kind === 'new' ? 'Stock added' : 'Stock count')}{a.location ? `, ${a.location}` : ''}</div>
+                  </div>
+                  <div className="pd-right">
+                    <div className={`pd-qty num${(a.quantity ?? 0) < 0 ? ' rust' : ' teal'}`}>
+                      {a.quantity == null ? '—' : `${a.quantity > 0 ? '+' : ''}${qty(a.quantity)}`}{unit}
+                    </div>
+                    <div className="pd-sub num">{a.date ? shortDate(a.date) : ''}</div>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
         </div>
       </div>
     </div>

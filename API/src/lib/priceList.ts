@@ -117,7 +117,14 @@ export async function buildPriceList(accountId: string, filters: PriceListFilter
   const firstSeen = skus.length
     ? await prisma.$queryRaw<{ sku: string; first_received: Date | null; first_sold: Date | null }[]>`
         select s.sku,
-          (select min(pl.last_received_at) from crm.purchase_lines pl where pl.sku = s.sku and pl.quantity_received > 0) as first_received,
+          -- First time stock arrived: a purchase order receipt, or a completed
+            -- stock adjustment that added stock (some products come in that way).
+            least(
+              (select min(pl.last_received_at) from crm.purchase_lines pl where pl.sku = s.sku and pl.quantity_received > 0),
+              (select min(coalesce(al.received_date, sa.effective_date))
+                 from crm.stock_adjustment_lines al join crm.stock_adjustments sa on sa.id = al.adjustment_id
+                 where al.sku = s.sku and al.quantity > 0 and upper(coalesce(sa.status, '')) like 'COMPLETED%')
+            ) as first_received,
           (select min(q.sent_at) from crm.quote_lines l join crm.quotes q on q.id = l.quote_id where l.sku = s.sku) as first_sold
         from unnest(${skus}::text[]) as s(sku)`
     : [];
@@ -128,7 +135,7 @@ export async function buildPriceList(accountId: string, filters: PriceListFilter
   // Next expected delivery, for anything not in stock now.
   const openPOs = skus.length
     ? await prisma.purchaseLine.findMany({
-        where: { sku: { in: skus }, purchase: { status: { notIn: ['VOIDED', 'CREDITED', 'DRAFT', 'COMPLETED'] } } },
+        where: { sku: { in: skus }, purchase: { status: { notIn: ['VOIDED', 'CREDITED', 'DRAFT'] }, NOT: { status: { startsWith: 'COMPLETED' } } } },
         select: { sku: true, quantityOrdered: true, quantityReceived: true, purchase: { select: { requiredBy: true } } },
       })
     : [];
@@ -166,7 +173,9 @@ export async function buildPriceList(accountId: string, filters: PriceListFilter
       increments: incrementsOf(attrs),
       availability,
       nextAvailable: availability === 'Preorder' ? nextDue.get(p.sku) ?? null : null,
-      image: imageOf(attrs),
+      // A link stored in DEAR (any custom field) wins; otherwise the one
+      // loaded from the team's existing price lists.
+      image: imageOf(attrs) ?? p.imageUrl ?? null,
     });
   }
 

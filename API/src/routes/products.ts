@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { HISTORY_SOURCE, LIVE_ORDER, isHistory } from '../lib/orderSource';
+import { pickPrice, WHOLESALE, RETAIL } from '../lib/pricing';
 
 export const productsRouter = Router();
 
@@ -32,7 +33,8 @@ const PURCHASES_SHOWN = 10;
 function fullyReceived(status: string | null, receivingStatus: string | null): boolean {
   const r = (receivingStatus ?? '').toUpperCase();
   const s = (status ?? '').toUpperCase();
-  return r.includes('FULLY RECEIVED') || s === 'COMPLETED' || s === 'RECEIVED';
+  // e.g. 'COMPLETED' or 'COMPLETED / CREDIT NOTE CLOSED'
+  return r.includes('FULLY RECEIVED') || s.startsWith('COMPLETED') || s === 'RECEIVED';
 }
 
 type Location = { location: string; onHand: number; allocated: number; available: number; onOrder: number };
@@ -51,13 +53,6 @@ function rank(sku: string, name: string, q: string, words: string[]): number {
   if (n.startsWith(words[0])) return 2;
   if (n.includes(q)) return 3; // words appear together, in order
   return 4;
-}
-
-// DEAR price tier names are set per account, so find wholesale and
-// retail by name rather than by tier number.
-function pickPrice(prices: Record<string, number>, pattern: RegExp): { tier: string; price: number } | null {
-  const hit = Object.entries(prices).find(([name]) => pattern.test(name));
-  return hit ? { tier: hit[0], price: hit[1] } : null;
 }
 
 productsRouter.get('/search', async (req, res) => {
@@ -178,6 +173,23 @@ productsRouter.get('/search', async (req, res) => {
   const totalsBySku = new Map(salesTotals.map(t => [t.sku, t]));
   const round2 = (n: number) => Math.round(n * 100) / 100;
 
+  // Recent completed stock adjustments for these products (write-offs,
+  // recounts, returns, new stock entered by adjustment).
+  const adjustmentRows = skus.length
+    ? await prisma.$queryRaw<{ sku: string; number: string | null; date: Date | null; reference: string | null; quantity: number | null; location: string | null; kind: string }[]>`
+        select l.sku, a.number, coalesce(l.received_date, a.effective_date) as date, a.reference, l.quantity, l.location, l.kind
+        from crm.stock_adjustment_lines l
+        join crm.stock_adjustments a on a.id = l.adjustment_id
+        where l.sku = any(${skus}::text[]) and upper(coalesce(a.status, '')) like 'COMPLETED%'
+        order by coalesce(l.received_date, a.effective_date) desc nulls last`
+    : [];
+  const adjustmentsBySku = new Map<string, typeof adjustmentRows>();
+  for (const r of adjustmentRows) {
+    const list = adjustmentsBySku.get(r.sku) ?? [];
+    if (list.length < PURCHASES_SHOWN) list.push(r);
+    adjustmentsBySku.set(r.sku, list);
+  }
+
   const results = products.map((p, idx) => {
     const prices = (p.prices as Record<string, number>) ?? {};
     const totals = totalsBySku.get(p.sku);
@@ -282,8 +294,8 @@ productsRouter.get('/search', async (req, res) => {
       available: p.available,
       onOrder: p.onOrder,
       locations: (p.locations as Location[]) ?? [],
-      wholesale: pickPrice(prices, /wholesale|trade/i),
-      retail: pickPrice(prices, /retail|rrp/i),
+      wholesale: pickPrice(prices, WHOLESALE),
+      retail: pickPrice(prices, RETAIL),
       prices,
       sales: {
         units12m: totals?.units_12m ?? 0,
@@ -293,6 +305,9 @@ productsRouter.get('/search', async (req, res) => {
       },
       allocatedOrders: [...allocatedOrders.values()],
       purchaseOrders: purchaseOrders.slice(0, PURCHASES_SHOWN),
+      adjustments: (adjustmentsBySku.get(p.sku) ?? []).map(a => ({
+        number: a.number, date: a.date, reference: a.reference, quantity: a.quantity, location: a.location, kind: a.kind,
+      })),
       incomingRefs,
       incomingQty,
       recentOrders,

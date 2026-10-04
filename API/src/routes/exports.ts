@@ -482,7 +482,14 @@ exportsRouter.get('/:type', async (req, res) => {
         // to anyone before then.
         const firstSeen = await prisma.$queryRaw<{ sku: string; first_received: Date | null; first_sold: Date | null }[]>`
           select s.sku,
-            (select min(pl.last_received_at) from crm.purchase_lines pl where pl.sku = s.sku and pl.quantity_received > 0) as first_received,
+            -- First time stock arrived: a purchase order receipt, or a completed
+            -- stock adjustment that added stock (some products come in that way).
+            least(
+              (select min(pl.last_received_at) from crm.purchase_lines pl where pl.sku = s.sku and pl.quantity_received > 0),
+              (select min(coalesce(al.received_date, sa.effective_date))
+                 from crm.stock_adjustment_lines al join crm.stock_adjustments sa on sa.id = al.adjustment_id
+                 where al.sku = s.sku and al.quantity > 0 and upper(coalesce(sa.status, '')) like 'COMPLETED%')
+            ) as first_received,
             (select min(q.sent_at) from crm.quote_lines l join crm.quotes q on q.id = l.quote_id where l.sku = s.sku) as first_sold
           from unnest(${allSkus}::text[]) as s(sku)
         `;
@@ -493,7 +500,7 @@ exportsRouter.get('/:type', async (req, res) => {
 
         // Next expected delivery for anything on order.
         const openPOs = await prisma.purchaseLine.findMany({
-          where: { sku: { in: allSkus }, purchase: { status: { notIn: ['VOIDED', 'CREDITED', 'DRAFT', 'COMPLETED'] } } },
+          where: { sku: { in: allSkus }, purchase: { status: { notIn: ['VOIDED', 'CREDITED', 'DRAFT'] }, NOT: { status: { startsWith: 'COMPLETED' } } } },
           select: { sku: true, quantityOrdered: true, quantityReceived: true, purchase: { select: { requiredBy: true } } },
         });
         const nextDue = new Map<string, Date>();
