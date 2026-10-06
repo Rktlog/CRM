@@ -24,6 +24,8 @@ export default function OrderViews({ view }: { view: ViewKey }) {
   const [data, setData] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [region, setRegion] = useState('');
+  const [terms, setTerms] = useState(''); // payment terms filter (unpaid, balances)
+  const [termOptions, setTermOptions] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [shown, setShown] = useState(PAGE);
   const [downloading, setDownloading] = useState(false);
@@ -35,8 +37,17 @@ export default function OrderViews({ view }: { view: ViewKey }) {
     setData(null);
     setError(null);
     setShown(PAGE);
-    apiGet(`/orders/views/${view}${region ? `?region=${region}` : ''}`).then(setData).catch(e => setError(e.message));
-  }, [view, region]);
+    const p = new URLSearchParams();
+    if (region) p.set('region', region);
+    if (terms && (view === 'unpaid' || view === 'balances')) p.set('terms', terms);
+    apiGet(`/orders/views/${view}${p.toString() ? `?${p.toString()}` : ''}`)
+      .then(d => {
+        setData(d);
+        // Remember every terms wording seen, so the list doesn't shrink once filtered.
+        if (!terms) setTermOptions([...new Set<string>((d.rows ?? []).map((r: any) => r.terms).filter(Boolean))].sort());
+      })
+      .catch(e => setError(e.message));
+  }, [view, region, terms]);
 
   const rows: any[] = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -51,6 +62,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
     try {
       const params = new URLSearchParams({ format: 'xlsx' });
       if (region) params.set('region', region);
+      if (terms && (view === 'unpaid' || view === 'balances')) params.set('terms', terms);
       await apiDownload(`/orders/views/${view}?${params.toString()}`, `${view}-${new Date().toISOString().slice(0, 10)}.xlsx`);
     } finally {
       setDownloading(false);
@@ -71,6 +83,12 @@ export default function OrderViews({ view }: { view: ViewKey }) {
           <select value={region} onChange={e => setRegion(e.target.value)}>
             <option value="">{me?.role === 'manager' ? 'All states' : 'All my states'}</option>
             {stateOptions.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        )}
+        {(view === 'unpaid' || view === 'balances') && termOptions.length > 1 && (
+          <select value={terms} onChange={e => setTerms(e.target.value)} aria-label="Payment terms">
+            <option value="">All payment terms</option>
+            {termOptions.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
         )}
         <button className="btn secondary" onClick={download} disabled={downloading || !data}>
@@ -108,7 +126,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
                   <tr key={r.accountId} onClick={() => navigate(`/accounts/${r.accountId}`)} className="ov-click">
                     <td>
                       <div className="cust-name">{r.customer}</div>
-                      <div className="cust-meta">{r.region}{r.invoices ? `, ${r.invoices} unpaid` : ''}{me?.role === 'manager' && r.repName ? `, ${r.repName}` : ''}</div>
+                      <div className="cust-meta">{r.region}, {r.terms}{r.invoices ? `, ${r.invoices} unpaid` : ''}{me?.role === 'manager' && r.repName ? `, ${r.repName}` : ''}</div>
                     </td>
                     {AGE_BUCKETS.map(b => (
                       <td key={b.key} className={`num-col num${r[b.key] > 0.005 && b.key !== 'current' ? ` ov-late-${b.key}` : ''}`}>
@@ -145,7 +163,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
                   </td>
                   <td>
                     <Link to={`/accounts/${r.accountId}`} className="ledger-link">{r.customer}</Link>
-                    <div className="cust-meta">{r.region}</div>
+                    <div className="cust-meta">{r.region}, {r.terms}</div>
                   </td>
                   <td>{fmtDateWithYear(r.invoiceDate)}</td>
                   <td>{fmtDateWithYear(r.dueDate)}</td>

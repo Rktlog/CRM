@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPatch, apiDownload } from '../lib/api';
 import { orderStatusPills, stageTag, paymentTag } from '../lib/orderStatus';
 import PriceListModal from '../components/PriceListModal';
+import CreditReservations from '../components/CreditReservations';
 import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fmtDateWithYear, daysBetween, flagFor, isHistoryOrder, isOwingOrder, amountOwing } from '../lib/types';
 
 export default function AccountDetail() {
@@ -255,6 +256,9 @@ export default function AccountDetail() {
               </div>
             )}
           </div>
+
+          {/* Credit and reservations: what the team has set aside, on both accounts */}
+          <CreditReservations accountId={account.id} accountName={account.name} />
 
           <div className="card">
             <h3>Log a call, email, or visit</h3>

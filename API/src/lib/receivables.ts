@@ -21,7 +21,7 @@ const daysSince = (d: Date) => Math.floor((Date.now() - d.getTime()) / DAY);
 async function scope(rep: Rep, regions?: string[]) {
   const accounts = await prisma.account.findMany({
     where: { AND: [await territoryWhere(rep), regions?.length ? { region: { in: regions } } : {}] },
-    select: { id: true, name: true, region: true, rep: { select: { name: true } } },
+    select: { id: true, name: true, region: true, paymentTerms: true, rep: { select: { name: true } } },
   });
   return new Map(accounts.map(a => [a.id, a]));
 }
@@ -106,6 +106,7 @@ export async function unpaidInvoices(rep: Rep, regions?: string[]) {
     const base = {
       orderId: q.id, number: q.number, accountId: q.accountId,
       customer: acct?.name ?? 'Unknown', region: acct?.region ?? '', repName: acct?.rep?.name ?? null,
+      terms: acct?.paymentTerms ?? 'Prepayment', // no terms on record = Prepayment
       type: q.miscType === 'marketing' ? 'Marketing' : q.miscType === 'warranty' ? 'Warranty' : 'Sale',
     };
     const docs = (q.invoices ?? []) as InvoiceDoc[];
@@ -183,12 +184,13 @@ export async function balances(rep: Rep, regions?: string[]) {
   });
   for (const o of overpaid) creditBy.set(o.accountId, (creditBy.get(o.accountId) ?? 0) - (o._sum.amountDue ?? 0));
 
-  type Bal = { accountId: string; customer: string; region: string; repName: string | null; invoices: number; oldestDays: number; owing: number; credit: number; balance: number } & Record<BucketKey, number>;
+  type Bal = { accountId: string; customer: string; region: string; repName: string | null; terms: string; invoices: number; oldestDays: number; owing: number; credit: number; balance: number } & Record<BucketKey, number>;
   const byAccount = new Map<string, Bal>();
   const blank = (accountId: string): Bal => {
     const a = accounts.get(accountId);
     return {
       accountId, customer: a?.name ?? 'Unknown', region: a?.region ?? '', repName: a?.rep?.name ?? null,
+      terms: a?.paymentTerms ?? 'Prepayment',
       invoices: 0, oldestDays: 0, owing: 0, credit: 0, balance: 0,
       current: 0, d30: 0, d60: 0, d90: 0, d90plus: 0,
     };

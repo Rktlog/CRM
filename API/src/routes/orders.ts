@@ -133,7 +133,7 @@ ordersRouter.get('/views/:view', async (req, res) => {
       data = await unpaidInvoices(rep, regions);
       name = 'unpaid-invoices';
       sheet = data.rows.map((r: any) => ({
-        Invoice: r.invoice, Order: r.number, Customer: r.customer, State: r.region, Rep: r.repName ?? '',
+        Invoice: r.invoice, Order: r.number, Customer: r.customer, State: r.region, Rep: r.repName ?? '', Terms: r.terms,
         'Invoice date': xlDate(r.invoiceDate), 'Due date': xlDate(r.dueDate), 'Days overdue': r.daysOverdue,
         Total: r.total, Paid: r.paid, Credited: r.credited, Due: r.due, Type: r.type,
       }));
@@ -143,7 +143,7 @@ ordersRouter.get('/views/:view', async (req, res) => {
       data = await balances(rep, regions);
       name = 'customer-balances';
       sheet = data.rows.map((r: any) => ({
-        Customer: r.customer, State: r.region, Rep: r.repName ?? '', 'Unpaid invoices': r.invoices,
+        Customer: r.customer, State: r.region, Rep: r.repName ?? '', Terms: r.terms, 'Unpaid invoices': r.invoices,
         ...Object.fromEntries(AGE_BUCKETS.map(b => [b.label, r[b.key]])),
         Owing: r.owing, 'Credit on account': r.credit, Balance: r.balance, 'Oldest overdue (days)': r.oldestDays,
       }));
@@ -151,6 +151,27 @@ ordersRouter.get('/views/:view', async (req, res) => {
     }
     default:
       return res.status(404).json({ error: 'Unknown view' });
+  }
+
+  // ?terms=30 Days EOM: only customers on those payment terms (unpaid, balances).
+  const terms = typeof req.query.terms === 'string' && req.query.terms ? req.query.terms : null;
+  if (terms && (req.params.view === 'unpaid' || req.params.view === 'balances')) {
+    const keep = (r: any) => r.terms === terms;
+    const keptIdx = data.rows.map((r: any, i: number) => (keep(r) ? i : -1)).filter((i: number) => i >= 0);
+    sheet = keptIdx.map((i: number) => sheet[i]);
+    data = { ...data, rows: data.rows.filter(keep), count: keptIdx.length };
+    if (req.params.view === 'balances') {
+      const sum = (k: string) => Math.round(data.rows.reduce((s: number, r: any) => s + (r[k] ?? 0), 0) * 100) / 100;
+      data.totals = {
+        owing: sum('owing'), credit: sum('credit'), balance: sum('balance'),
+        current: sum('current'), d30: sum('d30'), d60: sum('d60'), d90: sum('d90'), d90plus: sum('d90plus'),
+        over60: Math.round((sum('d90') + sum('d90plus')) * 100) / 100,
+      };
+    }
+    if (req.params.view === 'unpaid') {
+      data.total = Math.round(data.rows.reduce((s: number, r: any) => s + r.due, 0) * 100) / 100;
+      data.overdue = Math.round(data.rows.filter((r: any) => r.daysOverdue > 0).reduce((s: number, r: any) => s + r.due, 0) * 100) / 100;
+    }
   }
 
   if (req.query.format === 'xlsx') {
