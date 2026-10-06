@@ -757,3 +757,9 @@ a.pd-list-card:hover { border-color: var(--teal); }
 /* ---- Settings: accounts hidden from a rep ---- */
 .hidden-accounts { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); max-width: 640px; }
 .hidden-accounts-title { font-weight: 700; font-size: 13px; margin-bottom: 2px; }
+
+/* ---- Visit photo thumbnails (account activity, team log) ---- */
+.ti-photo { display: inline-block; margin-top: 6px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); line-height: 0; }
+.ti-photo img { width: 160px; height: 120px; object-fit: cover; display: block; transition: opacity 0.15s; }
+.ti-photo:hover img { opacity: 0.85; }
+@media (max-width: 760px) { .ti-photo img { width: 100%; max-width: 280px; height: auto; max-height: 220px; } }

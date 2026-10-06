@@ -152,7 +152,11 @@ export default function TeamLogCard() {
                   {long && (
                     <button className="link-btn" onClick={() => toggle(r.id)}>{expanded ? 'Show less' : 'Show more'}</button>
                   )}
-                  {r.photoUrl && <a href={r.photoUrl} target="_blank" rel="noreferrer" className="order-link team-log-photo">View photo</a>}
+                  {r.photoUrl && (
+                    <a href={r.photoUrl} target="_blank" rel="noreferrer" className="ti-photo" title="Open the full-size photo">
+                      <img src={r.photoUrl} alt="Visit photo" loading="lazy" />
+                    </a>
+                  )}
                 </div>
               </div>
             );

@@ -342,6 +342,11 @@ export default function AccountDetail() {
                       </div>
                       {t.repName && <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>Logged by {t.repName}</div>}
                       <div className="ti-note">{t.note}</div>
+                      {t.photoUrl && (
+                        <a href={t.photoUrl} target="_blank" rel="noreferrer" className="ti-photo" title="Open the full-size photo">
+                          <img src={t.photoUrl} alt="Visit photo" loading="lazy" />
+                        </a>
+                      )}
                     </>
                   )}
                 </div>
