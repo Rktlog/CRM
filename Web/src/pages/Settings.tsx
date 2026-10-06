@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { apiGet, apiPut, apiPatch } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import { fmtMoney } from '../lib/types';
+import RepHiddenAccounts from '../components/RepHiddenAccounts';
 
 type Rep = { id: string; name: string; role: string };
 type Target = { id: string; repId: string; repName: string; year: number; quarter: number; amount: number };
@@ -36,7 +37,7 @@ export default function Settings() {
   const [territoryMsg, setTerritoryMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [assignedRegions, setAssignedRegions] = useState<string[]>([]);
   const [territorySaving, setTerritorySaving] = useState(false);
-  const [territorySummary, setTerritorySummary] = useState<{ repId: string; repName: string; regions: string[] }[] | null>(null);
+  const [territorySummary, setTerritorySummary] = useState<{ repId: string; repName: string; regions: string[]; hiddenAccounts?: number }[] | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
   useEffect(() => {
@@ -212,6 +213,7 @@ export default function Settings() {
         </button>
       </div>
 
+
       {isManager && (
         <div className="section">
           <div className="panel-title">Assign reps to states</div>
@@ -237,17 +239,28 @@ export default function Settings() {
             <div className={territoryMsg.ok ? 'save-msg ok' : 'save-msg err'}>{territoryMsg.text}</div>
           )}
 
+          {/* Accounts in their states that are kept off this rep's lists */}
+          {territoryRep && (
+            <RepHiddenAccounts
+              repId={territoryRep}
+              repName={reps?.find(r => r.id === territoryRep)?.name ?? 'this rep'}
+              regions={territorySummary?.find(t => t.repId === territoryRep)?.regions ?? []}
+              onChange={() => apiGet('/rep-regions/all').then(setTerritorySummary).catch(() => {})}
+            />
+          )}
+
           {territorySummary && territorySummary.length > 0 && (
             <div style={{ marginTop: 20 }}>
               <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>Current assignments</div>
               <div className="manifest">
-                <div className="m-row head" style={{ gridTemplateColumns: '1fr 2fr' }}>
-                  <div>Rep</div><div>States</div>
+                <div className="m-row head" style={{ gridTemplateColumns: '1fr 2fr 0.8fr' }}>
+                  <div>Rep</div><div>States</div><div>Hidden accounts</div>
                 </div>
                 {territorySummary.map(t => (
-                  <div className="m-row" key={t.repId} style={{ gridTemplateColumns: '1fr 2fr', cursor: 'default' }}>
+                  <div className="m-row" key={t.repId} style={{ gridTemplateColumns: '1fr 2fr 0.8fr', cursor: 'default' }}>
                     <div className="acct-name">{t.repName}</div>
                     <div>{t.regions.length > 0 ? t.regions.join(', ') : <span style={{ color: 'var(--muted)' }}>No states assigned</span>}</div>
+                    <div className="num">{t.hiddenAccounts ? t.hiddenAccounts : <span style={{ color: 'var(--muted)' }}>None</span>}</div>
                   </div>
                 ))}
               </div>

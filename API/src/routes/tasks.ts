@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { hiddenAccountIds } from '../lib/territory';
 import { prisma } from '../lib/prisma';
 import { z } from 'zod';
 
@@ -54,6 +55,8 @@ async function rolloverTasks(repId: string, today: Date) {
 // that already have an unfinished task, or one today.
 async function findSuggestions(repId: string, today: Date, newLeadCount: number, inactiveCount: number) {
   const assignedRegions = (await prisma.repRegion.findMany({ where: { repId }, select: { region: true } })).map(r => r.region);
+  // Accounts a manager has hidden from this rep are never suggested to them.
+  const hidden = await hiddenAccountIds(repId);
   const regionFilter = assignedRegions.length ? { region: { in: assignedRegions } } : { id: { in: [] } };
 
   const busy = new Set(
@@ -62,6 +65,7 @@ async function findSuggestions(repId: string, today: Date, newLeadCount: number,
       select: { accountId: true },
     })).map(t => t.accountId),
   );
+  for (const id of hidden) busy.add(id);
 
   const newLeads = newLeadCount > 0
     ? await prisma.account.findMany({

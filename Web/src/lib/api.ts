@@ -10,9 +10,22 @@ async function authHeader(): Promise<Record<string, string>> {
   return headers;
 }
 
+// Throws with the API's own message when it sends one (e.g. "Only $61.99
+// of credit is free to reserve"), otherwise the method, path and status.
+async function fail(res: Response, method: string, path: string): Promise<never> {
+  let message = `${method} ${path} failed: ${res.status}`;
+  try {
+    const body = await res.json();
+    const e = body?.error;
+    if (typeof e === 'string') message = e;
+    else if (e?.formErrors?.length || e?.fieldErrors) message = [...(e.formErrors ?? []), ...Object.values(e.fieldErrors ?? {}).flat()].join(', ') || message;
+  } catch { /* not JSON: keep the default */ }
+  throw new Error(message);
+}
+
 export async function apiGet(path: string) {
   const res = await fetch(`${API_URL}${path}`, { headers: await authHeader() });
-  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
+  if (!res.ok) await fail(res, 'GET', path);
   return res.json();
 }
 
@@ -22,7 +35,7 @@ export async function apiPost(path: string, body: unknown) {
     headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`POST ${path} failed: ${res.status}`);
+  if (!res.ok) await fail(res, 'POST', path);
   return res.json();
 }
 
@@ -32,7 +45,7 @@ export async function apiPatch(path: string, body: unknown) {
     headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`PATCH ${path} failed: ${res.status}`);
+  if (!res.ok) await fail(res, 'PATCH', path);
   return res.json();
 }
 
@@ -42,13 +55,19 @@ export async function apiPut(path: string, body: unknown) {
     headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`PUT ${path} failed: ${res.status}`);
+  if (!res.ok) await fail(res, 'PUT', path);
+  return res.json();
+}
+
+export async function apiDelete(path: string) {
+  const res = await fetch(`${API_URL}${path}`, { method: 'DELETE', headers: await authHeader() });
+  if (!res.ok) await fail(res, 'DELETE', path);
   return res.json();
 }
 
 export async function apiDownload(path: string, filename: string) {
   const res = await fetch(`${API_URL}${path}`, { headers: await authHeader() });
-  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
+  if (!res.ok) await fail(res, 'GET', path);
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

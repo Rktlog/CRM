@@ -745,3 +745,15 @@ a.pd-list-card:hover { border-color: var(--teal); }
 .credit-form-row { display: flex; gap: 10px; flex-wrap: wrap; }
 .credit-input { padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 13px; width: 100%; box-sizing: border-box; }
 .credit-footnote { margin-top: 8px; font-size: 11px; }
+
+/* ---- Payment terms tick-box filter ---- */
+.terms-filter { position: relative; }
+.terms-filter summary { list-style: none; cursor: pointer; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; background: var(--panel); white-space: nowrap; }
+.terms-filter summary::-webkit-details-marker { display: none; }
+.terms-filter summary::after { content: ' ▾'; color: var(--muted); }
+.terms-menu { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; min-width: 220px; max-height: 300px; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(27, 36, 48, 0.12); padding: 8px 10px; }
+.terms-menu-tools { display: flex; gap: 12px; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+
+/* ---- Settings: accounts hidden from a rep ---- */
+.hidden-accounts { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); max-width: 640px; }
+.hidden-accounts-title { font-weight: 700; font-size: 13px; margin-bottom: 2px; }

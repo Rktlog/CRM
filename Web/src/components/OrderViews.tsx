@@ -24,8 +24,14 @@ export default function OrderViews({ view }: { view: ViewKey }) {
   const [data, setData] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [region, setRegion] = useState('');
-  const [terms, setTerms] = useState(''); // payment terms filter (unpaid, balances)
+  // Payment terms filter (unpaid, balances): the terms NOT ticked. Empty =
+  // everything shown. Stored as excluded so new terms show up by default.
+  const [excludedTerms, setExcludedTerms] = useState<Set<string>>(new Set());
   const [termOptions, setTermOptions] = useState<string[]>([]);
+  const included = termOptions.filter(t => !excludedTerms.has(t));
+  const termsParam = excludedTerms.size && (view === 'unpaid' || view === 'balances')
+    ? (included.length ? included.join('|') : '(none)') // all unticked: show nothing
+    : '';
   const [search, setSearch] = useState('');
   const [shown, setShown] = useState(PAGE);
   const [downloading, setDownloading] = useState(false);
@@ -39,15 +45,15 @@ export default function OrderViews({ view }: { view: ViewKey }) {
     setShown(PAGE);
     const p = new URLSearchParams();
     if (region) p.set('region', region);
-    if (terms && (view === 'unpaid' || view === 'balances')) p.set('terms', terms);
+    if (termsParam) p.set('terms', termsParam);
     apiGet(`/orders/views/${view}${p.toString() ? `?${p.toString()}` : ''}`)
       .then(d => {
         setData(d);
         // Remember every terms wording seen, so the list doesn't shrink once filtered.
-        if (!terms) setTermOptions([...new Set<string>((d.rows ?? []).map((r: any) => r.terms).filter(Boolean))].sort());
+        if (!termsParam) setTermOptions([...new Set<string>((d.rows ?? []).map((r: any) => r.terms).filter(Boolean))].sort());
       })
       .catch(e => setError(e.message));
-  }, [view, region, terms]);
+  }, [view, region, termsParam]);
 
   const rows: any[] = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -62,7 +68,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
     try {
       const params = new URLSearchParams({ format: 'xlsx' });
       if (region) params.set('region', region);
-      if (terms && (view === 'unpaid' || view === 'balances')) params.set('terms', terms);
+      if (termsParam) params.set('terms', termsParam);
       await apiDownload(`/orders/views/${view}?${params.toString()}`, `${view}-${new Date().toISOString().slice(0, 10)}.xlsx`);
     } finally {
       setDownloading(false);
@@ -86,10 +92,34 @@ export default function OrderViews({ view }: { view: ViewKey }) {
           </select>
         )}
         {(view === 'unpaid' || view === 'balances') && termOptions.length > 1 && (
-          <select value={terms} onChange={e => setTerms(e.target.value)} aria-label="Payment terms">
-            <option value="">All payment terms</option>
-            {termOptions.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
+          <details className="terms-filter">
+            <summary>
+              {excludedTerms.size === 0 ? 'All payment terms'
+                : included.length === 0 ? 'No payment terms'
+                : excludedTerms.size === 1 ? `All terms except ${[...excludedTerms][0]}`
+                : `${included.length} of ${termOptions.length} payment terms`}
+            </summary>
+            <div className="terms-menu">
+              <div className="terms-menu-tools">
+                <button type="button" className="link-btn" onClick={() => setExcludedTerms(new Set())}>Tick all</button>
+                <button type="button" className="link-btn" onClick={() => setExcludedTerms(new Set(termOptions))}>Untick all</button>
+              </div>
+              {termOptions.map(t => (
+                <label key={t} className="pl-check">
+                  <input
+                    type="checkbox"
+                    checked={!excludedTerms.has(t)}
+                    onChange={() => setExcludedTerms(prev => {
+                      const next = new Set(prev);
+                      next.has(t) ? next.delete(t) : next.add(t);
+                      return next;
+                    })}
+                  />
+                  <span>{t}</span>
+                </label>
+              ))}
+            </div>
+          </details>
         )}
         <button className="btn secondary" onClick={download} disabled={downloading || !data}>
           {downloading ? 'Downloading…' : '⬇ Excel'}

@@ -1,6 +1,6 @@
 import express, { Router } from 'express';
 import { prisma } from '../lib/prisma';
-import { assignedRegions } from '../lib/territory';
+import { assignedRegions, hiddenAccountIds } from '../lib/territory';
 
 export const abandonedCartsRouter = Router();
 
@@ -107,12 +107,11 @@ abandonedCartsRouter.post('/import', express.text({ type: '*/*', limit: '20mb' }
   res.json({ linesInFile: data.length, newLines: count, alreadyHad: data.length - count, skipped });
 });
 
-// ---------- GET /abandoned-carts ----------
-// ?status=open|ordered|all  ?days=30|90|365|all
-abandonedCartsRouter.get('/', async (req, res) => {
-  const status = String(req.query.status ?? 'open');
-  const days = String(req.query.days ?? '90');
-  const isManager = req.rep?.role === 'manager';
+// Every cart in the window, matched to accounts, with stock and "ordered
+// since", limited to what this person can see. Used by the Abandoned
+// carts page and the email review queue.
+export async function loadCarts(rep: { id: string; role: string }, days: string) {
+  const isManager = rep.role === 'manager';
 
   const since = days === 'all' ? new Date(0) : new Date(Date.now() - Number(days || 90) * 86400000);
   const lines = await prisma.abandonedCartLine.findMany({
@@ -160,8 +159,9 @@ abandonedCartsRouter.get('/', async (req, res) => {
   // Same territory rule as Accounts (lib/territory): reps see carts for
   // accounts in their assigned states only; managers see everything,
   // including carts from customers not in the CRM yet.
-  const myRegions = isManager ? [] : await assignedRegions(req.rep!.id);
-  const visible = matched.filter(c => isManager || (c.account && myRegions.includes(c.account.region)));
+  const myRegions = isManager ? [] : await assignedRegions(rep.id);
+  const hidden = new Set(isManager ? [] : await hiddenAccountIds(rep.id));
+  const visible = matched.filter(c => isManager || (c.account && myRegions.includes(c.account.region) && !hidden.has(c.account.id)));
 
   // ---- Ordered since: first order by that account after the cart ----
   const accountIds = [...new Set(visible.map(c => c.account?.id).filter(Boolean))] as string[];
@@ -213,6 +213,15 @@ abandonedCartsRouter.get('/', async (req, res) => {
       items: items.sort((a, b) => b.total - a.total),
     };
   });
+  return result;
+}
+
+// ---------- GET /abandoned-carts ----------
+// ?status=open|ordered|all  ?days=30|90|365|all
+abandonedCartsRouter.get('/', async (req, res) => {
+  const status = String(req.query.status ?? 'open');
+  const days = String(req.query.days ?? '90');
+  const result = await loadCarts(req.rep!, days);
 
   const filtered = result.filter(c => status === 'all' || c.status === status);
   const open = result.filter(c => c.status === 'open');

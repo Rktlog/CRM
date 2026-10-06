@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { hiddenAccountIds } from '../lib/territory';
 import { prisma } from '../lib/prisma';
 import { isHistory, isOwing } from '../lib/orderSource';
 
@@ -126,12 +127,14 @@ function resolveRange(range: Range, now: Date) {
 // states they're assigned to (rep_regions), and can only narrow within
 // them. A rep with no states assigned sees nothing until a manager sets
 // them up. Enforced here, not only hidden in the page.
-async function salesScope(req: any, requested?: string[]): Promise<{ regions?: string[]; repId?: string; myRegions: string[] | null }> {
-  if (req.rep!.role === 'manager') return { regions: requested, myRegions: null };
+async function salesScope(req: any, requested?: string[]): Promise<{ regions?: string[]; repId?: string; myRegions: string[] | null; hidden: string[] }> {
+  if (req.rep!.role === 'manager') return { regions: requested, myRegions: null, hidden: [] };
   const assigned = (await prisma.repRegion.findMany({ where: { repId: req.rep!.id }, select: { region: true } })).map(r => r.region);
-  if (!assigned.length) return { regions: ['__none__'], myRegions: [] };
+  // Accounts a manager has hidden from this rep stay out of their figures too.
+  const hidden = await hiddenAccountIds(req.rep!.id);
+  if (!assigned.length) return { regions: ['__none__'], myRegions: [], hidden };
   const regions = requested ? requested.filter(r => assigned.includes(r)) : assigned;
-  return { regions: regions.length ? regions : ['__none__'], myRegions: assigned };
+  return { regions: regions.length ? regions : ['__none__'], myRegions: assigned, hidden };
 }
 
 reportsRouter.get('/sales', async (req, res) => {
@@ -152,6 +155,7 @@ reportsRouter.get('/sales', async (req, res) => {
     where: {
       misc: false,
       ...(scope.regions ? { region: { in: scope.regions } } : {}),
+      ...(scope.hidden.length ? { id: { notIn: scope.hidden } } : {}),
       ...(scope.repId ? { repId: scope.repId } : {}),
     },
     select: { id: true },
@@ -315,6 +319,7 @@ reportsRouter.get('/ledger', async (req, res) => {
   const accountWhere: any = {
     ...(effectiveRepId ? { repId: effectiveRepId } : {}),
     ...(scope.regions ? { region: { in: scope.regions } } : {}),
+    ...(scope.hidden.length ? { id: { notIn: scope.hidden } } : {}),
     misc: false, // marketing/warranty accounts don't count toward performance
   };
   const accounts = await prisma.account.findMany({

@@ -153,10 +153,13 @@ ordersRouter.get('/views/:view', async (req, res) => {
       return res.status(404).json({ error: 'Unknown view' });
   }
 
-  // ?terms=30 Days EOM: only customers on those payment terms (unpaid, balances).
-  const terms = typeof req.query.terms === 'string' && req.query.terms ? req.query.terms : null;
+  // ?terms=30 Days EOM|30 days: only customers on the ticked payment terms
+  // (unpaid, balances). Several are separated by "|".
+  const terms = typeof req.query.terms === 'string' && req.query.terms
+    ? new Set(req.query.terms.split('|').map(t => t.trim()).filter(Boolean))
+    : null;
   if (terms && (req.params.view === 'unpaid' || req.params.view === 'balances')) {
-    const keep = (r: any) => r.terms === terms;
+    const keep = (r: any) => terms.has(r.terms);
     const keptIdx = data.rows.map((r: any, i: number) => (keep(r) ? i : -1)).filter((i: number) => i >= 0);
     sheet = keptIdx.map((i: number) => sheet[i]);
     data = { ...data, rows: data.rows.filter(keep), count: keptIdx.length };
