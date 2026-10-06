@@ -93,6 +93,7 @@ model Account {
   repId         String      @map("rep_id") @db.Uuid
   rep           Rep         @relation(fields: [repId], references: [id])
   credit        CreditTerm
+  paymentTerms  String?     @map("payment_terms") // DEAR's wording, e.g. "30 Days EOM" (customer sync)
   type          AccountType @default(prospect)
   stage         Stage       @default(new_lead)
 

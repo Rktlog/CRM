@@ -25,7 +25,7 @@ export async function resolveSelection(sel: Exclude<AccountSelection, null>, rep
   const created = await apiPost('/accounts', {
     name: s.name.trim(),
     region: s.region,
-    credit: 'account',
+    credit: 'prepay', // no terms on record yet = Prepayment, until DEAR says otherwise
     repId,
     type: 'prospect',
     contactName: s.contactName.trim() || undefined,

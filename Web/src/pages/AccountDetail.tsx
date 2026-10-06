@@ -378,7 +378,17 @@ export default function AccountDetail() {
             {account.avgOrderGapDays && (
               <div className="kv"><span className="k">Typical reorder gap</span><span className="num">~{account.avgOrderGapDays} days</span></div>
             )}
-            <div className="kv"><span className="k">Credit terms</span><span>{account.credit === 'prepay' ? 'Pay first' : 'Credit account'}</span></div>
+            <div className="kv">
+              <span className="k">Payment terms</span>
+              <span>
+                {/* No terms on record means Prepayment. */}
+                {account.paymentTerms ?? 'Prepayment'}
+                <span className="acct-region">
+                  {' '}({(account.paymentTerms ? account.credit === 'prepay' : true) ? 'pay first' : 'credit account'}
+                  {account.dearCustomerId ? ', from DEAR' : ''})
+                </span>
+              </span>
+            </div>
             <div className="kv">
               <span className="k">Last order</span>
               <span className="num">{account.lastOrderAt ? fmtDate(account.lastOrderAt) : '—'}</span>

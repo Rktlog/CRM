@@ -44,6 +44,7 @@ export type Account = {
   misc: boolean;
   hasHistoricalOrders?: boolean;
   dearCustomerId?: string | null; // set when the account is linked to a DEAR customer
+  paymentTerms?: string | null;   // DEAR's payment terms, e.g. "30 Days EOM"
   createdAt: string;
   updatedAt: string;
 };
