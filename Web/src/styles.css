@@ -705,3 +705,28 @@ a.pd-list-card:hover { border-color: var(--teal); }
 .ov-age-d60 { border-top-color: #C2410C; }
 .ov-age-d90, .ov-age-d90plus { border-top-color: var(--rust); }
 @media (max-width: 760px) { .ov-ageing { grid-template-columns: repeat(2, 1fr); } }
+
+/* ---- DEAR source tag, Pipeline filters ---- */
+.contact-head { display: flex; justify-content: space-between; align-items: center; }
+.dear-tag { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; color: var(--teal); background: var(--teal-bg); border: 1px solid var(--teal); border-radius: 4px; padding: 1px 6px; vertical-align: middle; }
+.dear-tag.small { font-size: 9px; padding: 0 4px; margin-left: 6px; }
+.dear-note { font-size: 11.5px; color: var(--muted); background: var(--paper); border-left: 3px solid var(--teal); padding: 6px 8px; margin: 4px 0 8px; border-radius: 0 4px 4px 0; }
+.pipeline-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pipeline-filters select, .pipeline-filters input[type="date"] { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 12.5px; background: var(--panel); }
+.dc-added { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+
+/* ---- Dashboard: team log (managers) ---- */
+.team-log-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.team-log-head h3 { margin: 0; }
+.team-log-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.team-log-filters select, .team-log-filters input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 12.5px; background: var(--panel); }
+.team-log-filters input { flex: 1; min-width: 180px; }
+.team-log-list { border-top: 1px solid var(--line); }
+.team-log-row { display: grid; grid-template-columns: 120px 1fr; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.team-log-meta { font-size: 12px; }
+.team-log-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.team-log-title .pill { font-size: 10.5px; }
+.team-log-note { font-size: 13px; line-height: 1.45; white-space: pre-wrap; color: var(--ink-soft); }
+.team-log-note.clamped { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.team-log-photo { display: inline-block; margin-top: 4px; font-size: 12px; }
+@media (max-width: 760px) { .team-log-row { grid-template-columns: 1fr; gap: 4px; } }

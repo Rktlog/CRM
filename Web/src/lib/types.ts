@@ -43,6 +43,7 @@ export type Account = {
   archived: boolean;
   misc: boolean;
   hasHistoricalOrders?: boolean;
+  dearCustomerId?: string | null; // set when the account is linked to a DEAR customer
   createdAt: string;
   updatedAt: string;
 };

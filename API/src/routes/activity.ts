@@ -85,6 +85,46 @@ activityRouter.post('/', async (req, res) => {
 // it. Deliberately does NOT let occurredAt be changed — the
 // timestamp is a real historical record, only the content of what
 // was written is editable.
+// ---------- GET /activity/feed (managers) ----------
+// Every log the team adds or edits, newest first, without opening each
+// account. ?rep=<repId> ?type=call|email|visit ?days=1|7|30|90 ?q=<text>
+// ?before=<ISO time> for the next page (pass the last row's sortAt).
+activityRouter.get('/feed', async (req, res) => {
+  if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Managers only' });
+
+  const repId = typeof req.query.rep === 'string' && req.query.rep ? req.query.rep : null;
+  const type = ['call', 'email', 'visit'].includes(String(req.query.type)) ? String(req.query.type) : null;
+  const days = Math.min(365, Math.max(1, Number(req.query.days) || 7));
+  const since = new Date(Date.now() - days * 86400000);
+  const q = typeof req.query.q === 'string' && req.query.q.trim() ? `%${req.query.q.trim()}%` : null;
+  const before = typeof req.query.before === 'string' && !Number.isNaN(Date.parse(req.query.before)) ? new Date(req.query.before) : null;
+  const PAGE = 50;
+
+  const rows = await prisma.$queryRaw<any[]>`
+    select x.id, x.type::text as type, x.note, x.photo_url as "photoUrl",
+           x.occurred_at as "occurredAt", x.created_at as "createdAt", x.updated_at as "updatedAt",
+           greatest(x.created_at, coalesce(x.updated_at, x.created_at)) as "sortAt",
+           a.id as "accountId", a.name as "accountName", a.region as "accountRegion",
+           r.id as "repId", r.name as "repName"
+    from crm.activity x
+    join crm.accounts a on a.id = x.account_id
+    join crm.reps r on r.id = x.rep_id
+    where greatest(x.created_at, coalesce(x.updated_at, x.created_at)) >= ${since}
+      and (${repId}::uuid is null or x.rep_id = ${repId}::uuid)
+      and (${type}::text is null or x.type::text = ${type}::text)
+      and (${q}::text is null or x.note ilike ${q}::text or a.name ilike ${q}::text)
+      and (${before}::timestamp is null or greatest(x.created_at, coalesce(x.updated_at, x.created_at)) < ${before}::timestamp)
+    order by "sortAt" desc
+    limit ${PAGE + 1}`;
+
+  const reps = await prisma.rep.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } });
+  res.json({
+    rows: rows.slice(0, PAGE).map(r => ({ ...r, edited: !!r.updatedAt })),
+    hasMore: rows.length > PAGE,
+    reps,
+  });
+});
+
 activityRouter.patch('/:id', async (req, res) => {
   const parsed = updateActivitySchema.safeParse(req.body);
   if (!parsed.success) {
@@ -101,7 +141,7 @@ activityRouter.patch('/:id', async (req, res) => {
 
   const updated = await prisma.activity.update({
     where: { id: req.params.id },
-    data: parsed.data,
+    data: { ...parsed.data, updatedAt: new Date() }, // so the team log shows the edit
   });
 
   res.json(updated);

@@ -7,6 +7,7 @@ import { HEALTH_COLUMNS, Health, healthOf } from '../lib/customerHealth';
 import AccountTable from '../components/AccountTable';
 import BackorderCard from '../components/BackorderCard';
 import TeamActivityCard from '../components/TeamActivityCard';
+import TeamLogCard from '../components/TeamLogCard';
 
 export default function Dashboard() {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
@@ -116,9 +117,14 @@ export default function Dashboard() {
       })()}
 
       {role === 'manager' && (
-        <div className="section">
-          <TeamActivityCard />
-        </div>
+        <>
+          <div className="section">
+            <TeamActivityCard />
+          </div>
+          <div className="section">
+            <TeamLogCard />
+          </div>
+        </>
       )}
 
       <BackorderCard />

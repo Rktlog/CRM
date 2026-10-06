@@ -349,7 +349,15 @@ export default function AccountDetail() {
         <div>
           {(account.contactName || account.phone || account.email || account.address) && (
             <div className="card">
-              <h3>Contact</h3>
+              <h3 className="contact-head">
+                <span>Contact</span>
+                {account.dearCustomerId && <span className="dear-tag" title="Linked to a DEAR customer">DEAR</span>}
+              </h3>
+              {account.dearCustomerId && (
+                <div className="dear-note">
+                  Synced from DEAR. These details update automatically, so change them in DEAR.
+                </div>
+              )}
               {account.contactName && <div className="kv"><span className="k">Name</span><span>{account.contactName}</span></div>}
               {account.phone && <div className="kv"><span className="k">Phone</span><span><a href={`tel:${account.phone}`} className="order-link">{account.phone}</a></span></div>}
               {account.email && <div className="kv"><span className="k">Email</span><span><a href={`mailto:${account.email}`} className="order-link">{account.email}</a></span></div>}
@@ -361,6 +369,11 @@ export default function AccountDetail() {
             <h3>Account</h3>
             <div className="kv"><span className="k">Type</span><span>{account.type}</span></div>
             <div className="kv"><span className="k">Region</span><span>{account.region}</span></div>
+            <div className="kv">
+              <span className="k">Source</span>
+              <span>{account.dearCustomerId ? 'DEAR customer' : 'Added in the CRM'}</span>
+            </div>
+            <div className="kv"><span className="k">Added</span><span className="num">{fmtDateWithYear(account.createdAt)}</span></div>
             {account.repName && <div className="kv"><span className="k">Assigned rep</span><span>{account.repName}</span></div>}
             {account.avgOrderGapDays && (
               <div className="kv"><span className="k">Typical reorder gap</span><span className="num">~{account.avgOrderGapDays} days</span></div>
