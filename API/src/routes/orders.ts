@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { territoryWhere } from '../lib/territory';
 import { prisma } from '../lib/prisma';
 import { isHistory } from '../lib/orderSource';
 import { searchWords } from './products';
@@ -17,8 +18,55 @@ const SEARCH_LIMIT = 50;
 // Matches order number, invoice number, customer reference, the
 // account's name, the ship-to store name, or any SKU / product name
 // on the order. Multiple words are matched independently.
+// Order status filter: the same rules as the plain-English status on each
+// order (lib/orderStatus.tsx stageTag), so "Backordered" here finds exactly
+// the orders shown as Backordered. Applied in the database, so it searches
+// every order, not just the latest page.
+const QUOTE = ['DRAFT', 'ESTIMATING', 'ESTIMATED', 'QUOTE'];
+const HISTORY: any = { OR: [{ source: 'rhino-history' }, { number: { startsWith: 'Q' } }] };
+const notHistory: any = { NOT: HISTORY };
+const notShippedAtAll: any = { OR: [{ shippingStatus: null }, { shippingStatus: { notIn: ['SHIPPED', 'PARTIALLY SHIPPED'] } }] };
+const notPicked: any = { OR: [{ pickingStatus: null }, { pickingStatus: { notIn: ['PICKED', 'PARTIALLY PICKED'] } }] };
+const STATUS_FILTERS: Record<string, any> = {
+  'Quote':        { AND: [notHistory, { fulfillmentStatus: { in: QUOTE } }] },
+  'Draft order':  { AND: [notHistory, { fulfillmentStatus: 'ORDERING' }, notShippedAtAll] },
+  'Confirmed':    { AND: [notHistory, { fulfillmentStatus: { notIn: [...QUOTE, 'VOIDED', 'CREDITED', 'BACKORDERED', 'ORDERING', 'COMPLETED'] } }, notShippedAtAll, notPicked] },
+  'Picked':       { AND: [notHistory, { fulfillmentStatus: { notIn: [...QUOTE, 'VOIDED', 'CREDITED', 'BACKORDERED', 'ORDERING', 'COMPLETED'] } }, notShippedAtAll, { pickingStatus: { in: ['PICKED', 'PARTIALLY PICKED'] } }] },
+  'Backordered':  { AND: [notHistory, { fulfillmentStatus: 'BACKORDERED' }, { OR: [{ shippingStatus: null }, { shippingStatus: { not: 'SHIPPED' } }] }] },
+  'Part shipped': { AND: [notHistory, { shippingStatus: 'PARTIALLY SHIPPED' }, { fulfillmentStatus: { notIn: [...QUOTE, 'VOIDED', 'CREDITED', 'COMPLETED'] } }] },
+  'Shipped':      { AND: [notHistory, { fulfillmentStatus: { notIn: [...QUOTE, 'VOIDED', 'CREDITED'] } }, { OR: [{ shippingStatus: 'SHIPPED' }, { fulfillmentStatus: 'COMPLETED' }] }] },
+  'Voided':       { AND: [notHistory, { fulfillmentStatus: 'VOIDED' }] },
+  'Credited':     { AND: [notHistory, { fulfillmentStatus: 'CREDITED' }] },
+  'History':      HISTORY,
+};
+export const ORDER_STATUS_OPTIONS = Object.keys(STATUS_FILTERS);
+
+// Invoice and payment, a second filter that combines with the status above
+// (e.g. Shipped + Not invoiced). Live DEAR orders only; quotes, voided and
+// credited orders aren't billable, so they're left out.
+const billable = { AND: [notHistory, { fulfillmentStatus: { notIn: [...QUOTE, 'VOIDED', 'CREDITED', 'ORDERING'] } }] };
+const BILLING_FILTERS: Record<string, any> = {
+  'Not invoiced':     { AND: [billable, { invoiceDate: null }] },
+  'Invoiced, unpaid': { AND: [billable, { invoiceDate: { not: null } }, { amountDue: { gt: 0.005 } }, { OR: [{ amountPaid: null }, { amountPaid: { lte: 0.005 } }] }] },
+  'Part paid':        { AND: [billable, { invoiceDate: { not: null } }, { amountDue: { gt: 0.005 } }, { amountPaid: { gt: 0.005 } }] },
+  'Paid':             { AND: [billable, { invoiceDate: { not: null } }, { OR: [{ paid: true }, { amountDue: { lte: 0.005 } }] }] },
+};
+export const BILLING_OPTIONS = Object.keys(BILLING_FILTERS);
+
 ordersRouter.get('/search', async (req, res) => {
   const q = String(req.query.q ?? '').trim();
+  // ?status=Backordered|Part shipped: only orders in any of those statuses.
+  const statuses = typeof req.query.status === 'string' && req.query.status
+    ? req.query.status.split('|').map(s => s.trim()).filter(s => STATUS_FILTERS[s])
+    : [];
+  // ?billing=Not invoiced|Part paid: invoice/payment state, combined with status.
+  const billing = typeof req.query.billing === 'string' && req.query.billing
+    ? req.query.billing.split('|').map(s => s.trim()).filter(s => BILLING_FILTERS[s])
+    : [];
+  // Filtered lists show more, since they're usually worked through.
+  const limit = statuses.length || billing.length ? 200 : SEARCH_LIMIT;
+  // Reps only see orders for accounts in their territory (same rule as everywhere else).
+  const territory = await territoryWhere(req.rep!);
 
   // Every word must match somewhere on the order, in any order:
   // "miffy brisbane" finds Miffy orders for the Brisbane store.
@@ -41,9 +89,16 @@ ordersRouter.get('/search', async (req, res) => {
     : {};
 
   const quotes = await prisma.quote.findMany({
-    where,
+    where: {
+      AND: [
+        where,
+        ...(Object.keys(territory).length ? [{ account: territory }] : []),
+        ...(statuses.length ? [{ OR: statuses.map(s => STATUS_FILTERS[s]) }] : []),
+        ...(billing.length ? [{ OR: billing.map(s => BILLING_FILTERS[s]) }] : []),
+      ],
+    },
     orderBy: { sentAt: 'desc' },
-    take: SEARCH_LIMIT,
+    take: limit,
     select: {
       id: true,
       number: true,
@@ -70,6 +125,11 @@ ordersRouter.get('/search', async (req, res) => {
 
   res.json({
     query: q,
+    statuses,
+    statusOptions: ORDER_STATUS_OPTIONS,
+    billing,
+    billingOptions: BILLING_OPTIONS,
+    limit,
     results: quotes.map(o => ({
       id: o.id,
       number: o.number,

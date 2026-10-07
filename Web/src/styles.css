@@ -788,3 +788,10 @@ a.pd-list-card:hover { border-color: var(--teal); }
 .terms-menu .pl-check { text-align: left; white-space: nowrap; }
 /* On Orders the button sits near the right edge: open towards the left. */
 .ov-toolbar .terms-menu { left: auto; right: 0; }
+
+/* ---- Orders: status / invoice filters and quick buttons ---- */
+.order-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0 6px; }
+.order-presets { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.order-presets .chip { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 4px 11px; font: inherit; font-size: 12px; cursor: pointer; color: var(--ink-soft); }
+.order-presets .chip:hover { border-color: var(--teal); }
+.order-presets .chip.on { background: var(--teal); border-color: var(--teal); color: #fff; }
