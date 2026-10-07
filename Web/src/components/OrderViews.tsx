@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { apiGet, apiDownload } from '../lib/api';
-import { fmtMoney, fmtDateWithYear } from '../lib/types';
+import { fmtMoney, fmtDateWithYear, fmtDuration } from '../lib/types';
 import { useMe, stateOptionsFor } from '../lib/useMe';
 
 // Order tracking views on the Orders page. Each loads from
@@ -12,10 +12,10 @@ export type ViewKey = 'quotes' | 'to-ship' | 'unpaid' | 'balances';
 
 const AGE_BUCKETS = [
   { key: 'current', label: 'Not yet due' },
-  { key: 'd30', label: '1–30' },
-  { key: 'd60', label: '31–60' },
-  { key: 'd90', label: '61–90' },
-  { key: 'd90plus', label: '90+' },
+  { key: 'd30', label: 'Up to 1 month' },
+  { key: 'd60', label: '1–2 months' },
+  { key: 'd90', label: '2–3 months' },
+  { key: 'd90plus', label: 'Over 3 months' },
 ] as const;
 
 const PAGE = 100;
@@ -79,7 +79,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
     : view === 'quotes' ? `${data.count} open ${data.count === 1 ? 'quote' : 'quotes'}, ${fmtMoney(data.total)}`
     : view === 'to-ship' ? `${data.count} ${data.count === 1 ? 'order' : 'orders'} to ship, ${fmtMoney(data.total)}`
     : view === 'unpaid' ? `${data.count} unpaid ${data.count === 1 ? 'invoice' : 'invoices'}, ${fmtMoney(data.total)} due, ${fmtMoney(data.overdue)} overdue`
-    : `${data.count} ${data.count === 1 ? 'customer' : 'customers'}, ${fmtMoney(data.totals.balance)} net balance, ${fmtMoney(data.totals.over60)} more than 60 days overdue`;
+    : `${data.count} ${data.count === 1 ? 'customer' : 'customers'}, ${fmtMoney(data.totals.balance)} net balance, ${fmtMoney(data.totals.over60)} more than 2 months overdue`;
 
   return (
     <>
@@ -136,7 +136,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
           <div className="ov-ageing">
             {AGE_BUCKETS.map(b => (
               <div key={b.key} className={`ov-age ov-age-${b.key}`}>
-                <div className="stat-label">{b.key === 'current' ? b.label : `${b.label} days overdue`}</div>
+                <div className="stat-label">{b.key === 'current' ? b.label : `${b.label} overdue`}</div>
                 <div className="num">{fmtMoney(data.totals[b.key])}</div>
               </div>
             ))}
@@ -201,7 +201,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
                   <td className="num-col num">{r.paid + r.credited > 0.005 ? fmtMoney(r.paid + r.credited) : '–'}</td>
                   <td className="num-col num"><b>{fmtMoney(r.due)}</b></td>
                   <td className={`num-col num${r.daysOverdue > 60 ? ' ov-late-d90' : r.daysOverdue > 30 ? ' ov-late-d60' : r.daysOverdue > 0 ? ' ov-late-d30' : ''}`}>
-                    {r.daysOverdue > 0 ? `${r.daysOverdue} days` : 'Not yet due'}
+                    {r.daysOverdue > 0 ? fmtDuration(r.daysOverdue) : 'Not yet due'}
                   </td>
                 </tr>
               ))}
@@ -232,7 +232,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
                     <div className="cust-meta">{r.region}{me?.role === 'manager' && r.repName ? `, ${r.repName}` : ''}</div>
                   </td>
                   <td>{fmtDateWithYear(r.date)}</td>
-                  <td className={`num-col num${r.ageDays > 60 ? ' ov-late-d90' : r.ageDays > 30 ? ' ov-late-d60' : ''}`}>{r.ageDays} days</td>
+                  <td className={`num-col num${r.ageDays > 60 ? ' ov-late-d90' : r.ageDays > 30 ? ' ov-late-d60' : ''}`}>{fmtDuration(r.ageDays)}</td>
                   <td>
                     <span className={`pill ${r.backordered ? 'rust' : view === 'quotes' ? 'neutral' : 'amber'}`}>{r.stage}</span>
                   </td>

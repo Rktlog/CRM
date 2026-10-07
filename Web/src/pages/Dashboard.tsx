@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiGet } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
-import { Account, fmtDate, fmtMoney, daysBetween, isOverdueCustomer } from '../lib/types';
+import { Account, fmtDate, fmtMoney, daysBetween, isOverdueCustomer, fmtDuration } from '../lib/types';
 import { HEALTH_COLUMNS, Health, healthOf } from '../lib/customerHealth';
 import AccountTable from '../components/AccountTable';
 import BackorderCard from '../components/BackorderCard';
@@ -73,7 +73,7 @@ export default function Dashboard() {
           <div className="stat flag-amber clickable" onClick={() => navigate('/orders?tab=balances')} title="Open Orders → Balances">
             <div className="stat-label">Owed to us</div>
             <div className="stat-value num">{fmtMoney(Math.round(owed.balance))}</div>
-            <div className="stat-sub">{fmtMoney(Math.round(owed.over60))} more than 60 days overdue</div>
+            <div className="stat-sub">{fmtMoney(Math.round(owed.over60))} more than 2 months overdue</div>
           </div>
         )}
         <a className="stat flag-rust clickable" href="#needs-attention">
@@ -149,7 +149,7 @@ export default function Dashboard() {
                 </div>
                 <div>{fmtDate(a.nextFollowUpAt!)}</div>
                 <div>
-                  <span className="pill amber">{daysBetween(a.nextFollowUpAt!)}d overdue</span>
+                  <span className="pill amber">{fmtDuration(daysBetween(a.nextFollowUpAt!))} overdue</span>
                 </div>
               </div>
             ))}

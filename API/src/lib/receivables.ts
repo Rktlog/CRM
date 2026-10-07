@@ -156,10 +156,10 @@ export async function unpaidInvoices(rep: Rep, regions?: string[]) {
 // ---------- Balances: one row per customer, with ageing ----------
 export const AGE_BUCKETS = [
   { key: 'current', label: 'Not yet due', test: (d: number) => d <= 0 },
-  { key: 'd30', label: '1–30 days', test: (d: number) => d >= 1 && d <= 30 },
-  { key: 'd60', label: '31–60 days', test: (d: number) => d >= 31 && d <= 60 },
-  { key: 'd90', label: '61–90 days', test: (d: number) => d >= 61 && d <= 90 },
-  { key: 'd90plus', label: '90+ days', test: (d: number) => d > 90 },
+  { key: 'd30', label: 'Up to 1 month overdue', test: (d: number) => d >= 1 && d <= 30 },
+  { key: 'd60', label: '1–2 months overdue', test: (d: number) => d >= 31 && d <= 60 },
+  { key: 'd90', label: '2–3 months overdue', test: (d: number) => d >= 61 && d <= 90 },
+  { key: 'd90plus', label: 'Over 3 months overdue', test: (d: number) => d > 90 },
 ] as const;
 type BucketKey = (typeof AGE_BUCKETS)[number]['key'];
 

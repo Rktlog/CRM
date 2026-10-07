@@ -173,7 +173,7 @@ export default function AccountDetail() {
                   if (!pay) return '—';
                   // Days unpaid counts from the invoice: before that, nothing is owed yet.
                   return pay.label === 'Unpaid'
-                    ? `Unpaid, ${daysBetween(openQuote!.invoiceDate ?? openQuote!.sentAt)} days`
+                    ? `Unpaid, ${fmtDuration(daysBetween(openQuote!.invoiceDate ?? openQuote!.sentAt))}`
                     : pay.label;
                 })()}
               </span>
@@ -215,7 +215,7 @@ export default function AccountDetail() {
                       <div>
                         <div className="acct-name">{q.number}{q.invoiceNumber ? `, inv ${q.invoiceNumber}` : ''}</div>
                         <div className="acct-region">
-                          Invoiced {fmtDateWithYear(q.invoiceDate ?? q.sentAt)}, {days} {days === 1 ? 'day' : 'days'} ago
+                          Invoiced {fmtDateWithYear(q.invoiceDate ?? q.sentAt)}, {fmtDuration(days)} ago
                         </div>
                         <div className="due-breakdown">
                           Total {fmtMoney(q.invoicedTotal ?? q.total ?? q.amount)}
