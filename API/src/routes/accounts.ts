@@ -210,6 +210,20 @@ accountsRouter.patch('/:id/reorder-gap', async (req, res) => {
   res.json(updated);
 });
 
+// Managers: change an account's state, e.g. move a head office (NSW/HO,
+// VIC/HO) back to a normal state, or the other way. The customer sync only
+// fills a state when it's missing, so the change sticks.
+const ACCOUNT_STATES = ['NSW', 'ACT', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'NT', 'NZ', 'NSW/HO', 'VIC/HO', 'INTL', 'Unknown'];
+accountsRouter.patch('/:id/region', async (req, res) => {
+  if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Only a manager can change an account\'s state' });
+  const region = String(req.body?.region ?? '');
+  if (!ACCOUNT_STATES.includes(region)) return res.status(400).json({ error: `State must be one of: ${ACCOUNT_STATES.join(', ')}` });
+  const account = await prisma.account.findUnique({ where: { id: req.params.id } });
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  const updated = await prisma.account.update({ where: { id: account.id }, data: { region } });
+  res.json(updated);
+});
+
 // Toggle the misc flag — marketing/warranty/internal orders that are
 // real but shouldn't count toward a rep's sales performance. Unlike
 // archived, a misc account stays fully visible everywhere except

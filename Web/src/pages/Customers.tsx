@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import StateFilter, { inStates } from '../components/StateFilter';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiGet } from '../lib/api';
 import { fmtMoney, daysBetween, fmtDuration } from '../lib/types';
@@ -40,7 +41,7 @@ export default function Customers() {
   const columns = useMemo(() => {
     const q = search.trim().toLowerCase();
     const visible = (customers ?? []).filter(c =>
-      (!region || c.region === region) &&
+      inStates(region, c.region) &&
       (!q || c.name.toLowerCase().includes(q) || (c.contactName ?? '').toLowerCase().includes(q)));
     const by: Record<Health, Customer[]> = { recent: [], due: [], overdue: [], lapsed: [] };
     for (const c of visible) by[healthOf(c)].push(c);
@@ -61,10 +62,8 @@ export default function Customers() {
         <div className="customers-filters">
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search store or contact" />
           {stateOptions.length > 1 && (
-            <select value={region} onChange={e => setRegion(e.target.value)}>
-              <option value="">{me?.role === 'manager' ? 'All states' : 'All my states'}</option>
-              {stateOptions.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
+            <StateFilter value={region} onChange={setRegion} options={stateOptions}
+              allLabel={me?.role === 'manager' ? 'All states' : 'All my states'} />
           )}
         </div>
       </div>

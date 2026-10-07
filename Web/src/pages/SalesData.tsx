@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
+import StateFilter from '../components/StateFilter';
+import { stateOptionsFor } from '../lib/useMe';
 import { Link } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { apiGet } from '../lib/api';
@@ -27,37 +29,14 @@ type LedgerData = {
 };
 type Rep = { id: string; name: string; role: string };
 
-const REGION_GROUPS: { key: string; label: string; regions: string[] | null }[] = [
-  { key: 'all', label: 'All regions', regions: null },
-  { key: 'nsw-act', label: 'NSW / ACT', regions: ['NSW', 'ACT'] },
-  { key: 'VIC', label: 'VIC', regions: ['VIC'] },
-  { key: 'QLD', label: 'QLD', regions: ['QLD'] },
-  { key: 'WA', label: 'WA', regions: ['WA'] },
-  { key: 'SA', label: 'SA', regions: ['SA'] },
-  { key: 'TAS', label: 'TAS', regions: ['TAS'] },
-  { key: 'NT', label: 'NT', regions: ['NT'] },
-  { key: 'NZ', label: 'NZ', regions: ['NZ'] },
-];
-
 type Me = { role: 'rep' | 'manager'; regions: string[] };
-
-// Reps only get their assigned states to choose from: all of them
-// together first, then each one on its own if they cover several.
-// A rep with no states assigned sees nothing (the API returns empty).
-function regionOptionsFor(me: Me): typeof REGION_GROUPS {
-  if (me.role === 'manager') return REGION_GROUPS;
-  if (!me.regions.length) return [{ key: 'mine', label: 'No states assigned', regions: null }];
-  const mine = [{ key: 'mine', label: me.regions.join(' / '), regions: me.regions }];
-  return me.regions.length > 1
-    ? [...mine, ...me.regions.map(r => ({ key: r, label: r, regions: [r] }))]
-    : mine;
-}
 
 export default function SalesData() {
   const [data, setData] = useState<LedgerData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [me, setMe] = useState<Me | null>(null);
-  const [regionKey, setRegionKey] = useState('');
+  // States ticked in the filter ('' = all of this person's states).
+  const [regionsCsv, setRegionsCsv] = useState('');
   // Defaults to the current FY: in Feb 2027 that's FY 2026/27, not 2027.
   const [year, setYear] = useState(() => {
     const d = new Date();
@@ -82,8 +61,14 @@ export default function SalesData() {
   const [invPage, setInvPage] = useState(0);
   const PAGE_SIZE = 25;
 
-  const regionOptions = me ? regionOptionsFor(me) : [];
-  const activeGroup = regionOptions.find(g => g.key === regionKey) ?? regionOptions[0];
+  const stateOptions = stateOptionsFor(me as any);
+  // What the page is showing: the ticked states, or everything this person covers.
+  const activeGroup = me ? {
+    label: regionsCsv
+      ? regionsCsv.replace('Unknown,INTL', 'Others').split(',').join(' / ')
+      : me.role === 'manager' ? 'All regions' : (me.regions.join(' / ') || 'No states assigned'),
+    regions: regionsCsv ? regionsCsv.split(',') : (me.role === 'manager' ? null : me.regions),
+  } : null;
   const isManager = me?.role === 'manager';
 
   useEffect(() => {
@@ -91,7 +76,8 @@ export default function SalesData() {
       .then((m: any) => {
         const loaded: Me = { role: m.role, regions: m.regions ?? [] };
         setMe(loaded);
-        setRegionKey(loaded.role === 'manager' ? 'nsw-act' : 'mine');
+        // Managers open on NSW + ACT (as before); reps on all their states.
+        setRegionsCsv(loaded.role === 'manager' ? 'NSW,ACT' : '');
         if (loaded.role === 'manager') apiGet('/reports/reps').then(setReps).catch(() => {});
       })
       .catch(e => setError(e.message));
@@ -109,7 +95,7 @@ export default function SalesData() {
     apiGet(`/reports/ledger?${params.toString()}`)
       .then(d => { setData(d); if (d.categories) setCategoryOptions(d.categories); })
       .catch(e => setError(e.message));
-  }, [me, regionKey, year, period, repId, categoryParam]);
+  }, [me, regionsCsv, year, period, repId, categoryParam]);
 
   const topAccounts = useMemo(() => {
     if (!data) return [];
@@ -147,11 +133,8 @@ export default function SalesData() {
               {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
             </select>
           )}
-          {regionOptions.length > 1 && (
-            <select value={regionKey} onChange={e => setRegionKey(e.target.value)}>
-              {regionOptions.map(g => <option key={g.key} value={g.key}>{g.label}</option>)}
-            </select>
-          )}
+          <StateFilter value={regionsCsv} onChange={setRegionsCsv} options={stateOptions}
+            allLabel={me?.role === 'manager' ? 'All regions' : 'All my states'} />
           {categoryOptions.length > 1 && (
             <details className="terms-filter">
               <summary>
@@ -208,7 +191,7 @@ export default function SalesData() {
               </div>
             )}
             <div className="ledger-stat">
-              <div className="label">Accounts tracked ({activeGroup.label})</div>
+              <div className="label">Accounts tracked ({activeGroup?.label})</div>
               <div className="val">{data.accountsTracked.toLocaleString()}</div>
             </div>
           </div>
@@ -228,7 +211,7 @@ export default function SalesData() {
           </div>
           <div className="ledger-chart">
             {data.monthlyTrend.length === 0 ? (
-              <div className="empty-state">No paid orders synced yet for {activeGroup.label}.</div>
+              <div className="empty-state">No paid orders synced yet for {activeGroup?.label}.</div>
             ) : (
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={data.monthlyTrend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -316,7 +299,7 @@ export default function SalesData() {
 
           <div className="ledger-section-head">
             <h2>Top accounts</h2>
-            <span className="ledger-note">{data.priorPeriodLabel} vs {data.periodLabel} · {activeGroup.label}</span>
+            <span className="ledger-note">{data.priorPeriodLabel} vs {data.periodLabel} · {activeGroup?.label}</span>
           </div>
           <div className="ledger-table-scroll tall">
             <table>

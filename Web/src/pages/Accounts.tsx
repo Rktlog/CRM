@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import StateFilter, { inStates } from '../components/StateFilter';
 import { apiGet } from '../lib/api';
 import { Account, STAGES, STAGE_LABELS } from '../lib/types';
 import { useAuth } from '../context/AuthContext';
@@ -64,7 +65,7 @@ export default function Accounts() {
     let list = source.filter(a => {
       if (tab !== 'all' && tab !== 'archived' && a.type !== tab) return false;
       if (stageFilter !== 'all' && a.stage !== stageFilter) return false;
-      if (regionFilter && a.region !== regionFilter) return false;
+      if (!inStates(regionFilter, a.region)) return false;
       if (q) {
         const haystack = [a.name, a.contactName, a.phone, a.email, a.region].filter(Boolean).join(' ').toLowerCase();
         if (!haystack.includes(q)) return false;
@@ -132,10 +133,8 @@ export default function Accounts() {
           {STAGES.map(s => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}
         </select>
         {stateOptions.length > 1 && (
-          <select value={regionFilter} onChange={e => setRegionFilter(e.target.value)}>
-            <option value="">{me?.role === 'manager' ? 'All states' : 'All my states'}</option>
-            {stateOptions.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
+          <StateFilter value={regionFilter} onChange={setRegionFilter} options={stateOptions}
+            allLabel={me?.role === 'manager' ? 'All states' : 'All my states'} />
         )}
         <span className="toolbar-count">{visible.length} shown</span>
       </div>

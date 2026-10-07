@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, FormEvent } from 'react';
+import { useMe, ALL_STATES } from '../lib/useMe';
 import { useParams, Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPatch, apiDownload } from '../lib/api';
 import { orderStatusPills, stageTag, paymentTag } from '../lib/orderStatus';
@@ -377,7 +378,7 @@ export default function AccountDetail() {
           <div className="card">
             <h3>Account</h3>
             <div className="kv"><span className="k">Type</span><span>{account.type}</span></div>
-            <div className="kv"><span className="k">Region</span><span>{account.region}</span></div>
+            <StateRow account={account} onSaved={updated => setAccount(a => (a ? { ...a, ...updated } : a))} />
             <div className="kv">
               <span className="k">Source</span>
               <span>{account.dearCustomerId ? 'DEAR customer' : 'Added in the CRM'}</span>
@@ -630,6 +631,60 @@ function ReorderGapRow({ account, onSaved }: {
             </button>
           )}
           <span className="acct-region">Useful when several branches order through this account.</span>
+          {error && <span className="save-msg err">{error}</span>}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// State, with a Change button for managers: e.g. move a head office (NSW/HO,
+// VIC/HO) back to a normal state, or a store into a head office.
+function StateRow({ account, onSaved }: { account: { id: string; region: string }; onSaved: (a: any) => void }) {
+  const me = useMe();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(account.region);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const isHO = account.region.endsWith('/HO');
+
+  async function save() {
+    setSaving(true); setError(null);
+    try {
+      onSaved(await apiPatch(`/accounts/${account.id}/region`, { region: value }));
+      setEditing(false);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="kv" style={{ alignItems: 'flex-start' }}>
+      <span className="k">State</span>
+      {!editing ? (
+        <span>
+          {account.region}{isHO && <span className="acct-region"> (head office)</span>}
+          {me?.role === 'manager' && (
+            <>{' '}<button className="link-btn" onClick={() => { setValue(account.region); setEditing(true); }}>Change</button></>
+          )}
+        </span>
+      ) : (
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <select value={value} onChange={e => setValue(e.target.value)}
+              style={{ padding: '4px 6px', border: '1px solid var(--line)', borderRadius: 6 }}>
+              {[...ALL_STATES, 'Unknown'].map(s => (
+                <option key={s} value={s}>{s.endsWith('/HO') ? `${s} (head office)` : s}</option>
+              ))}
+            </select>
+            <button className="btn secondary" style={{ padding: '4px 10px', fontSize: 12 }} disabled={saving || value === account.region} onClick={save}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+            <button className="link-btn" onClick={() => setEditing(false)}>Cancel</button>
+          </span>
+          <span className="acct-region">Reps only see accounts in the states assigned to them in Settings.</span>
           {error && <span className="save-msg err">{error}</span>}
         </span>
       )}

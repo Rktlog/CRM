@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ALL_STATES } from '../lib/useMe';
 import { apiGet, apiPut, apiPatch } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import { fmtMoney } from '../lib/types';
@@ -9,7 +10,6 @@ type Target = { id: string; repId: string; repName: string; year: number; quarte
 
 // Fiscal quarters. A target's year is the FY start year: 2026 = FY 2026/27.
 const QUARTER_LABELS = ['Q1 (Jul–Sep)', 'Q2 (Oct–Dec)', 'Q3 (Jan–Mar)', 'Q4 (Apr–Jun)'];
-const ALL_STATES = ['NSW', 'ACT', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'NT', 'NZ'];
 
 export default function Settings() {
   const { role, session } = useAuth();
@@ -167,6 +167,9 @@ export default function Settings() {
   return (
     <>
       <h1>Settings</h1>
+
+      {/* Every user: their own Planner in Google Calendar */}
+    
 
       <div className="section">
         <div className="panel-title">Data sync</div>

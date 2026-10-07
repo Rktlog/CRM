@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import StateFilter from './StateFilter';
 import { Link, useNavigate } from 'react-router-dom';
 import { apiGet, apiDownload } from '../lib/api';
 import { fmtMoney, fmtDateWithYear, fmtDuration } from '../lib/types';
@@ -86,10 +87,8 @@ export default function OrderViews({ view }: { view: ViewKey }) {
       <div className="ov-toolbar">
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter by customer, order or invoice" />
         {stateOptions.length > 1 && (
-          <select value={region} onChange={e => setRegion(e.target.value)}>
-            <option value="">{me?.role === 'manager' ? 'All states' : 'All my states'}</option>
-            {stateOptions.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
+          <StateFilter value={region} onChange={setRegion} options={stateOptions}
+            allLabel={me?.role === 'manager' ? 'All states' : 'All my states'} />
         )}
         {(view === 'unpaid' || view === 'balances') && termOptions.length > 1 && (
           <details className="terms-filter">
