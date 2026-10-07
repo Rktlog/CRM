@@ -40,7 +40,7 @@ export default function Login() {
       <section className="signin-panel">
         <form className="signin-form" onSubmit={handleSubmit} noValidate={false}>
           <h1>Sign in</h1>
-          <p className="signin-sub">Use your rhinorhino.com.au email.</p>
+          <p className="signin-sub">Use your @rhinorhino.com.au email.</p>
 
           <label className="signin-field">
             <span>Email</span>

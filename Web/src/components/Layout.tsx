@@ -23,7 +23,7 @@ export default function Layout() {
   return (
     <div id="app">
       <div className="rail">
-        <div className="brand">Rhino<span>Rhino</span></div>
+        <div className="brand">Rhino<span>Radar</span></div>
         {NAV.map(item => (
           <NavLink
             key={item.to}
