@@ -80,6 +80,14 @@ model Rep {
   // The day the planner last auto-filled this rep's list (once per day).
   lastAutoPlanDate   DateTime? @map("last_auto_plan_date") @db.Date
   regions            RepRegion[]
+  // Login email (= their rhinorhino.com.au Google Workspace address), saved at sign-in.
+  email              String?
+  // Planner shown in their Google Calendar (Settings), and how the last sync went.
+  calendarSync       Boolean   @default(false) @map("calendar_sync")
+  // Show their own Google Calendar events in the Planner (on by default).
+  calendarShow       Boolean   @default(true) @map("calendar_show")
+  calendarSyncedAt   DateTime? @map("calendar_synced_at")
+  calendarError      String?   @map("calendar_error")
   createdAt DateTime   @default(now()) @map("created_at")
 
   @@map("reps")
@@ -124,6 +132,10 @@ model Account {
   // flag "inactive" relative to THEIR normal pace, not one fixed
   // number for every account. Null until they have 2+ paid orders.
   avgOrderGapDays Int?      @map("avg_order_gap_days")
+  // Reorder gap: the calculated value (branch-aware, typical gap), and a
+  // manual override the team can set. avgOrderGapDays = override ?? auto.
+  reorderGapAuto     Int?     @map("reorder_gap_auto")
+  reorderGapOverride Int?     @map("reorder_gap_override")
   // Not a real sales target — a one-off retail buyer, merchandise
   // order, or similar. Kept (not deleted) for the DEAR link and
   // history, but hidden from normal working views.

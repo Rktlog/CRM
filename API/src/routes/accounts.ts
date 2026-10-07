@@ -189,6 +189,27 @@ accountsRouter.post('/', async (req, res) => {
   res.status(201).json(account);
 });
 
+// Set the account's usual reorder gap by hand ({ days: 30 }), or back to the
+// calculated value ({ days: null }). For accounts where the calculation
+// doesn't fit, e.g. several branches ordering through one account.
+accountsRouter.patch('/:id/reorder-gap', async (req, res) => {
+  const account = await prisma.account.findUnique({ where: { id: req.params.id } });
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  if (!(await canSeeAccount(req.rep!, account))) {
+    return res.status(403).json({ error: 'This account is outside your states' });
+  }
+  const raw = req.body?.days;
+  const days = raw === null || raw === '' || raw === undefined ? null : Math.round(Number(raw));
+  if (days !== null && (!Number.isFinite(days) || days < 1 || days > 365)) {
+    return res.status(400).json({ error: 'Enter a number of days between 1 and 365, or leave it blank for automatic' });
+  }
+  const updated = await prisma.account.update({
+    where: { id: account.id },
+    data: { reorderGapOverride: days, avgOrderGapDays: days ?? account.reorderGapAuto },
+  });
+  res.json(updated);
+});
+
 // Toggle the misc flag — marketing/warranty/internal orders that are
 // real but shouldn't count toward a rep's sales performance. Unlike
 // archived, a misc account stays fully visible everywhere except

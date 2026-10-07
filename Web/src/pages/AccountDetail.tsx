@@ -384,8 +384,8 @@ export default function AccountDetail() {
             </div>
             <div className="kv"><span className="k">Added</span><span className="num">{fmtDateWithYear(account.createdAt)}</span></div>
             {account.repName && <div className="kv"><span className="k">Assigned rep</span><span>{account.repName}</span></div>}
-            {account.avgOrderGapDays && (
-              <div className="kv"><span className="k">Typical reorder gap</span><span className="num">~{account.avgOrderGapDays} days</span></div>
+            {account.type === 'customer' && (
+              <ReorderGapRow account={account} onSaved={updated => setAccount(a => (a ? { ...a, ...updated } : a))} />
             )}
             <div className="kv">
               <span className="k">Payment terms</span>
@@ -578,5 +578,61 @@ export default function AccountDetail() {
         <PriceListModal accountId={account.id} accountName={account.name} onClose={() => setShowPriceList(false)} />
       )}
     </>
+  );
+}
+// Usual reorder gap: calculated from their orders (ordering rounds, typical
+// gap), or set by hand for accounts where that doesn't fit, such as several
+// branches ordering through one account. Drives Due / Overdue everywhere.
+function ReorderGapRow({ account, onSaved }: {
+  account: { id: string; avgOrderGapDays: number | null; reorderGapAuto?: number | null; reorderGapOverride?: number | null };
+  onSaved: (a: any) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(String(account.reorderGapOverride ?? account.avgOrderGapDays ?? ''));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const manual = account.reorderGapOverride != null;
+
+  async function save(days: number | null) {
+    setSaving(true); setError(null);
+    try {
+      const updated = await apiPatch(`/accounts/${account.id}/reorder-gap`, { days });
+      onSaved(updated);
+      setEditing(false);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="kv" style={{ alignItems: 'flex-start' }}>
+      <span className="k">Usual reorder gap</span>
+      {!editing ? (
+        <span>
+          <span className="num">{account.avgOrderGapDays ? `every ${account.avgOrderGapDays} days` : 'not enough orders yet'}</span>
+          <span className="acct-region"> ({manual ? 'set manually' : 'calculated'})</span>{' '}
+          <button className="link-btn" onClick={() => { setValue(String(account.avgOrderGapDays ?? '')); setEditing(true); }}>Change</button>
+        </span>
+      ) : (
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            every <input type="number" min={1} max={365} value={value} onChange={e => setValue(e.target.value)}
+              style={{ width: 70, padding: '4px 6px', border: '1px solid var(--line)', borderRadius: 6 }} /> days
+            <button className="btn secondary" style={{ padding: '4px 10px', fontSize: 12 }} disabled={saving || !value}
+              onClick={() => save(Number(value))}>Save</button>
+            <button className="link-btn" onClick={() => setEditing(false)}>Cancel</button>
+          </span>
+          {manual && (
+            <button className="link-btn" style={{ alignSelf: 'flex-start' }} disabled={saving} onClick={() => save(null)}>
+              Go back to calculated{account.reorderGapAuto ? ` (every ${account.reorderGapAuto} days)` : ''}
+            </button>
+          )}
+          <span className="acct-region">Useful when several branches order through this account.</span>
+          {error && <span className="save-msg err">{error}</span>}
+        </span>
+      )}
+    </div>
   );
 }

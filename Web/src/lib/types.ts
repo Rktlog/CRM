@@ -39,7 +39,9 @@ export type Account = {
   spend90: number;
   spend365: number;
   lastOrderAt: string | null;
-  avgOrderGapDays: number | null;
+  avgOrderGapDays: number | null;   // the gap in use: manual override, otherwise calculated
+  reorderGapAuto?: number | null;    // calculated (branch-aware, typical gap)
+  reorderGapOverride?: number | null; // set by the team on the account page
   archived: boolean;
   misc: boolean;
   hasHistoricalOrders?: boolean;
