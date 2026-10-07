@@ -316,12 +316,33 @@ reportsRouter.get('/ledger', async (req, res) => {
   const scope = await salesScope(req, regions);
   const effectiveRepId = scope.repId ?? (isManager ? requestedRepId || undefined : undefined);
 
-  const accountWhere: any = {
+  const baseWhere: any = {
     ...(effectiveRepId ? { repId: effectiveRepId } : {}),
     ...(scope.regions ? { region: { in: scope.regions } } : {}),
     ...(scope.hidden.length ? { id: { notIn: scope.hidden } } : {}),
     misc: false, // marketing/warranty accounts don't count toward performance
   };
+  // ?category=Pharmacy|Toy narrows the whole page to those customer
+  // categories ("Uncategorized" = accounts with none set).
+  const picked = typeof req.query.category === 'string' && req.query.category
+    ? req.query.category.split('|').map(c => c.trim()).filter(Boolean)
+    : [];
+  const named = picked.filter(c => c !== 'Uncategorized');
+  const withNone = picked.includes('Uncategorized');
+  const accountWhere: any = {
+    ...baseWhere,
+    ...(picked.length
+      ? { OR: [
+          ...(named.length ? [{ category: { in: named } }] : []),
+          ...(withNone ? [{ category: null }, { category: '' }] : []),
+        ] }
+      : {}),
+  };
+  const categoryParam = picked.length ? picked : null;
+  // Every category in this rep/state scope, for the filter list.
+  const categoryRows = await prisma.account.findMany({ where: baseWhere, select: { category: true }, distinct: ['category'] });
+  const categories = [...new Set(categoryRows.map(r => (r.category && r.category.trim()) || 'Uncategorized'))]
+    .sort((a, b) => (a === 'Uncategorized' ? 1 : b === 'Uncategorized' ? -1 : a.localeCompare(b)));
   const accounts = await prisma.account.findMany({
     where: accountWhere,
     select: { id: true, name: true, region: true, type: true, spend365: true, stage: true, category: true },
@@ -526,6 +547,8 @@ reportsRouter.get('/ledger', async (req, res) => {
     typeBreakdown,
     regionBreakdown,
     categoryBreakdown,
+    categories,
+    category: categoryParam,
     skuBreakdown,
     brandBreakdown,
     recentInvoices,

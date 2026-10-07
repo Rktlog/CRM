@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiGet } from '../lib/api';
-import { fmtMoney, daysBetween } from '../lib/types';
+import { fmtMoney, daysBetween, fmtDuration } from '../lib/types';
 import { useMe, stateOptionsFor, territoryLabel } from '../lib/useMe';
 import { HEALTH_COLUMNS as COLUMNS, Health, healthOf } from '../lib/customerHealth';
 
@@ -98,8 +98,8 @@ export default function Customers() {
                           <span className="num">{fmtMoney(Math.round(c.spend365))}/yr</span>
                         </div>
                         <div className="dc-pace">
-                          {days === null ? 'No orders yet' : `Last order ${days} ${days === 1 ? 'day' : 'days'} ago`}
-                          {c.avgOrderGapDays ? `, usually every ${c.avgOrderGapDays} days` : ''}
+                          {days === null ? 'No orders yet' : `Last order ${fmtDuration(days)} ago`}
+                          {c.avgOrderGapDays ? `, usually every ${fmtDuration(c.avgOrderGapDays)}` : ''}
                         </div>
                         {(c.openQuote || Math.abs(c.owing) > 0.005 || c.backordered) && (
                           <div className="dc-badges">

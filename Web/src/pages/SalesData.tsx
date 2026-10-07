@@ -22,6 +22,7 @@ type LedgerData = {
   monthlyTrend: { label: string; total: number }[];
   quarters: Quarter[]; unpaidQuotes: UnpaidQuote[]; topAccounts: TopAccount[];
   typeBreakdown: BreakdownRow[]; regionBreakdown: BreakdownRow[]; categoryBreakdown: BreakdownRow[];
+  categories?: string[]; category?: string[] | null;
   skuBreakdown: SkuRow[]; brandBreakdown: BreakdownRow[]; recentInvoices: RecentInvoice[];
 };
 type Rep = { id: string; name: string; role: string };
@@ -65,6 +66,16 @@ export default function SalesData() {
   const [period, setPeriod] = useState<'calendar' | 'fiscal' | 'alltime'>('fiscal');
   const [reps, setReps] = useState<Rep[]>([]);
   const [repId, setRepId] = useState<string>('');
+  // Customer category filter: the categories ticked (none ticked = all).
+  // Options stay the full list for this rep/state scope.
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
+  const categoryParam = [...picked].sort().join('|');
+  const toggleCategory = (c: string) => setPicked(prev => {
+    const next = new Set(prev);
+    next.has(c) ? next.delete(c) : next.add(c);
+    return next;
+  });
   const [topSortKey, setTopSortKey] = useState<'fyCurrent' | 'fyPrior'>('fyCurrent');
   const [topSortDir, setTopSortDir] = useState<1 | -1>(-1);
   const [invSearch, setInvSearch] = useState('');
@@ -94,8 +105,11 @@ export default function SalesData() {
     params.set('year', String(year));
     params.set('period', period);
     if (repId && isManager) params.set('repId', repId);
-    apiGet(`/reports/ledger?${params.toString()}`).then(setData).catch(e => setError(e.message));
-  }, [me, regionKey, year, period, repId]);
+    if (categoryParam) params.set('category', categoryParam);
+    apiGet(`/reports/ledger?${params.toString()}`)
+      .then(d => { setData(d); if (d.categories) setCategoryOptions(d.categories); })
+      .catch(e => setError(e.message));
+  }, [me, regionKey, year, period, repId, categoryParam]);
 
   const topAccounts = useMemo(() => {
     if (!data) return [];
@@ -137,6 +151,27 @@ export default function SalesData() {
             <select value={regionKey} onChange={e => setRegionKey(e.target.value)}>
               {regionOptions.map(g => <option key={g.key} value={g.key}>{g.label}</option>)}
             </select>
+          )}
+          {categoryOptions.length > 1 && (
+            <details className="terms-filter">
+              <summary>
+                {picked.size === 0 ? 'All categories'
+                  : picked.size === 1 ? [...picked][0]
+                  : `${picked.size} categories`}
+              </summary>
+              <div className="terms-menu">
+                <div className="terms-menu-tools">
+                  <button type="button" className="link-btn" onClick={() => setPicked(new Set())}>All categories</button>
+                  <button type="button" className="link-btn" onClick={() => setPicked(new Set(categoryOptions))}>Tick all</button>
+                </div>
+                {categoryOptions.map(c => (
+                  <label key={c} className="pl-check">
+                    <input type="checkbox" checked={picked.has(c)} onChange={() => toggleCategory(c)} />
+                    <span>{c}</span>
+                  </label>
+                ))}
+              </div>
+            </details>
           )}
           <select value={year} onChange={e => setYear(Number(e.target.value))}>
             {Array.from({ length: new Date().getFullYear() - 2019 }, (_, i) => 2021 + i).reverse().map(y => <option key={y} value={y}>{period === 'fiscal' ? `FY ${y}/${String(y + 1).slice(2)}` : y}</option>)}
@@ -310,8 +345,13 @@ export default function SalesData() {
           <div className="ledger-section-head"><h2>Mix breakdown</h2></div>
           <div className="bd-grid">
             <div>
-              <div className="bd-title">By category — {data.periodLabel}</div>
-              <BarRows items={data.categoryBreakdown} labelKey="category" />
+              <div className="bd-title">
+                By category — {data.periodLabel}
+                {picked.size > 0
+                  ? <> · <button className="link-btn" onClick={() => setPicked(new Set())}>Show all categories</button></>
+                  : <span className="acct-region"> · click to add or remove from the filter</span>}
+              </div>
+              <BarRows items={data.categoryBreakdown} labelKey="category" onPick={toggleCategory} active={picked} />
             </div>
             <div>
               <div className="bd-title">New in {data.periodLabel} vs existing customers</div>
@@ -401,12 +441,20 @@ export default function SalesData() {
 
 // sub: optional second line under the label (e.g. a customer count), so
 // it never gets cut off by the fixed-width label column.
-function BarRows({ items, labelKey }: { items: (BreakdownRow & { label?: string; sub?: string })[]; labelKey: string }) {
+function BarRows({ items, labelKey, onPick, active }: {
+  items: (BreakdownRow & { label?: string; sub?: string })[]; labelKey: string;
+  onPick?: (label: string) => void; active?: Set<string>;
+}) {
   const max = Math.max(...items.map(i => i.total), 1);
   return (
     <>
       {items.map((i: any, idx) => (
-        <div className="bd-row" key={idx}>
+        <div
+          className={'bd-row' + (onPick ? ' clickable' : '') + (active?.has(i[labelKey]) ? ' active' : '')}
+          key={idx}
+          onClick={onPick ? () => onPick(i[labelKey]) : undefined}
+          title={onPick ? (active?.has(i[labelKey]) ? `Remove ${i[labelKey]} from the filter` : `Add ${i[labelKey]} to the filter`) : undefined}
+        >
           <div className="bd-label">
             {i[labelKey]}
             {i.sub && <div className="bd-sub">{i.sub}</div>}

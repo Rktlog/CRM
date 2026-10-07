@@ -203,3 +203,16 @@ export function amountOwing(q: { amount: number; total?: number | null; amountPa
   if (q.amountDue != null) return q.amountDue;
   return Math.max(0, (q.total ?? q.amount) - (q.amountPaid ?? 0));
 }
+
+// Time spans: under a month in days, otherwise months
+// (nearest half month up to 3 months, then whole months).
+export function fmtDuration(days: number): string {
+  if (days < 30) return `${days} ${days === 1 ? 'day' : 'days'}`;
+  const months = days / 30.44;
+  if (months < 3) {
+    const half = Math.round(months * 2) / 2;
+    const label = half % 1 ? `${Math.floor(half)}½` : `${half}`;
+    return `${label} ${half === 1 ? 'month' : 'months'}`;
+  }
+  return `${Math.round(months)} months`;
+}

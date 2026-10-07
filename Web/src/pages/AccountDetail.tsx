@@ -4,7 +4,7 @@ import { apiGet, apiPost, apiPatch, apiDownload } from '../lib/api';
 import { orderStatusPills, stageTag, paymentTag } from '../lib/orderStatus';
 import PriceListModal from '../components/PriceListModal';
 import CreditReservations from '../components/CreditReservations';
-import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fmtDateWithYear, daysBetween, flagFor, isHistoryOrder, isOwingOrder, amountOwing } from '../lib/types';
+import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fmtDateWithYear, daysBetween, flagFor, isHistoryOrder, isOwingOrder, amountOwing, fmtDuration } from '../lib/types';
 
 export default function AccountDetail() {
   const { id } = useParams<{ id: string }>();
@@ -611,7 +611,7 @@ function ReorderGapRow({ account, onSaved }: {
       <span className="k">Usual reorder gap</span>
       {!editing ? (
         <span>
-          <span className="num">{account.avgOrderGapDays ? `every ${account.avgOrderGapDays} days` : 'not enough orders yet'}</span>
+          <span className="num">{account.avgOrderGapDays ? `every ${fmtDuration(account.avgOrderGapDays)}` : 'not enough orders yet'}</span>
           <span className="acct-region"> ({manual ? 'set manually' : 'calculated'})</span>{' '}
           <button className="link-btn" onClick={() => { setValue(String(account.avgOrderGapDays ?? '')); setEditing(true); }}>Change</button>
         </span>
@@ -626,7 +626,7 @@ function ReorderGapRow({ account, onSaved }: {
           </span>
           {manual && (
             <button className="link-btn" style={{ alignSelf: 'flex-start' }} disabled={saving} onClick={() => save(null)}>
-              Go back to calculated{account.reorderGapAuto ? ` (every ${account.reorderGapAuto} days)` : ''}
+              Go back to calculated{account.reorderGapAuto ? ` (every ${fmtDuration(account.reorderGapAuto)})` : ''}
             </button>
           )}
           <span className="acct-region">Useful when several branches order through this account.</span>
