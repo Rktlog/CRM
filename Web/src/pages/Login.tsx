@@ -30,7 +30,7 @@ export default function Login() {
       <section className="signin-brand" aria-label="Rhino Rhino">
         <div className="signin-mark" aria-hidden="true">
           <span>Rhino</span>
-          <span>Rhino</span>
+          <span>Radar</span>
         </div>
         <p className="signin-about">
           Accounts, orders, visits and stock for the Rhino Rhino sales team.
