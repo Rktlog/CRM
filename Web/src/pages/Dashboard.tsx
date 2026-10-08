@@ -96,7 +96,7 @@ export default function Dashboard() {
         return (
           <div className="section">
             <div className="panel-title">
-              Customers <span className="plan-count">{customers.length} stores, by their own reorder pace</span>
+              Active Customers <span className="plan-count">{customers.length} stores, by their own reorder pace</span>
             </div>
             <div className="health-row">
               {HEALTH_COLUMNS.map(col => (
