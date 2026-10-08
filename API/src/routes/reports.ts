@@ -137,6 +137,63 @@ async function salesScope(req: any, requested?: string[]): Promise<{ regions?: s
   return { regions: regions.length ? regions : ['__none__'], myRegions: assigned, hidden };
 }
 
+// ---- What counts as a sale (Sales Data and the Dashboard) ----
+// The sales team's definition: TAX INVOICE figures on the TAX INVOICE date.
+//   - value: the invoice's product lines (already net of discount), ex GST,
+//     ex freight and other charges (incl. the card surcharge)
+//   - each invoice counts separately: a part-shipped order counts as each
+//     tax invoice is issued, in that invoice's month
+//   - credit notes are deducted, as negative sales on the credit note's date
+//   - ship date is never used
+// Drafts, quotes, voided and credited orders don't count. Spreadsheet history
+// (before DEAR) keeps its own paid flag, date and amount.
+// Customers' first/last order dates stay on the ORDER date (see firstOrderByAccount).
+const NOT_A_SALE = ['DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING', 'VOIDED', 'CREDITED'];
+const isHistoryOrder = (q: { source?: string | null; number: string }) => q.source === 'rhino-history' || q.number.startsWith('Q');
+type SaleSource = { source?: string | null; number: string; paid: boolean; amount: number; sentAt: Date;
+  invoiceDate?: Date | null; fulfillmentStatus?: string | null; goodsTotal?: number | null; taxTotal?: number | null; invoices?: any; creditNotes?: any };
+type SaleRow<T> = T & { amount: number; sentAt: Date; invoiceNumber?: string; invoicePaid?: boolean; isCredit?: boolean };
+
+function asSales<T extends SaleSource>(q: T): SaleRow<T>[] {
+  if (isHistoryOrder(q)) return q.paid ? [q] : [];
+  const status = (q.fulfillmentStatus ?? '').toUpperCase();
+  if (NOT_A_SALE.includes(status)) return [];
+  const orderGoods = q.goodsTotal ?? q.amount - (q.taxTotal ?? 0);
+  const invs = (Array.isArray(q.invoices) ? q.invoices : [])
+    .filter((i: any) => i?.date && String(i.status ?? '').toUpperCase() !== 'VOIDED');
+  // Credit notes: negative sales on the credit note's own date.
+  const credits: SaleRow<T>[] = (Array.isArray(q.creditNotes) ? q.creditNotes : [])
+    .filter((c: any) => c?.date && String(c.status ?? '').toUpperCase() !== 'VOIDED')
+    .map((c: any) => ({
+      ...q,
+      amount: -(c.goods != null ? Number(c.goods)
+        : Math.max(0, (Number(c.total) || 0) - (c.tax != null ? Number(c.tax) : (Number(c.total) || 0) / 11))),
+      sentAt: new Date(c.date),
+      invoiceNumber: c.number ? String(c.number) : undefined,
+      isCredit: true,
+    }));
+  if (!invs.length) return [...(q.invoiceDate ? [{ ...q, amount: orderGoods, sentAt: q.invoiceDate } as SaleRow<T>] : []), ...credits];
+  const invTotal = invs.reduce((s: number, i: any) => s + (Number(i.total) || 0), 0);
+  const invoiceRows: SaleRow<T>[] = invs.map((i: any) => ({
+    ...q,
+    // The invoice's own goods (synced from DEAR). For an order not re-read
+    // since, its share of the order's goods, in proportion to invoice totals.
+    amount: i.goods != null ? Number(i.goods)
+      : invTotal > 0 ? orderGoods * (Number(i.total) || 0) / invTotal
+      : orderGoods / invs.length,
+    sentAt: new Date(i.date),
+    invoiceNumber: i.number ? String(i.number) : undefined,
+    // paid in cash, or settled by a credit note
+    invoicePaid: i.total != null && i.paid != null
+      ? Number(i.paid) + Number(i.credited ?? 0) >= Number(i.total) - 0.005 : undefined,
+  }));
+  return [...invoiceRows, ...credits];
+}
+const salesOf = <T extends SaleSource>(qs: T[]) => qs.flatMap(q => asSales(q));
+// Product lines that are charges rather than goods (freight, card surcharge).
+const isChargeLine = (l: { sku?: string | null; productName?: string | null }) =>
+  /surcharge|freight/i.test(`${l.sku ?? ''} ${l.productName ?? ''}`);
+
 reportsRouter.get('/sales', async (req, res) => {
   const range = (req.query.range as Range) || '3m';
   if (!['3m', '6m', '12m', 'fy_quarter', 'fy_year', 'last_fy_quarter', 'last_fy_year'].includes(range)) {
@@ -162,15 +219,22 @@ reportsRouter.get('/sales', async (req, res) => {
   });
   const accountIds = accounts.map(a => a.id);
 
-  const quotes = await prisma.quote.findMany({
+  // Same definition as Sales Data: each tax invoice, on its own date, goods ex GST.
+  const quotes = salesOf(await prisma.quote.findMany({
     where: {
       accountId: { in: accountIds },
-      paid: true,
       miscType: null,
-      sentAt: { gte: previousStart, lt: currentEnd },
+      // first invoiced up to a year before the window (a later invoice of an
+      // earlier order can fall inside it), or (history) ordered in it
+      OR: [
+        { invoiceDate: { gte: new Date(previousStart.getTime() - 365 * 86400000), lt: currentEnd } },
+        { invoiceDate: null, sentAt: { gte: previousStart, lt: currentEnd } },
+        { source: 'rhino-history', sentAt: { gte: previousStart, lt: currentEnd } },
+      ],
     },
-    select: { amount: true, sentAt: true },
-  });
+    select: { amount: true, sentAt: true, source: true, number: true, paid: true, invoiceDate: true,
+              fulfillmentStatus: true, goodsTotal: true, taxTotal: true, invoices: true, creditNotes: true },
+  })).filter(q => q.sentAt >= previousStart && q.sentAt < currentEnd);
 
   const currentQuotes = quotes.filter(q => q.sentAt >= currentStart && q.sentAt < currentEnd);
   const previousQuotes = quotes.filter(q => q.sentAt >= previousStart && q.sentAt < previousEnd);
@@ -354,7 +418,8 @@ reportsRouter.get('/ledger', async (req, res) => {
     where: { accountId: { in: accountIds }, miscType: null }, // marketing/warranty orders never count toward performance
     orderBy: { sentAt: 'desc' },
   });
-  const paidQuotes = allQuotes.filter(q => q.paid);
+  // Sales by the team's definition: each tax invoice, on its own date, goods ex GST.
+  const paidQuotes = salesOf(allQuotes);
 
   // ---- Monthly trend — bounded to the selected year/period window,
   // not all-time, so the chart actually changes when you change year. ----
@@ -379,9 +444,12 @@ reportsRouter.get('/ledger', async (req, res) => {
   const budgetByQuarter = (y: number, q: number) =>
     targets.filter(t => t.year === y && t.quarter === q).reduce((s, t) => s + t.amount, 0);
 
-  // First-ever paid order date per account — for "new business" detection.
+  // First-ever order per account, by ORDER date, for "new business" detection.
+  // Any real order counts (not drafts, quotes, voided or credited), whether or
+  // not it has been invoiced or paid yet.
   const firstOrderByAccount = new Map<string, Date>();
-  for (const q of [...paidQuotes].sort((a, b) => a.sentAt.getTime() - b.sentAt.getTime())) {
+  const realOrders = allQuotes.filter(q => isHistoryOrder(q) || !NOT_A_SALE.includes((q.fulfillmentStatus ?? '').toUpperCase()));
+  for (const q of [...realOrders].sort((a, b) => a.sentAt.getTime() - b.sentAt.getTime())) {
     if (!firstOrderByAccount.has(q.accountId)) firstOrderByAccount.set(q.accountId, q.sentAt);
   }
 
@@ -486,7 +554,7 @@ reportsRouter.get('/ledger', async (req, res) => {
     .sort((a, b) => b.total - a.total);
 
   // ---- SKU and brand breakdown — this FY, real line-item data ----
-  const thisFyQuoteIds = paidQuotes.filter(q => q.sentAt >= window.start && q.sentAt < window.end).map(q => q.id);
+  const thisFyQuoteIds = [...new Set(paidQuotes.filter(q => !q.isCredit && q.sentAt >= window.start && q.sentAt < window.end).map(q => q.id))];
   const lines = thisFyQuoteIds.length
     ? await prisma.quoteLine.findMany({ where: { quoteId: { in: thisFyQuoteIds } } })
     : [];
@@ -494,6 +562,7 @@ reportsRouter.get('/ledger', async (req, res) => {
   const skuTotals = new Map<string, { productName: string; quantity: number; total: number }>();
   const brandTotals = new Map<string, number>();
   for (const l of lines) {
+    if (isChargeLine(l)) continue; // freight and card surcharge aren't goods
     const existing = skuTotals.get(l.sku) ?? { productName: l.productName, quantity: 0, total: 0 };
     existing.quantity += l.quantity;
     existing.total += l.lineTotal;
@@ -509,18 +578,23 @@ reportsRouter.get('/ledger', async (req, res) => {
     .map(([brand, total]) => ({ brand, total: Math.round(total*100)/100 }))
     .sort((a, b) => b.total - a.total);
 
-  // ---- Recent invoices (most recent 100, paid or not) ----
-  const recentInvoices = allQuotes.slice(0, 100).map(q => ({
-    id: q.id,
-    accountId: q.accountId,
-    invoice: q.number,
-    date: q.sentAt.toISOString().slice(0, 10),
-    customer: accountById.get(q.accountId)?.name ?? 'Unknown',
-    region: accountById.get(q.accountId)?.region ?? 'Unknown',
-    amount: q.amount,
-    paid: q.paid,
-    history: isHistory(q),
-  }));
+  // ---- Recent invoices (most recent 100): the tax invoices behind the sales
+  // figures, each with its goods value ex GST. ----
+  const recentInvoices = [...paidQuotes]
+    .sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())
+    .slice(0, 100)
+    .map(q => ({
+      id: q.id,                                  // links to the order page
+      key: `${q.id}:${q.invoiceNumber ?? ''}`,   // one order can have several invoices
+      accountId: q.accountId,
+      invoice: q.invoiceNumber ?? q.number,
+      date: q.sentAt.toISOString().slice(0, 10),
+      customer: accountById.get(q.accountId)?.name ?? 'Unknown',
+      region: accountById.get(q.accountId)?.region ?? 'Unknown',
+      amount: Math.round(q.amount * 100) / 100,
+      paid: q.invoicePaid ?? q.paid,
+      history: isHistory(q),
+    }));
 
   // Stat cards now respect the same selected window as everything
   // else on the page — a real "Total invoiced" for whatever
@@ -528,11 +602,11 @@ reportsRouter.get('/ledger', async (req, res) => {
   // regardless of filters. Pick period=alltime to genuinely see
   // everything to date.
   const windowedQuotes = paidQuotes.filter(q => q.sentAt >= window.start && q.sentAt < window.end);
-  const accountsWithActivity = new Set(windowedQuotes.map(q => q.accountId)).size;
+  const accountsWithActivity = new Set(windowedQuotes.filter(q => !q.isCredit).map(q => q.accountId)).size;
 
   res.json({
     totalValue: Math.round(windowedQuotes.reduce((s, q) => s + q.amount, 0) * 100) / 100,
-    totalOrders: windowedQuotes.length,
+    totalOrders: new Set(windowedQuotes.filter(q => !q.isCredit).map(q => q.number)).size,
     accountsWithActivity,
     newCustomerCount: newCount,
     myRegions: scope.myRegions,
