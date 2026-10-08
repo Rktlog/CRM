@@ -228,6 +228,7 @@ model Quote {
   shippingDetails Json?    @map("shipping_details") // { company, contact, line1, line2, city, state, postcode, country }
   shipments       Json     @default("[]")           // [{ date, carrier, trackingNumber, trackingUrl }]
   taxTotal        Float?   @map("tax_total")
+  goodsTotal      Float?    @map("goods_total")
   total           Float?   // exact order total incl. tax, from DEAR
   amountPaid      Float?   @map("amount_paid") // paid so far, across all invoices
   // Every invoice and credit note on the order, as DEAR records them, and
