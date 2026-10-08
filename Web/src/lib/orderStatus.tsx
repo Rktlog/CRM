@@ -1,4 +1,4 @@
-import { isHistoryOrder } from './types';
+import { isHistoryOrder, fmtPayDate } from './types';
 
 // One place that turns DEAR's order fields into plain words, used by the
 // Orders list, the order page and the account page.
@@ -22,6 +22,7 @@ export type OrderLike = {
   invoiceDate?: string | null;
   amountDue?: number | null;     // DEAR balance: invoiced - paid - credited
   amountPaid?: number | null;
+  paidAt?: string | null;        // when the last payment was received
   creditedTotal?: number | null;
 };
 
@@ -83,7 +84,17 @@ export function paymentTag(o: OrderLike): Tag | null {
     : { label: 'Not invoiced', tone: 'neutral' };
 }
 
-const Pill = ({ tag }: { tag: Tag }) => <span className={`pill ${tag.tone}`}>{tag.label}</span>;
+const Pill = ({ tag, label, title }: { tag: Tag; label?: string | null; title?: string }) =>
+  <span className={`pill ${tag.tone}`} title={title}>{label ?? tag.label}</span>;
+
+// "Paid 12 Sep": the payment date goes in the pill, so nobody has to open the
+// order to see when it was paid. A part payment shows the date of the last one.
+const DATED = ['Paid', 'Part paid', 'Prepaid', 'Paid, part credited'];
+function payLabel(tag: Tag | null, paidAt?: string | null): string | null {
+  if (!tag || !paidAt || !DATED.includes(tag.label)) return null;
+  const when = fmtPayDate(paidAt);
+  return when ? `${tag.label}${tag.label === 'Part paid' ? ', last' : ''} ${when}` : null;
+}
 
 // The tags for one order, in the order people read them: what kind of
 // order, where it is, whether it's paid. Spreadsheet history shows only
@@ -100,5 +111,5 @@ export function orderStatusPills(o: OrderLike) {
   }
   const stage = stageTag(o);
   const payment = paymentTag(o);
-  return <>{kind}{stage && <Pill tag={stage} />}{payment && <Pill tag={payment} />}</>;
+  return <>{kind}{stage && <Pill tag={stage} />}{payment && <Pill tag={payment} label={payLabel(payment, o.paidAt)} />}</>;
 }

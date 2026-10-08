@@ -228,9 +228,10 @@ model Quote {
   shippingDetails Json?    @map("shipping_details") // { company, contact, line1, line2, city, state, postcode, country }
   shipments       Json     @default("[]")           // [{ date, carrier, trackingNumber, trackingUrl }]
   taxTotal        Float?   @map("tax_total")
-  goodsTotal      Float?    @map("goods_total")
+  goodsTotal      Float?    @map("goods_total") // product lines, ex GST, ex freight/surcharge (Sales Data)
   total           Float?   // exact order total incl. tax, from DEAR
   amountPaid      Float?   @map("amount_paid") // paid so far, across all invoices
+  paidAt          DateTime? @map("paid_at") // when the last payment was received
   // Every invoice and credit note on the order, as DEAR records them, and
   // the balance from them: invoiced - paid - credited (see sync-sales).
   invoices        Json     @default("[]") // [{ number, date, dueDate, status, total, paid }]

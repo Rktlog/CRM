@@ -72,6 +72,7 @@ export type Quote = {
   invoiceNumber?: string | null;
   total?: number | null;       // exact order total from DEAR
   amountPaid?: number | null;  // paid so far, across all invoices
+  paidAt?: string | null;      // when the last payment was received
   invoicedTotal?: number | null;
   creditedTotal?: number | null;
   amountDue?: number | null;   // DEAR balance: invoiced - paid - credited (null = not synced yet)
@@ -215,4 +216,14 @@ export function fmtDuration(days: number): string {
     return `${label} ${half === 1 ? 'month' : 'months'}`;
   }
   return `${Math.round(months)} months`;
+}
+
+// Payment dates: "12 Sep", with the year when it isn't this year. The stored
+// date is the calendar day DEAR recorded, so it is shown as is (UTC).
+export function fmtPayDate(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const sameYear = d.getUTCFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }), timeZone: 'UTC' });
 }

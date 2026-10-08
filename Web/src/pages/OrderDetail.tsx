@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiGet } from '../lib/api';
-import { fmtMoney, fmtDateWithYear } from '../lib/types';
+import { fmtMoney, fmtDateWithYear, fmtPayDate } from '../lib/types';
 import { orderStatusPills, paymentTag, stageTag } from '../lib/orderStatus';
 
 type Line = {
@@ -24,7 +24,7 @@ type Fulfilment = {
 // notes; a credit note applied to an invoice, refunded, or still on account.
 type InvoiceDoc = {
   number: string | null; date: string | null; dueDate: string | null; status: string | null;
-  total: number; paid: number; credited?: number; due?: number;
+  total: number; paid: number; paidAt?: string | null; credited?: number; due?: number;
 };
 type CreditDoc = {
   number: string | null; invoiceNumber?: string | null; date: string | null; status: string | null;
@@ -35,7 +35,7 @@ type Order = {
   id: string; number: string; date: string;
   invoiceDate: string | null; invoiceNumber: string | null;
   reference: string | null; memo: string | null; source: string; miscType: string | null;
-  paid: boolean; paymentStatus: string | null; fulfillmentStatus: string | null; shippingStatus: string | null; pickingStatus: string | null;
+  paid: boolean; paymentStatus: string | null; paidAt?: string | null; fulfillmentStatus: string | null; shippingStatus: string | null; pickingStatus: string | null;
   syncedAt: string;
   contact: { name: string | null; email: string | null; phone: string | null };
   shipTo: { company: string | null; address: string | null; details: ShipDetails | null };
@@ -279,9 +279,9 @@ export default function OrderDetail() {
                       <div className="acct-region">
                         {(() => {
                           const due = inv.due ?? Math.max(0, inv.total - inv.paid - (inv.credited ?? 0));
-                          if (due <= 0.005) return (inv.credited ?? 0) > 0.005 && inv.paid <= 0.005 ? 'settled by credit' : 'paid';
+                          if (due <= 0.005) return (inv.credited ?? 0) > 0.005 && inv.paid <= 0.005 ? 'settled by credit' : `paid${inv.paidAt ? ' ' + fmtPayDate(inv.paidAt) : ''}`;
                           const parts = [
-                            inv.paid > 0.005 ? `${money(inv.paid)} paid` : '',
+                            inv.paid > 0.005 ? `${money(inv.paid)} paid${inv.paidAt ? ' ' + fmtPayDate(inv.paidAt) : ''}` : '',
                             (inv.credited ?? 0) > 0.005 ? `${money(inv.credited!)} credited` : '',
                           ].filter(Boolean);
                           return `${parts.length ? parts.join(', ') + ', ' : ''}${money(due)} due`;

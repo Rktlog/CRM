@@ -93,7 +93,7 @@ export async function toShip(rep: Rep, regions?: string[]) {
 }
 
 // ---------- Unpaid invoices: one row per invoice with money owing ----------
-type InvoiceDoc = { number: string | null; date: string | null; dueDate: string | null; total: number; paid: number; credited?: number; due?: number };
+type InvoiceDoc = { number: string | null; date: string | null; dueDate: string | null; total: number; paid: number; paidAt?: string | null; credited?: number; due?: number };
 
 export async function unpaidInvoices(rep: Rep, regions?: string[]) {
   const accounts = await scope(rep, regions);
@@ -123,6 +123,7 @@ export async function unpaidInvoices(rep: Rep, regions?: string[]) {
           daysOverdue: Math.max(0, daysSince(dueDate)),
           total: cents(i.total),
           paid: cents(i.paid),
+          paidAt: i.paidAt ?? null,
           credited: cents(i.credited ?? 0),
           due: cents(i.due ?? (i.total - i.paid - (i.credited ?? 0))),
         };

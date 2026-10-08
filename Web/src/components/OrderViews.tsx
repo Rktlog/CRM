@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import StateFilter from './StateFilter';
 import { Link, useNavigate } from 'react-router-dom';
 import { apiGet, apiDownload } from '../lib/api';
-import { fmtMoney, fmtDateWithYear, fmtDuration } from '../lib/types';
+import { fmtMoney, fmtDateWithYear, fmtDuration, fmtPayDate } from '../lib/types';
 import { useMe, stateOptionsFor } from '../lib/useMe';
 
 // Order tracking views on the Orders page. Each loads from
@@ -197,7 +197,9 @@ export default function OrderViews({ view }: { view: ViewKey }) {
                   <td>{fmtDateWithYear(r.invoiceDate)}</td>
                   <td>{fmtDateWithYear(r.dueDate)}</td>
                   <td className="num-col num">{fmtMoney(r.total)}</td>
-                  <td className="num-col num">{r.paid + r.credited > 0.005 ? fmtMoney(r.paid + r.credited) : '–'}</td>
+                  <td className="num-col num">
+                    {r.paid + r.credited > 0.005 ? <>{fmtMoney(r.paid + r.credited)}{r.paidAt && <div className="acct-region">{fmtPayDate(r.paidAt)}</div>}</> : '–'}
+                  </td>
                   <td className="num-col num"><b>{fmtMoney(r.due)}</b></td>
                   <td className={`num-col num${r.daysOverdue > 60 ? ' ov-late-d90' : r.daysOverdue > 30 ? ' ov-late-d60' : r.daysOverdue > 0 ? ' ov-late-d30' : ''}`}>
                     {r.daysOverdue > 0 ? fmtDuration(r.daysOverdue) : 'Not yet due'}

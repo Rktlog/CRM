@@ -107,6 +107,7 @@ ordersRouter.get('/search', async (req, res) => {
       total: true,
       paid: true,
       paymentStatus: true,
+      paidAt: true,
       amountDue: true,
       amountPaid: true,
       creditedTotal: true,
@@ -137,6 +138,7 @@ ordersRouter.get('/search', async (req, res) => {
       total: o.total ?? o.amount,
       paid: o.paid,
       paymentStatus: o.paymentStatus,
+      paidAt: o.paidAt,
       amountDue: o.amountDue,
       amountPaid: o.amountPaid,
       creditedTotal: o.creditedTotal,
@@ -313,6 +315,7 @@ ordersRouter.get('/:id', async (req, res) => {
     miscType: o.miscType,
     paid: o.paid,
     paymentStatus: o.paymentStatus,
+    paidAt: o.paidAt,
     // Invoices, credit notes and the balance, as DEAR records them.
     invoices: o.invoices ?? [],
     creditNotes: o.creditNotes ?? [],

@@ -12,6 +12,7 @@ type OrderRow = {
   total: number;
   paid: boolean;
   paymentStatus: string | null;
+  paidAt: string | null;
   fulfillmentStatus: string | null;
   shippingStatus: string | null;
   pickingStatus: string | null;
