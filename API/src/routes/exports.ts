@@ -6,6 +6,36 @@ import { LIVE_ORDER, isHistory, isOwing } from '../lib/orderSource';
 import { wholesalePrice, retailPrice } from '../lib/pricing';
 import { buildPriceList, priceListWorkbook, PriceListAvailability, PriceListStatus } from '../lib/priceList';
 
+// Where a marketing or warranty order was sent: the ship-to name, address and
+// state. These orders are billed to one account (e.g. "Rhino Rhino Marketing")
+// but go to many different people and stores, so the account says nothing about
+// the recipient.
+const STATE_CODES: Record<string, string> = {
+  VICTORIA: 'VIC', 'NEW SOUTH WALES': 'NSW', QUEENSLAND: 'QLD', 'WESTERN AUSTRALIA': 'WA', 'SOUTH AUSTRALIA': 'SA',
+  TASMANIA: 'TAS', 'AUSTRALIAN CAPITAL TERRITORY': 'ACT', 'NORTHERN TERRITORY': 'NT',
+};
+function shipTo(q: {
+  shippingDetails: unknown; shippingCompany: string | null; shippingAddress: string | null;
+  account: { name: string; region: string };
+}) {
+  const d = (q.shippingDetails ?? {}) as Record<string, string | null>;
+  const rawState = (d.state ?? '').trim();
+  // The ship-to state; failing that the state in the saved address text; failing
+  // that blank (the account's own state says nothing about where it was sent).
+  const inText = (q.shippingAddress ?? '').match(/\b(VIC|NSW|QLD|WA|SA|TAS|ACT|NT)\b/i)?.[1]?.toUpperCase();
+  const state = /new zealand/i.test(d.country ?? '') ? 'NZ'
+    : STATE_CODES[rawState.toUpperCase()] ?? (rawState ? rawState.toUpperCase() : inText ?? '');
+  return {
+    name: d.company || q.shippingCompany || d.contact || q.account.name,
+    contact: d.contact ?? '',
+    address: [d.line1, d.line2].filter(Boolean).join(', ') || q.shippingAddress || '',
+    suburb: d.city ?? '',
+    state,
+    postcode: d.postcode ?? '',
+    country: d.country ?? '',
+  };
+}
+
 export const exportsRouter = Router();
 
 function addMonths(d: Date, n: number) {
@@ -617,8 +647,16 @@ exportsRouter.get('/:type', async (req, res) => {
         const label = miscType === 'warranty' ? 'Warranty' : 'Marketing';
         const orderRows = quotes.map(q => {
           const values = q.lines.map(l => lineValue(l.sku, l.quantity));
+          const to = shipTo(q);
           return {
             Account: q.account.name,
+            'Sent to': to.name,
+            Contact: to.contact,
+            Address: to.address,
+            Suburb: to.suburb,
+            State: to.state,
+            Postcode: to.postcode,
+            Country: to.country,
             Region: q.account.region,
             Order: q.number,
             Date: xlDate(q.sentAt),
@@ -634,10 +672,13 @@ exportsRouter.get('/:type', async (req, res) => {
 
         const itemRows = quotes.flatMap(q => q.lines.map(l => {
           const price = wholesaleBySku.get(l.sku);
+          const to = shipTo(q);
           return {
             Order: q.number,
             Date: xlDate(q.sentAt),
             Account: q.account.name,
+            'Sent to': to.name,
+            State: to.state,
             Region: q.account.region,
             SKU: l.sku,
             Product: l.productName,
