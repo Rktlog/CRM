@@ -8,6 +8,7 @@ import AccountTable from '../components/AccountTable';
 import BackorderCard from '../components/BackorderCard';
 import TeamActivityCard from '../components/TeamActivityCard';
 import TeamLogCard from '../components/TeamLogCard';
+import InactiveStockistsCard from '../components/InactiveStockistsCard';
 
 export default function Dashboard() {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
@@ -53,6 +54,7 @@ export default function Dashboard() {
   return (
     <>
       <h1>Dashboard</h1>
+      <InactiveStockistsCard showRep={role === 'manager'} />
       <div className="stat-row">
         <div className="stat flag-teal clickable" onClick={() => navigate('/pipeline')} title="Open the Pipeline">
           <div className="stat-label">Open deals</div>
@@ -96,7 +98,7 @@ export default function Dashboard() {
         return (
           <div className="section">
             <div className="panel-title">
-              Active Customers <span className="plan-count">{customers.length} stores, by their own reorder pace</span>
+              Active customers <span className="plan-count">{customers.length} stores, by their own reorder pace</span>
             </div>
             <div className="health-row">
               {HEALTH_COLUMNS.map(col => (
