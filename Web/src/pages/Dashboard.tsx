@@ -8,7 +8,6 @@ import AccountTable from '../components/AccountTable';
 import BackorderCard from '../components/BackorderCard';
 import TeamActivityCard from '../components/TeamActivityCard';
 import TeamLogCard from '../components/TeamLogCard';
-import InactiveStockistsCard from '../components/InactiveStockistsCard';
 
 export default function Dashboard() {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
@@ -16,6 +15,9 @@ export default function Dashboard() {
   // Money owed across the person's accounts (same figures as Orders → Balances).
   const [owed, setOwed] = useState<{ balance: number; over60: number; d30: number; d60: number } | null>(null);
   const [customers, setCustomers] = useState<{ lastOrderAt: string | null; avgOrderGapDays: number | null; spend365: number }[] | null>(null);
+  // Stockists set up in DEAR that never ordered, or haven't for 12+ months: just the
+  // numbers here; the list is on its own page.
+  const [stockists, setStockists] = useState<{ never: number; lapsed: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
   const { role } = useAuth();
@@ -24,6 +26,8 @@ export default function Dashboard() {
     apiGet('/accounts').then(setAccounts).catch(e => setError(e.message));
     apiGet('/accounts/customers').then(setCustomers).catch(() => {});
     apiGet('/orders/views/balances').then(b => setOwed(b.totals)).catch(() => {});
+    // Never blocks the Dashboard: if this fails the card just doesn't show.
+    apiGet('/accounts/inactive-stockists?limit=0').then(d => setStockists({ never: d.neverCount, lapsed: d.lapsedCount })).catch(() => {});
   }, []);
 
   if (error) return <div className="empty-state">Couldn't load accounts: {error}</div>;
@@ -54,8 +58,18 @@ export default function Dashboard() {
   return (
     <>
       <h1>Dashboard</h1>
-      <InactiveStockistsCard showRep={role === 'manager'} />
       <div className="stat-row">
+        {stockists && stockists.never + stockists.lapsed > 0 && (
+          <div
+            className="stat flag-rust clickable"
+            onClick={() => navigate('/inactive-stockists')}
+            title="Stores set up in DEAR that have never placed an order, or haven't ordered for 12 months or more. Click to see the list."
+          >
+            <div className="stat-label">Inactive stockists</div>
+            <div className="stat-value num">{(stockists.never + stockists.lapsed).toLocaleString('en-AU')}</div>
+            <div className="stat-sub">{stockists.never.toLocaleString('en-AU')} never ordered, {stockists.lapsed.toLocaleString('en-AU')} not for 12+ months</div>
+          </div>
+        )}
         <div className="stat flag-teal clickable" onClick={() => navigate('/pipeline')} title="Open the Pipeline">
           <div className="stat-label">Open deals</div>
           <div className="stat-value num">{openDeals}</div>
