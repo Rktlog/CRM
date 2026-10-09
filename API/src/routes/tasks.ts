@@ -3,6 +3,12 @@ import { hiddenAccountIds } from '../lib/territory';
 import { prisma } from '../lib/prisma';
 import { z } from 'zod';
 
+// The planner's plan is fixed, not a setting: 5 new-lead calls and 5 inactive-customer
+// calls a day (10 in all). Calls a rep schedules by hand are capped at 10 a day.
+const NEW_LEADS_PER_DAY = 5;
+const INACTIVE_PER_DAY = 5;
+const SCHEDULED_CALLS_PER_DAY = 10;
+
 export const tasksRouter = Router();
 
 // "Today" as the rep's own calendar date. The browser sends it as
@@ -25,8 +31,7 @@ async function rolloverTasks(repId: string, today: Date) {
     data: { scheduledDate: today },
   });
 
-  const rep = await prisma.rep.findUnique({ where: { id: repId }, select: { dailyColdCallLimit: true } });
-  const limit = rep?.dailyColdCallLimit ?? 10;
+  const limit = SCHEDULED_CALLS_PER_DAY;
 
   const pending = await prisma.task.findMany({
     where: { repId, type: 'cold_call', fixed: false, reason: null, completed: false, scheduledDate: { lte: today } },
@@ -98,32 +103,32 @@ async function findSuggestions(repId: string, today: Date, newLeadCount: number,
   return { newLeads, inactive, regions: assignedRegions };
 }
 
-// Once a day, top the list up to the numbers in Settings (new leads and
-// overdue customers per day). Tasks rolled over from yesterday count
-// toward today's numbers, so the list never piles up. The claim on
-// last_auto_plan_date makes this run once even if two requests race.
-async function autoPlan(repId: string, today: Date) {
-  const claimed = await prisma.rep.updateMany({
-    where: { id: repId, OR: [{ lastAutoPlanDate: null }, { lastAutoPlanDate: { not: today } }] },
-    data: { lastAutoPlanDate: today },
-  });
-  if (!claimed.count) return;
+// Keeps the day topped up to 5 open new-lead calls and 5 open inactive-customer
+// calls. Finish one and the next fills its place. Tasks rolled over from
+// yesterday count toward the 5 and 5, so the list never piles up.
+// Fills for one rep run one at a time, so two requests at once can't both fill
+// the same gap and leave more than 5.
+const fills = new Map<string, Promise<unknown>>();
+function autoPlan(repId: string, today: Date) {
+  const run = (fills.get(repId) ?? Promise.resolve()).then(() => fillPlan(repId, today));
+  const tail = run.catch(() => {});
+  fills.set(repId, tail);
+  tail.then(() => { if (fills.get(repId) === tail) fills.delete(repId); });
+  return run;
+}
 
-  const rep = await prisma.rep.findUnique({ where: { id: repId }, select: { dailyNewLeadCount: true, dailyInactiveCount: true } });
+async function fillPlan(repId: string, today: Date) {
   const open = await prisma.task.groupBy({
     by: ['reason'],
     where: { repId, scheduledDate: today, completed: false, reason: { not: null } },
     _count: true,
   });
   const openCount = (reason: string) => open.find(o => o.reason === reason)?._count ?? 0;
+  const needLeads = Math.max(0, NEW_LEADS_PER_DAY - openCount('new_lead'));
+  const needInactive = Math.max(0, INACTIVE_PER_DAY - openCount('inactive'));
+  if (!needLeads && !needInactive) return;   // already full: nothing to look up
 
-  const { newLeads, inactive } = await findSuggestions(
-    repId,
-    today,
-    Math.max(0, (rep?.dailyNewLeadCount ?? 5) - openCount('new_lead')),
-    Math.max(0, (rep?.dailyInactiveCount ?? 5) - openCount('inactive')),
-  );
-
+  const { newLeads, inactive } = await findSuggestions(repId, today, needLeads, needInactive);
   const data = [
     ...newLeads.map(a => ({ repId, accountId: a.id, type: 'cold_call' as const, scheduledDate: today, fixed: false, reason: 'new_lead' })),
     ...inactive.map(a => ({ repId, accountId: a.id, type: 'cold_call' as const, scheduledDate: today, fixed: false, reason: 'inactive' })),
@@ -132,7 +137,7 @@ async function autoPlan(repId: string, today: Date) {
 }
 
 // The day's plan. Rolls over anything unfinished, auto-fills from the
-// Settings numbers once a day, then returns every task for the day,
+// fixed 5 + 5 (refilled as tasks are done), then returns every task for the day,
 // including ones already done (shown crossed out, not removed).
 tasksRouter.get('/today', async (req, res) => {
   const repId = req.rep!.id;
@@ -140,7 +145,7 @@ tasksRouter.get('/today', async (req, res) => {
   await rolloverTasks(repId, today);
   await autoPlan(repId, today);
 
-  const [tasks, rep, regions] = await Promise.all([
+  const [tasks, regions] = await Promise.all([
     prisma.task.findMany({
       where: { repId, scheduledDate: today },
       include: {
@@ -154,7 +159,6 @@ tasksRouter.get('/today', async (req, res) => {
       },
       orderBy: { createdAt: 'asc' },
     }),
-    prisma.rep.findUnique({ where: { id: repId }, select: { dailyColdCallLimit: true, dailyNewLeadCount: true, dailyInactiveCount: true } }),
     prisma.repRegion.findMany({ where: { repId }, select: { region: true } }),
   ]);
 
@@ -171,8 +175,8 @@ tasksRouter.get('/today', async (req, res) => {
         account: { ...account, lastActivity: activity[0] ?? null },
       };
     }),
-    limit: rep?.dailyColdCallLimit ?? 10,
-    counts: { newLeads: rep?.dailyNewLeadCount ?? 5, inactive: rep?.dailyInactiveCount ?? 5 },
+    limit: SCHEDULED_CALLS_PER_DAY,
+    counts: { newLeads: NEW_LEADS_PER_DAY, inactive: INACTIVE_PER_DAY },
     regions: regions.map(r => r.region),
   });
 });
@@ -271,6 +275,5 @@ tasksRouter.patch('/:id', async (req, res) => {
 // day; kept for anything that wants a preview).
 tasksRouter.get('/suggested', async (req, res) => {
   const repId = req.rep!.id;
-  const rep = await prisma.rep.findUnique({ where: { id: repId }, select: { dailyNewLeadCount: true, dailyInactiveCount: true } });
-  res.json(await findSuggestions(repId, dateOnly(req.query.date), rep?.dailyNewLeadCount ?? 5, rep?.dailyInactiveCount ?? 5));
+  res.json(await findSuggestions(repId, dateOnly(req.query.date), NEW_LEADS_PER_DAY, INACTIVE_PER_DAY));
 });

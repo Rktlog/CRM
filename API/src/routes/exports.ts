@@ -5,6 +5,8 @@ import { territoryWhere, canSeeAccount } from '../lib/territory';
 import { LIVE_ORDER, isHistory, isOwing } from '../lib/orderSource';
 import { wholesalePrice, retailPrice } from '../lib/pricing';
 import { buildPriceList, priceListWorkbook, PriceListAvailability, PriceListStatus } from '../lib/priceList';
+import { computeConversion } from './conversion';
+import { loadCreditNotes, loadMovements, regionsParam } from './credit';
 
 // Where a marketing or warranty order was sent: the ship-to name, address and
 // state. These orders are billed to one account (e.g. "Rhino Rhino Marketing")
@@ -705,10 +707,58 @@ exportsRouter.get('/:type', async (req, res) => {
           orderBy: { occurredAt: 'desc' },
         });
         const rows = activities.map(a => ({
-          Date: a.occurredAt.toISOString().slice(0, 10), Rep: a.rep?.name ?? 'Unknown', Type: a.type,
+          Date: a.occurredAt.toISOString().slice(0, 10), Rep: a.rep?.name ?? 'Unknown', Type: ({ call: 'Phone', email: 'Email', visit: 'F2F visit' } as Record<string, string>)[a.type] ?? a.type,
           Account: a.account?.name ?? 'Unknown', Region: a.account?.region ?? '', Note: a.note,
         }));
         return sendWorkbook(res, 'rep-activity.xlsx', [{ name: 'Rep Activity', rows }]);
+      }
+
+      case 'conversion': {
+        // Abandoned cart / Prospect / New lead / Inactive stockist, each to an Order and a Sales Quote.
+        const days = Math.min(365, Math.max(7, Math.round(Number(req.query.days)) || 90));
+        const r = await computeConversion(req.rep!, days);
+        const pct = (n: number, d: number) => (d ? Math.round((n / d) * 1000) / 10 : 0);
+        const summary = r.funnels.map(f => ({
+          Funnel: f.title, 'How it is counted': f.description,
+          Started: f.started, Order: f.orders, 'Order %': pct(f.orders, f.started),
+          'Sales Quote': f.quotes, 'Sales Quote %': pct(f.quotes, f.started),
+          'Period from': xlDate(r.from), 'Period to': xlDate(r.to),
+        }));
+        const detail = (key: string) => r.funnels.find(f => f.key === key)!.rows.map(x => ({
+          Customer: x.who, State: x.state, Rep: x.rep ?? '', 'Started on': xlDate(x.started),
+          ...(x.email !== undefined ? { Email: x.email, 'Cart value': x.cartValue ?? 0 } : {}),
+          Order: x.orderNo ?? '', 'Order date': xlDate(x.orderDate),
+          'Sales Quote': x.quoteNo ?? '', 'Sales Quote date': xlDate(x.quoteDate),
+        }));
+        const sheets = [
+          { name: 'Summary', rows: summary },
+          { name: 'Abandoned carts', rows: detail('abandoned_cart') },
+          { name: 'Prospects added to DEAR', rows: detail('prospect') },
+          { name: 'New leads', rows: detail('new_lead') },
+          { name: 'Inactive stockists', rows: detail('inactive_stockist') },
+        ].map(sh => (sh.rows.length ? sh : { ...sh, rows: [{ Note: 'None in this period' }] }));
+        return sendWorkbook(res, 'conversion.xlsx', sheets);
+      }
+
+      case 'credit-movements': {
+        // Every credit note on account, and every credit movement.
+        const regions = regionsParam(req.query.region);
+        const date = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined);
+        const notes = await loadCreditNotes(req.rep!, { regions, q: String(req.query.q ?? '').trim() || undefined });
+        const moves = await loadMovements(req.rep!, {
+          regions, q: String(req.query.q ?? '').trim() || undefined, type: String(req.query.type ?? '') || undefined,
+          from: date(req.query.from), to: date(req.query.to), limit: 20000,
+        });
+        return sendWorkbook(res, 'credit.xlsx', [
+          { name: 'Credit notes', rows: notes.map(n => ({
+            Customer: n.account, State: n.region, Rep: n.rep ?? '', 'Credit no': n.creditNo, Date: n.date ?? '', Order: n.orderNo,
+            Total: n.total, Applied: n.applied, Refunded: n.refunded, 'On account': n.onAccount, 'Reserved for': n.reservedFor ?? '',
+          })) },
+          { name: 'Movements', rows: moves.rows.map(m => ({
+            Date: m.date ?? '', Type: m.type, Customer: m.account, State: m.region, Rep: m.rep ?? '',
+            'Credit no': m.creditNo ?? '', Reference: m.reference ?? '', Amount: m.amount, By: m.by ?? '',
+          })) },
+        ]);
       }
 
       default:

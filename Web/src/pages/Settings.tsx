@@ -25,12 +25,6 @@ export default function Settings() {
   const [saving, setSaving] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Rep's own planner settings
-  const [dailyLimit, setDailyLimit] = useState<number | ''>('');
-  const [dailyNewLeads, setDailyNewLeads] = useState<number | ''>('');
-  const [dailyInactive, setDailyInactive] = useState<number | ''>('');
-  const [plannerSaving, setPlannerSaving] = useState(false);
-
   // Manager: territory assignment
   const [territoryRep, setTerritoryRep] = useState<string>('');
   // Shown under the Save button: what was saved, or why it failed.
@@ -42,27 +36,9 @@ export default function Settings() {
 
   useEffect(() => {
     apiGet('/me').then(me => {
-      setDailyLimit(me.dailyColdCallLimit);
-      setDailyNewLeads(me.dailyNewLeadCount);
-      setDailyInactive(me.dailyInactiveCount);
       setLastSyncedAt(me.lastSyncedAt);
     }).catch(() => {});
   }, []);
-
-  async function savePlannerSettings() {
-    setPlannerSaving(true);
-    try {
-      const patch: any = {};
-      if (dailyLimit !== '') patch.dailyColdCallLimit = Number(dailyLimit);
-      if (dailyNewLeads !== '') patch.dailyNewLeadCount = Number(dailyNewLeads);
-      if (dailyInactive !== '') patch.dailyInactiveCount = Number(dailyInactive);
-      await apiPatch('/me', patch);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setPlannerSaving(false);
-    }
-  }
 
   useEffect(() => {
     if (isManager) {
@@ -168,8 +144,6 @@ export default function Settings() {
     <>
       <h1>Settings</h1>
 
-      {/* Every user: their own Planner in Google Calendar */}
-    
 
       <div className="section">
         <div className="panel-title">Data sync</div>
@@ -187,33 +161,6 @@ export default function Settings() {
           Runs automatically every 30 minutes via the background sync worker (npm run sync) —
           this only updates while that process is actually running.
         </div>
-      </div>
-
-
-      <div className="section">
-        <div className="panel-title">Your planner</div>
-        <div style={{ fontSize: 12.5, color: 'var(--muted)', marginBottom: 14, maxWidth: 560 }}>
-          How much shows up on your Planner each day. Cold call limit caps manually scheduled tasks
-          (anything left over rolls to tomorrow). New leads and inactive customers control the
-          separate suggested-outreach list, pulled from your assigned territory.
-        </div>
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 10 }}>
-          <label style={{ fontSize: 12, color: 'var(--muted)' }}>
-            Daily cold call limit<br />
-            <input type="number" min="1" value={dailyLimit} onChange={e => setDailyLimit(e.target.value === '' ? '' : Number(e.target.value))} style={{ width: 90, padding: '6px 10px', border: '1px solid var(--line)', borderRadius: 3, marginTop: 4 }} />
-          </label>
-          <label style={{ fontSize: 12, color: 'var(--muted)' }}>
-            New leads suggested/day<br />
-            <input type="number" min="0" value={dailyNewLeads} onChange={e => setDailyNewLeads(e.target.value === '' ? '' : Number(e.target.value))} style={{ width: 90, padding: '6px 10px', border: '1px solid var(--line)', borderRadius: 3, marginTop: 4 }} />
-          </label>
-          <label style={{ fontSize: 12, color: 'var(--muted)' }}>
-            Inactive customers suggested/day<br />
-            <input type="number" min="0" value={dailyInactive} onChange={e => setDailyInactive(e.target.value === '' ? '' : Number(e.target.value))} style={{ width: 90, padding: '6px 10px', border: '1px solid var(--line)', borderRadius: 3, marginTop: 4 }} />
-          </label>
-        </div>
-        <button className="btn secondary" style={{ padding: '6px 14px', fontSize: 12.5 }} disabled={plannerSaving} onClick={savePlannerSettings}>
-          {plannerSaving ? 'Saving…' : 'Save'}
-        </button>
       </div>
 
 

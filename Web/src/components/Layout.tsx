@@ -8,11 +8,12 @@ const NAV = [
   { to: '/customers', label: 'Customers' },
   { to: '/accounts', label: 'Accounts' },
   { to: '/orders', label: 'Orders' },
+  { to: '/credit', label: 'Credit' },
   { to: '/products', label: 'Products' },
   { to: '/abandoned-carts', label: 'Abandoned carts' },
   { to: '/sales-data', label: 'Sales Data' },
   { to: '/reports', label: 'Reports' },
-  { to: '/visits', label: 'Visit log' },
+  { to: '/visits', label: 'F2F visit log' },
   { to: '/misc', label: 'Misc' },
   { to: '/settings', label: 'Settings' },
 ];
@@ -23,7 +24,7 @@ export default function Layout() {
   return (
     <div id="app">
       <div className="rail">
-        <div className="brand">Rhino<span>Radar</span></div>
+        <div className="brand">Rhino <span>Radar</span></div>
         {NAV.map(item => (
           <NavLink
             key={item.to}

@@ -23,7 +23,7 @@ export default function TeamActivityCard() {
       ) : (
         <div className="manifest" style={{ border: 'none' }}>
           <div className="m-row head" style={{ gridTemplateColumns: '1.4fr 0.7fr 0.7fr 0.7fr 0.7fr', padding: '8px 0' }}>
-            <div>Rep</div><div className="num">Calls</div><div className="num">Emails</div><div className="num">Visits</div><div className="num">Total</div>
+            <div>Rep</div><div className="num">Phone</div><div className="num">Email</div><div className="num">F2F visits</div><div className="num">Total</div>
           </div>
           {rows.map(r => (
             <div className="m-row" key={r.repId} style={{ gridTemplateColumns: '1.4fr 0.7fr 0.7fr 0.7fr 0.7fr', cursor: 'default', padding: '9px 0' }}>

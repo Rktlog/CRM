@@ -15,7 +15,9 @@ const REPORTS: { key: string; label: string; blurb: string; group: string }[] = 
   { key: 'budget-vs-actual', label: 'Budget vs actual', blurb: "Every rep's quarterly target next to real invoiced totals.", group: 'Working lists' },
   { key: 'accounts', label: 'Full account list', blurb: 'Every account — contact details, region, spend, stage.', group: 'Account & team' },
   { key: 'inactive-customers', label: 'Inactive customers', blurb: 'Overdue relative to their own pace — a ready-made outreach list.', group: 'Account & team' },
-  { key: 'rep-activity', label: 'Rep activity log', blurb: 'Calls, visits, emails logged over a date range.', group: 'Account & team' },
+  { key: 'rep-activity', label: 'Rep activity log', blurb: 'Phone calls, emails and F2F visits logged over a date range.', group: 'Account & team' },
+  { key: 'conversion', label: 'Conversion report', blurb: 'Abandoned carts, new prospects, new leads and inactive stockists, each followed to an order and a sales quote. Every customer listed.', group: 'Account & team' },
+  { key: 'credit-movements', label: 'Credit report', blurb: 'Every credit note on account and every credit movement: issued, applied, refunded, reserved, used.', group: 'Account & team' },
 ];
 
 const ALL_STATES = ['NSW', 'ACT', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'NT', 'NZ'];
@@ -43,7 +45,7 @@ export default function Reports() {
       if (region) params.set('region', region);
       if (isManager && repId) params.set('repId', repId);
       if (key === 'budget-vs-actual') params.set('year', String(year));
-      if (key === 'rep-activity') params.set('days', String(days));
+      if (key === 'rep-activity' || key === 'conversion') params.set('days', String(days));
       await apiDownload(`/exports/${key}?${params.toString()}`, `${key}.xlsx`);
     } catch (e) {
       alert('Download failed — check the API is running.');
@@ -98,7 +100,7 @@ export default function Reports() {
           <option value={90}>Last 90 days</option>
           <option value={365}>Last 365 days</option>
         </select>
-        <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>(last one is for Rep activity log)</span>
+        <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>(the last one is for the Rep activity log and the Conversion report)</span>
       </div>
 
       <div className="section">

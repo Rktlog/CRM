@@ -27,19 +27,19 @@ export default function Visits() {
 
   useEffect(load, []);
 
-  if (error) return <div className="empty-state">Couldn't load visits: {error}</div>;
+  if (error) return <div className="empty-state">Couldn't load F2F visits: {error}</div>;
 
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <h1>Visit log</h1>
-        <button className="btn" onClick={() => setShowNewVisit(true)}>+ New visit</button>
+        <h1>F2F visit log</h1>
+        <button className="btn" onClick={() => setShowNewVisit(true)}>+ Log F2F visit</button>
       </div>
 
       {!rows ? (
         <div className="empty-state">Loading…</div>
       ) : !rows.length ? (
-        <div className="empty-state">No visits logged yet.</div>
+        <div className="empty-state">No F2F visits logged yet.</div>
       ) : (
         <div className="manifest">
           <div className="m-row head" style={{ gridTemplateColumns: '1.4fr 1fr 1fr 2fr 0.8fr' }}>
@@ -67,7 +67,7 @@ export default function Visits() {
 
       {rows && rows.length === 300 && (
         <div style={{ marginTop: 12, fontSize: 12, color: 'var(--muted)' }}>
-          Showing the most recent 300 visits.
+          Showing the most recent 300 F2F visits.
         </div>
       )}
 

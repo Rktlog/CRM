@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, FormEvent } from 'react';
 import { useMe, ALL_STATES } from '../lib/useMe';
 import { useParams, Link } from 'react-router-dom';
+import { ACTIVITY_LABEL } from '../lib/activityLabels';
 import { apiGet, apiPost, apiPatch, apiDownload } from '../lib/api';
 import { orderStatusPills, stageTag, paymentTag } from '../lib/orderStatus';
 import PriceListModal from '../components/PriceListModal';
@@ -262,7 +263,7 @@ export default function AccountDetail() {
           <CreditReservations accountId={account.id} accountName={account.name} />
 
           <div className="card">
-            <h3>Log a call, email, or visit</h3>
+            <h3>Log a phone call, email, or F2F visit</h3>
             <form onSubmit={handleLog}>
               <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                 {(['call', 'email', 'visit'] as const).map(t => (
@@ -270,10 +271,10 @@ export default function AccountDetail() {
                     key={t}
                     type="button"
                     className={'btn secondary' + (type === t ? ' active' : '')}
-                    style={{ textTransform: 'capitalize', opacity: type === t ? 1 : 0.6 }}
+                    style={{ opacity: type === t ? 1 : 0.6 }}
                     onClick={() => setType(t)}
                   >
-                    {t}
+                    {ACTIVITY_LABEL[t]}
                   </button>
                 ))}
               </div>
@@ -305,10 +306,10 @@ export default function AccountDetail() {
                             key={ty}
                             type="button"
                             className={'btn secondary' + (editType === ty ? ' active' : '')}
-                            style={{ textTransform: 'capitalize', opacity: editType === ty ? 1 : 0.6, padding: '4px 10px', fontSize: 12 }}
+                            style={{ opacity: editType === ty ? 1 : 0.6, padding: '4px 10px', fontSize: 12 }}
                             onClick={() => setEditType(ty)}
                           >
-                            {ty}
+                            {ACTIVITY_LABEL[ty]}
                           </button>
                         ))}
                       </div>

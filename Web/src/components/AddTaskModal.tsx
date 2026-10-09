@@ -57,7 +57,7 @@ export default function AddTaskModal({ onCreated, onClose, initialDate }: Props)
               style={{ opacity: type === t ? 1 : 0.55, padding: '6px 12px', fontSize: 12.5 }}
               onClick={() => setType(t)}
             >
-              {t === 'cold_call' ? 'Call' : 'Visit'}
+              {t === 'cold_call' ? 'Phone' : 'F2F visit'}
             </button>
           ))}
         </div>

@@ -147,7 +147,7 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
       <div className="modal-overlay" onClick={onClose}>
         <div className="modal-card" onClick={e => e.stopPropagation()} style={{ textAlign: 'center', padding: '32px 24px' }}>
           <div style={{ fontSize: 28, marginBottom: 8 }}>✓</div>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>Visit logged</div>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>F2F visit logged</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
             {savedName}{photoFile ? ', photo attached' : ''}
           </div>
@@ -159,7 +159,7 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <form className="modal-card" onClick={e => e.stopPropagation()} onSubmit={handleSubmit}>
-        <h3 style={{ marginBottom: 16 }}>Log a visit</h3>
+        <h3 style={{ marginBottom: 16 }}>Log F2F visit</h3>
 
         <AccountPicker accounts={accounts} onChange={setSelection} autoFocus />
 
@@ -168,7 +168,7 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
           <textarea
             value={note}
             onChange={e => setNote(e.target.value)}
-            placeholder="What happened at the visit?"
+            placeholder="What happened at the F2F visit?"
             rows={3}
           />
         </label>
@@ -200,7 +200,7 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
         <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
           <button type="button" className="btn secondary" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn" disabled={saving || !selection || !me || !note.trim()}>
-            {saving ? 'Saving…' : selection?.kind === 'new' ? 'Add store and log visit' : 'Log visit'}
+            {saving ? 'Saving…' : selection?.kind === 'new' ? 'Add store and log F2F visit' : 'Log F2F visit'}
           </button>
         </div>
       </form>

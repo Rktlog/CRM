@@ -1,6 +1,7 @@
 import { DragEvent, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet, apiPatch, apiPost } from '../lib/api';
+import { ACTIVITY_LABEL } from '../lib/activityLabels';
 import AddTaskModal from '../components/AddTaskModal';
 import { addDays, fromISO, localISO, startOfWeek } from '../lib/dates';
 import { STAGE_LABELS, fmtMoney, fmtDateWithYear } from '../lib/types';
@@ -74,8 +75,8 @@ export default function Planner() {
 // not done moves to the next day.
 // ---------------------------------------------------------------------------
 const SECTIONS: { key: string; title: string; match: (t: PlanTask) => boolean }[] = [
-  { key: 'visits', title: 'Visits', match: t => t.type === 'visit' },
-  { key: 'calls', title: 'Scheduled calls', match: t => t.type === 'cold_call' && !t.reason },
+  { key: 'visits', title: 'F2F visits', match: t => t.type === 'visit' },
+  { key: 'calls', title: 'Scheduled phone calls', match: t => t.type === 'cold_call' && !t.reason },
   { key: 'new', title: 'New leads', match: t => t.reason === 'new_lead' },
   { key: 'inactive', title: 'Overdue customers', match: t => t.reason === 'inactive' },
 ];
@@ -101,7 +102,7 @@ function TodayView({ refresh, onChanged }: { refresh: number; onChanged: () => v
         <span><b>{done}</b> of {data.tasks.length} done today</span>
         <span className="plan-summary-note">
           {data.regions.length
-            ? `Auto-planned daily from ${data.regions.join(', ')}: ${data.counts.newLeads} new leads and ${data.counts.inactive} overdue customers (change in Settings). Unfinished tasks move to the next day.`
+            ? `Auto-planned from ${data.regions.join(', ')}: 5 new leads and 5 inactive customers at a time. Finish one and the next fills in. Anything not done moves to the next day.`
             : 'No states assigned yet, so nothing is auto-planned. Ask a manager to assign you in Settings.'}
         </span>
       </div>
@@ -199,7 +200,7 @@ function PlanRow({ task: t, open, onToggle, onDone }: {
             <div><span className="k">Email</span>{a.email ? <a href={`mailto:${a.email}`} className="order-link">{a.email}</a> : '—'}</div>
             <div className="wide">
               <span className="k">Last contact</span>
-              {a.lastActivity ? `${fmtDateWithYear(a.lastActivity.occurredAt)} (${a.lastActivity.type}): ${a.lastActivity.note}` : 'No contact logged yet'}
+              {a.lastActivity ? `${fmtDateWithYear(a.lastActivity.occurredAt)} (${ACTIVITY_LABEL[a.lastActivity.type as keyof typeof ACTIVITY_LABEL] ?? a.lastActivity.type}): ${a.lastActivity.note}` : 'No contact logged yet'}
             </div>
           </div>
 
@@ -214,7 +215,7 @@ function PlanRow({ task: t, open, onToggle, onDone }: {
               <div className="plan-log-types">
                 {(['call', 'email', 'visit'] as const).map(k => (
                   <button key={k} type="button" className={'btn secondary' + (logType === k ? ' on' : '')} onClick={() => setLogType(k)}>
-                    {k === 'call' ? 'Call' : k === 'email' ? 'Email' : 'Visit'}
+                    {ACTIVITY_LABEL[k]}
                   </button>
                 ))}
               </div>
@@ -324,8 +325,8 @@ function CalendarView({ refresh, onChanged, onSchedule }: {
         <button className="btn secondary" onClick={() => goToMonth(1)} aria-label="Next month">›</button>
         <div className="cal-month">{monthLabel}</div>
         <div className="cal-legend">
-          <span><i className="cal-dot visit" /> Visit</span>
-          <span><i className="cal-dot cold_call" /> Call</span>
+          <span><i className="cal-dot visit" /> F2F visit</span>
+          <span><i className="cal-dot cold_call" /> Phone</span>
         </div>
       </div>
 
@@ -364,7 +365,7 @@ function CalendarView({ refresh, onChanged, onSchedule }: {
                   className={`cal-chip ${t.type}${t.completed ? ' done' : ''}`}
                   draggable={!t.completed}
                   onDragStart={e => e.dataTransfer.setData('text/plain', t.id)}
-                  title={`${t.type === 'visit' ? 'Visit' : 'Call'}: ${t.account.name}${t.note ? `, ${t.note}` : ''}`}
+                  title={`${t.type === 'visit' ? 'F2F visit' : 'Phone'}: ${t.account.name}${t.note ? `, ${t.note}` : ''}`}
                 >
                   {t.account.name}
                 </div>
@@ -397,7 +398,7 @@ function CalendarView({ refresh, onChanged, onSchedule }: {
             {selectedTasks.map(t => (
               <div className={'m-row' + (t.completed ? ' cal-row-done' : '')} key={t.id} style={{ gridTemplateColumns: '30px 70px 1.6fr 1fr 150px', cursor: 'default' }}>
                 <input type="checkbox" checked={t.completed} onChange={() => toggleDone(t)} aria-label="Done" />
-                <div><span className={`pill ${t.type === 'visit' ? 'teal' : 'amber'}`}>{t.type === 'visit' ? 'Visit' : 'Call'}</span></div>
+                <div><span className={`pill ${t.type === 'visit' ? 'teal' : 'amber'}`}>{t.type === 'visit' ? 'F2F visit' : 'Phone'}</span></div>
                 <div>
                   <Link to={`/accounts/${t.account.id}`} className="acct-name">{t.account.name}</Link>
                   <div className="acct-region">{t.account.region}{t.note ? `, ${t.note}` : ''}</div>

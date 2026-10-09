@@ -13,9 +13,9 @@ type LogRow = {
 
 const TYPES = [
   { key: '', label: 'All' },
-  { key: 'call', label: 'Calls' },
-  { key: 'email', label: 'Emails' },
-  { key: 'visit', label: 'Visits' },
+  { key: 'call', label: 'Phone' },
+  { key: 'email', label: 'Email' },
+  { key: 'visit', label: 'F2F visits' },
 ] as const;
 const PERIODS = [
   { days: 1, label: 'Today' },
@@ -23,7 +23,7 @@ const PERIODS = [
   { days: 30, label: '30 days' },
   { days: 90, label: '90 days' },
 ];
-const TYPE_LABEL = { call: 'Call', email: 'Email', visit: 'Visit' } as const;
+const TYPE_LABEL = { call: 'Phone', email: 'Email', visit: 'F2F visit' } as const;
 const REFRESH_MS = 60_000;
 
 function when(iso: string): string {
