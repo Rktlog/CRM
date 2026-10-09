@@ -7,6 +7,14 @@ import { LIVE_ORDER } from '../lib/orderSource';
 
 export const accountsRouter = Router();
 
+// A bad id (for example a route that isn't deployed yet, so "inactive-stockists"
+// lands on /:id) must be a 404, not a Prisma error that takes the whole API down.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+accountsRouter.param('id', (_req, res, next, id) => {
+  if (!UUID.test(id)) return res.status(404).json({ error: 'Account not found' });
+  next();
+});
+
 // Registered before '/:id' — otherwise Express would treat
 // "backorders" as an :id value and this route would never match.
 accountsRouter.get('/backorders', async (req, res) => {
@@ -74,6 +82,62 @@ accountsRouter.get('/', async (req, res) => {
 // unpaid balance or a backorder right now. Same territory rule as
 // everything else. Reorder health (recent / due / overdue / lapsed) is
 // worked out in the page from lastOrderAt and avgOrderGapDays.
+// Stockists set up in DEAR that have never placed an order, or haven't ordered
+// for 12 months or more. Counts are for the whole list so the tabs can show
+// them; ?kind=never|lapsed picks one, ?q= searches by name, ?limit&offset page.
+accountsRouter.get('/inactive-stockists', async (req, res) => {
+  // Any failure comes back as a message, never as a crash of the whole API.
+  try {
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '10'), 10) || 0, 0), 100);
+    const offset = Math.max(parseInt(String(req.query.offset ?? '0'), 10) || 0, 0);
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    const kind = req.query.kind === 'never' || req.query.kind === 'lapsed' ? req.query.kind : 'all';
+    const cutoff = new Date(Date.now() - 365 * 86400000);
+
+    const base: any = {
+      AND: [
+        await territoryWhere(req.rep!),
+        {
+          archived: false, misc: false, dearCustomerId: { not: null },
+          // same visibility rule as the Accounts list
+          OR: [{ quotes: { none: {} } }, { quotes: { some: { miscType: null } } }],
+        },
+      ],
+    };
+    const never: any = { lastOrderAt: null };
+    const lapsed: any = { lastOrderAt: { lt: cutoff } };
+    const pick: any = kind === 'never' ? never : kind === 'lapsed' ? lapsed : { OR: [never, lapsed] };
+    const where: any = { AND: [base, pick, ...(q ? [{ name: { contains: q, mode: 'insensitive' } }] : [])] };
+
+    const [neverCount, lapsedCount, matches, rows] = await Promise.all([
+      prisma.account.count({ where: { AND: [base, never] } }),
+      prisma.account.count({ where: { AND: [base, lapsed] } }),
+      prisma.account.count({ where }),
+      limit
+        ? prisma.account.findMany({
+            where,
+            // never ordered first (newest first), then the most recently lapsed
+            orderBy: [{ lastOrderAt: 'desc' }, { createdAt: 'desc' }],
+            skip: offset,
+            take: limit,
+            select: {
+              id: true, name: true, region: true, contactName: true, phone: true, email: true,
+              paymentTerms: true, createdAt: true, lastOrderAt: true, rep: { select: { name: true } },
+            },
+          })
+        : Promise.resolve([] as any[]),
+    ]);
+
+    res.json({
+      neverCount, lapsedCount, matches,
+      rows: rows.map(({ rep, ...a }: any) => ({ ...a, repName: rep?.name ?? null })),
+    });
+  } catch (e) {
+    console.error('inactive-stockists failed', e);
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
 accountsRouter.get('/customers', async (req, res) => {
   const accounts = await prisma.account.findMany({
     where: {
