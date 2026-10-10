@@ -10,6 +10,7 @@ const NAV = [
   { to: '/orders', label: 'Orders' },
   { to: '/credit', label: 'Credit' },
   { to: '/products', label: 'Products' },
+  { to: '/catalogue', label: 'Catalogue' },
   { to: '/abandoned-carts', label: 'Abandoned carts' },
   { to: '/sales-data', label: 'Sales Data' },
   { to: '/reports', label: 'Reports' },

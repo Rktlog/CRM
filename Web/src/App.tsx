@@ -15,10 +15,11 @@ import Misc from './pages/Misc';
 import ProductSearch from './pages/ProductSearch';
 import Orders from './pages/Orders';
 import OrderDetail from './pages/OrderDetail';
-import AbandonedCarts from './pages/Abandonedcarts';
+import AbandonedCarts from './pages/AbandonedCarts';
 import Customers from './pages/Customers';
 import InactiveStockists from './pages/InactiveStockists';
 import Credit from './pages/Credit';
+import Catalogue from './pages/Catalogue';
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { session, loading } = useAuth();
@@ -49,15 +50,15 @@ function Routed() {
         <Route path="reports" element={<Reports />} />
         <Route path="misc" element={<Misc />} />
         <Route path="products" element={<ProductSearch />} />
+        <Route path="catalogue" element={<Catalogue />} />
         <Route path="orders" element={<Orders />} />
         <Route path="orders/:id" element={<OrderDetail />} />
         <Route path="abandoned-carts" element={<AbandonedCarts />} />
         <Route path="customers" element={<Customers />} />
         <Route path="inactive-stockists" element={<InactiveStockists />} />
+        <Route path="credit" element={<Credit />} />
         <Route path="settings" element={<Settings />} />
         <Route path="visits" element={<Visits />} />
-        <Route path="credit" element={<Credit />} />
-        
       </Route>
     </Routes>
   );

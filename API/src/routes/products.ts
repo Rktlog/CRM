@@ -55,6 +55,68 @@ function rank(sku: string, name: string, q: string, words: string[]): number {
   return 4;
 }
 
+// ---------- GET /products/catalogue ----------
+// The photo catalogue: products by brand with stock and price, a page at a time.
+//   ?q= words (any order)  &brand=A,B  &category=  &inStock=1  &withPhoto=1  &limit=48  &offset=0
+// Also returns the brands and categories to filter by (with counts), each ignoring its
+// own filter so choosing a brand doesn't make the other brands vanish.
+productsRouter.get('/catalogue', async (req, res) => {
+  try {
+    const q = String(req.query.q ?? '').trim().toLowerCase();
+    const brands = String(req.query.brand ?? '').split(',').map(b => b.trim()).filter(Boolean);
+    const category = String(req.query.category ?? '').trim();
+    const limit = Math.min(Math.max(Number(req.query.limit) || 48, 1), 96);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+
+    const common: any[] = [{ OR: [{ status: null }, { status: { not: 'Deprecated' } }] }];
+    for (const w of searchWords(q)) {
+      common.push({ OR: [
+        { sku: { contains: w, mode: 'insensitive' } },
+        { name: { contains: w, mode: 'insensitive' } },
+        { brand: { contains: w, mode: 'insensitive' } },
+      ] });
+    }
+    if (req.query.inStock === '1') common.push({ available: { gt: 0 } });
+    if (req.query.withPhoto === '1') common.push({ AND: [{ imageUrl: { not: null } }, { imageUrl: { not: '' } }] });
+    const byBrand = brands.length ? [{ brand: { in: brands } }] : [];
+    const byCategory = category ? [{ category }] : [];
+
+    const [total, rows, brandRows, categoryRows] = await Promise.all([
+      prisma.product.count({ where: { AND: [...common, ...byBrand, ...byCategory] } }),
+      prisma.product.findMany({
+        where: { AND: [...common, ...byBrand, ...byCategory] },
+        orderBy: [{ brand: 'asc' }, { name: 'asc' }],
+        skip: offset, take: limit,
+        select: { sku: true, name: true, brand: true, category: true, uom: true, imageUrl: true, available: true, onHand: true, onOrder: true, prices: true },
+      }),
+      prisma.product.groupBy({ by: ['brand'], where: { AND: [...common, ...byCategory] }, _count: { _all: true } }),
+      prisma.product.groupBy({ by: ['category'], where: { AND: [...common, ...byBrand] }, _count: { _all: true } }),
+    ]);
+
+    const facet = (rows: { _count: { _all: number } }[], key: 'brand' | 'category') =>
+      (rows as any[]).filter(r => r[key]).map(r => ({ name: r[key] as string, count: r._count._all }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+    res.json({
+      total,
+      items: rows.map(p => {
+        const prices = (p.prices as Record<string, number>) ?? {};
+        return {
+          sku: p.sku, name: p.name, brand: p.brand, category: p.category, uom: p.uom, imageUrl: p.imageUrl,
+          available: p.available, onHand: p.onHand, onOrder: p.onOrder,
+          wholesale: pickPrice(prices, WHOLESALE)?.price ?? null,
+          retail: pickPrice(prices, RETAIL)?.price ?? null,
+        };
+      }),
+      brands: facet(brandRows, 'brand'),
+      categories: facet(categoryRows, 'category'),
+    });
+  } catch (e) {
+    console.error('catalogue failed', e);
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
 productsRouter.get('/search', async (req, res) => {
   const q = String(req.query.q ?? '').trim();
   if (q.length < 2) return res.status(400).json({ error: 'Search needs at least 2 characters' });
@@ -300,6 +362,7 @@ productsRouter.get('/search', async (req, res) => {
       name: p.name,
       brand: p.brand,
       category: p.category,
+      imageUrl: p.imageUrl,   // the photo link from the team's sheet (shown small, large on click)
       uom: p.uom,
       onHand: p.onHand,
       allocated: p.allocated,

@@ -3,12 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { apiGet, apiDownload } from '../lib/api';
 import { fmtMoney, fmtDateWithYear } from '../lib/types';
 
-// Warranty and marketing orders. Marketing orders are all billed to one account
-// ("Rhino Rhino Marketing"), which says nothing about them, so each row shows the FULL
-// SHIP-TO DETAILS (name, contact, street, suburb, state, postcode) and the state. A
-// line that is only the billing account's name is left out. The billing account column
-// is not shown for marketing; for warranty only when the orders are billed to more than
-// one account. A row opens the order.
+// Warranty and marketing orders. Most marketing orders are billed to "Rhino Rhino
+// Marketing", but not all, so each row shows the billing ACCOUNT as well as the FULL
+// SHIP-TO DETAILS (name, contact, street, suburb, state, postcode) and the state. The
+// account that most orders are billed to is shown in a quieter tone, so an order billed
+// to any other account stands out. A line of the ship-to that is only the billing
+// account's name is left out. A row opens the order.
 
 type MiscRow = {
   id: string; number: string; date: string; accountId: string; accountName: string;
@@ -18,8 +18,7 @@ type MiscRow = {
 type MiscData = { type: string; count: number; total: number; rows: MiscRow[] };
 type SortKey = 'accountName' | 'sentTo' | 'state' | 'date' | 'amount';
 
-const COLS_WITH_ACCOUNT = '1.3fr 1.5fr 0.5fr 0.85fr 0.85fr 0.85fr 0.6fr';
-const COLS = '2fr 0.5fr 0.9fr 0.9fr 0.9fr 0.6fr';
+const COLS = '1.3fr 1.5fr 0.5fr 0.85fr 0.85fr 0.85fr 0.6fr';
 
 export default function Misc() {
   const [tab, setTab] = useState<'marketing' | 'warranty'>('warranty');
@@ -41,17 +40,21 @@ export default function Misc() {
     else { setSortKey(key); setSortDir(key === 'date' || key === 'amount' ? -1 : 1); }
   }
 
-  // Marketing: never (they are all the one marketing account). Warranty: only when the
-  // orders are billed to different accounts.
-  const showAccount = !!data && tab === 'warranty' && new Set(data.rows.map(r => r.accountId)).size > 1;
-  const cols = showAccount ? COLS_WITH_ACCOUNT : COLS;
+  // The account most orders are billed to (for marketing: Rhino Rhino Marketing).
+  const commonAccountId = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of data?.rows ?? []) counts.set(r.accountId, (counts.get(r.accountId) ?? 0) + 1);
+    let best = '', n = 0;
+    counts.forEach((c, id) => { if (c > n) { best = id; n = c; } });
+    return best;
+  }, [data]);
 
   const filtered = useMemo(() => {
     if (!data) return [];
     const needle = search.trim().toLowerCase();
-    const key: SortKey = sortKey === 'accountName' && !showAccount ? 'date' : sortKey;
-    // Search who it was sent to (name, contact, suburb), the state and the order number.
-    const rows = data.rows.filter(r => !needle || [...(r.sentToLines ?? []), r.sentToState, r.number, showAccount ? r.accountName : '']
+    const key: SortKey = sortKey;
+    // Search the account, the ship-to details, the state and the order number.
+    const rows = data.rows.filter(r => !needle || [r.accountName, ...(r.sentToLines ?? []), r.sentToState, r.number]
       .some(v => (v ?? '').toLowerCase().includes(needle)));
     return [...rows].sort((a, b) => {
       // Nothing saved (no ship-to, or no state) always goes last, whichever way it is sorted.
@@ -65,7 +68,7 @@ export default function Misc() {
       else if (key === 'amount') cmp = a.amount - b.amount;
       return sortDir === 1 ? cmp : -cmp;
     });
-  }, [data, search, sortKey, sortDir, showAccount]);
+  }, [data, search, sortKey, sortDir]);
 
   async function download() {
     setDownloading(true);
@@ -112,7 +115,7 @@ export default function Misc() {
           <div className="toolbar">
             <input
               className="search-input"
-              placeholder="Search ship-to name, address, suburb, state or order…"
+              placeholder="Search account, ship-to name, address, suburb, state or order…"
               value={search}
               onChange={e => setSearch(e.target.value)}
             />
@@ -124,8 +127,8 @@ export default function Misc() {
           ) : (
             <div className="scroll-capped-10">
               <div className="manifest">
-                <div className="m-row head" style={{ gridTemplateColumns: cols }}>
-                  {showAccount && <div className="sortable-head" onClick={() => toggleSort('accountName')}>Account{sortArrow('accountName')}</div>}
+                <div className="m-row head" style={{ gridTemplateColumns: COLS }}>
+                  <div className="sortable-head" onClick={() => toggleSort('accountName')}>Account{sortArrow('accountName')}</div>
                   <div className="sortable-head" onClick={() => toggleSort('sentTo')}>Sent to{sortArrow('sentTo')}</div>
                   <div className="sortable-head" onClick={() => toggleSort('state')}>State{sortArrow('state')}</div>
                   <div>Order</div>
@@ -137,15 +140,13 @@ export default function Misc() {
                   <div
                     className="m-row"
                     key={r.id}
-                    style={{ gridTemplateColumns: cols }}
+                    style={{ gridTemplateColumns: COLS }}
                     onClick={() => navigate(`/orders/${r.id}`)}
                   >
-                    {showAccount && (
-                      <div>
-                        <div className="acct-name">{r.accountName}</div>
-                        <div className="acct-region">{r.region}</div>
-                      </div>
-                    )}
+                    <div>
+                      <div className="acct-name" style={r.accountId === commonAccountId ? { color: 'var(--muted)', fontWeight: 400 } : undefined}>{r.accountName}</div>
+                      <div className="acct-region">{r.region}</div>
+                    </div>
                     <div>
                       {r.sentToLines && r.sentToLines.length ? (
                         <>

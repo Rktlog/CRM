@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { apiGet } from '../lib/api';
+import ProductPhoto from '../components/ProductPhoto';
 
 type Location = { location: string; onHand: number; allocated: number; available: number; onOrder: number };
 type OrderRef = {
@@ -20,6 +21,7 @@ type Product = {
   name: string;
   brand: string | null;
   category: string | null;
+  imageUrl?: string | null; // photo link from the team's sheet
   uom: string | null;
   onHand: number;
   allocated: number;
@@ -148,9 +150,12 @@ export default function ProductSearch() {
                   aria-expanded={open}
                 >
                   <div className="num">{p.sku}</div>
-                  <div>
-                    <div className="acct-name">{p.name}</div>
-                    {p.category && <div className="acct-region">{p.category}</div>}
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                    <ProductPhoto url={p.imageUrl} name={p.name} sku={p.sku} size={44} />
+                    <div>
+                      <div className="acct-name">{p.name}</div>
+                      {p.category && <div className="acct-region">{p.category}</div>}
+                    </div>
                   </div>
                   <div className="hide-sm" style={{ color: 'var(--ink-soft)' }}>{p.brand ?? '—'}</div>
                   <div className="num">{qty(p.onHand)}</div>
@@ -190,6 +195,13 @@ function ProductDetail({ product: p }: { product: Product }) {
 
   return (
     <div className="pd">
+      {/* ---- Photo (click to enlarge) ---- */}
+      {p.imageUrl && (
+        <div style={{ marginBottom: 12 }}>
+          <ProductPhoto url={p.imageUrl} name={p.name} sku={p.sku} size={150} />
+        </div>
+      )}
+
       {/* ---- Stock tiles ---- */}
       <div className="pd-tiles">
         <div className="pd-tile">
