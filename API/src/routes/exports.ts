@@ -6,7 +6,7 @@ import { LIVE_ORDER, isHistory, isOwing } from '../lib/orderSource';
 import { wholesalePrice, retailPrice } from '../lib/pricing';
 import { buildPriceList, priceListWorkbook, PriceListAvailability, PriceListStatus } from '../lib/priceList';
 import { computeConversion } from './conversion';
-import { loadCreditNotes, loadMovements, loadReservations, regionsParam } from './credit';
+import { loadCreditNotes, loadMovements, loadReservations, loadHeld, regionsParam } from './credit';
 
 // Where a marketing or warranty order was sent: the ship-to name, address and
 // state. These orders are billed to one account (e.g. "Rhino Rhino Marketing")
@@ -746,6 +746,7 @@ exportsRouter.get('/:type', async (req, res) => {
         const date = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined);
         const notes = await loadCreditNotes(req.rep!, { regions, q: String(req.query.q ?? '').trim() || undefined });
         const reservations = await loadReservations(req.rep!, { regions, q: String(req.query.q ?? '').trim() || undefined });
+        const held = await loadHeld(req.rep!, { regions, q: String(req.query.q ?? '').trim() || undefined });
         const moves = await loadMovements(req.rep!, {
           regions, q: String(req.query.q ?? '').trim() || undefined, type: String(req.query.type ?? '') || undefined,
           from: date(req.query.from), to: date(req.query.to), limit: 20000,
@@ -755,6 +756,10 @@ exportsRouter.get('/:type', async (req, res) => {
             Customer: n.account, State: n.region, Rep: n.rep ?? '', 'Credit no': n.creditNo, Date: n.date ?? '', Order: n.orderNo,
             Total: n.total, Applied: n.applied, Refunded: n.refunded, 'On account': n.onAccount,
             Reserved: n.reservedAmount, 'Reserved for': n.reservedFor ?? '', Free: n.free,
+          })) },
+          { name: 'Prepayments', rows: held.map(h => ({
+            Customer: h.account, State: h.region, Rep: h.rep ?? '', Order: h.number, Status: h.status, 'Order date': h.orderDate ?? '',
+            Type: h.kind, Amount: h.amount, Action: h.finished ? 'Finished order: apply in DEAR or refund' : 'Held for the open order',
           })) },
           { name: 'Reservations', rows: reservations.map(r => ({
             Name: r.name, Customer: r.account, State: r.region, Rep: r.rep ?? '', Amount: r.amount, 'Credit no': r.creditNo ?? '',
