@@ -7,6 +7,7 @@ import { orderStatusPills, stageTag, paymentTag } from '../lib/orderStatus';
 import PriceListModal from '../components/PriceListModal';
 import CreditReservations from '../components/CreditReservations';
 import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fmtDateWithYear, daysBetween, flagFor, isHistoryOrder, isOwingOrder, amountOwing, fmtDuration } from '../lib/types';
+import { pickCurrentOrder } from '../lib/currentOrder';
 
 export default function AccountDetail() {
   const { id } = useParams<{ id: string }>();
@@ -98,7 +99,8 @@ export default function AccountDetail() {
   // Payment and backorder status come from live DEAR orders only;
   // spreadsheet history keeps its frozen statuses out of this.
   const liveQuotes = account.quotes.filter(q => !isHistoryOrder(q));
-  const openQuote = liveQuotes.find(q => !q.paid) ?? liveQuotes[0];
+  // The current order: the newest one still in play (not voided or credited), paid or not.
+  const openQuote = pickCurrentOrder(liveQuotes);
   const hasBackorder = liveQuotes.some(q => (q.fulfillmentStatus ?? '').toUpperCase() === 'BACKORDERED');
 
   // Amount due: live orders that have been invoiced and aren't fully paid.
