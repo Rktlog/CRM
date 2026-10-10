@@ -4,10 +4,10 @@ import { prisma } from '../lib/prisma';
 import { canSeeAccount, territoryWhere } from '../lib/territory';
 
 // Credit.
-//   - Reservations: the team sets a customer's credit note aside for an order
-//     (credit note no + order / sales quote no). Nobody has to mark it used: the
-//     sync reads DEAR and, once DEAR shows that credit applied to that order,
-//     marks it used by itself.
+//   - Reservations: the team sets a customer's credit note aside, for a specific
+//     order (sales quote no) or for the customer's next order. Nobody has to mark it
+//     used: the sync reads DEAR and, once DEAR shows that credit applied, marks it
+//     used by itself and records which order it went to.
 //   - The Credit page: every credit note on account, and every credit movement
 //     (issued, applied, refunded, reserved, used, released).
 // The credit itself is always applied in DEAR; the CRM only records the plan.
@@ -42,7 +42,7 @@ const NOTES_FROM = Prisma.sql`
   left join crm.reps rp on rp.id = a.rep_id
   cross join lateral jsonb_array_elements(q.credit_notes) c
   left join lateral (
-    select id, order_ref from crm.credit_reservations
+    select id, coalesce(nullif(order_ref, ''), 'next order') as order_ref from crm.credit_reservations
     where credit_no = c->>'number' and status = 'reserved' order by created_at desc limit 1
   ) r on true`;
 
@@ -137,7 +137,7 @@ export async function loadMovements(rep: Rep, f: CreditFilters): Promise<{ rows:
       cross join lateral jsonb_array_elements(coalesce(c->'refundsPaid', '[]'::jsonb)) rf
       union all
       select r.created_at::date, 'Reserved', a.id, a.name, a.region, rp.name,
-             r.credit_no, r.order_ref, r.amount, cb.name
+             r.credit_no, coalesce(nullif(r.order_ref, ''), 'Next order'), r.amount, cb.name
       from crm.credit_reservations r
       join crm.accounts a on a.id = r.from_account_id
       left join crm.reps rp on rp.id = a.rep_id
@@ -145,7 +145,7 @@ export async function loadMovements(rep: Rep, f: CreditFilters): Promise<{ rows:
       where ${scopeSql}
       union all
       select r.resolved_at::date, case when r.status = 'used' then 'Used' else 'Released' end, a.id, a.name, a.region, rp.name,
-             r.credit_no, r.order_ref, r.amount, coalesce(rb.name, case when r.status = 'used' then 'Found in DEAR' else null end)
+             r.credit_no, coalesce(r.used_on_order, nullif(r.order_ref, ''), 'Next order'), r.amount, coalesce(rb.name, case when r.status = 'used' then 'Found in DEAR' else null end)
       from crm.credit_reservations r
       join crm.accounts a on a.id = r.from_account_id
       left join crm.reps rp on rp.id = a.rep_id
@@ -199,7 +199,7 @@ creditRouter.get('/account/:id', async (req, res) => {
 
     const [credit, reserved, notes] = await Promise.all([creditInDear(v.account.id), reservedFrom(v.account.id), loadCreditNotes(req.rep!, {}, v.account.id)]);
     const rows = await prisma.$queryRaw<any[]>`
-      select c.id, c.amount, c.order_ref as "orderRef", c.credit_no as "creditNo", c.note, c.status,
+      select c.id, c.amount, nullif(c.order_ref, '') as "orderRef", c.credit_no as "creditNo", c.used_on_order as "usedOnOrder", c.note, c.status,
              c.created_at as "createdAt", c.resolved_at as "resolvedAt",
              c.from_account_id as "fromAccountId", fa.name as "fromName",
              c.to_account_id as "toAccountId", ta.name as "toName",
@@ -227,7 +227,8 @@ creditRouter.get('/account/:id', async (req, res) => {
         amount: cents(r.amount),
         direction: r.fromAccountId === r.toAccountId ? 'own' : r.fromAccountId === v.account.id ? 'out' : 'in',
         // reserved, but the credit note has since changed in DEAR (applied elsewhere, refunded)
-        stale: r.status === 'reserved' && r.creditNo != null && (onAccountOf.get(r.creditNo) ?? 0) < r.amount - 0.005,
+        // (only for a specific order: for "next order" a drop in the credit means it was used)
+        stale: r.status === 'reserved' && r.creditNo != null && !!r.orderRef && (onAccountOf.get(r.creditNo) ?? 0) < r.amount - 0.005,
       })),
     });
   } catch (e) {
@@ -237,17 +238,19 @@ creditRouter.get('/account/:id', async (req, res) => {
 });
 
 // ---------- POST /credit/account/:id/reserve ----------
-// { creditNo, orderNo, note? }: set a credit note aside for an order or sales quote.
-// Only this customer's own credit, for their own order.
+// { creditNo, orderNo?, note? }: set a credit note aside for a specific order or sales
+// quote, or (no orderNo) for the customer's next order. Only this customer's own credit.
 creditRouter.post('/account/:id/reserve', async (req, res) => {
   try {
     const v = await visibleAccount(req.rep!, req.params.id);
     if ('error' in v) { const d = denied(v.error!); return res.status(d.status).json(d.body); }
 
     const creditNo = String(req.body?.creditNo ?? '').trim().toUpperCase();
-    const orderNo = String(req.body?.orderNo ?? '').trim().toUpperCase();
+    const orderText = String(req.body?.orderNo ?? '').trim().toUpperCase();
     if (!creditNo) return res.status(400).json({ error: 'Choose the credit note' });
-    if (!/^SQ\d{3,}$/.test(orderNo)) return res.status(400).json({ error: 'Enter the order or sales quote number, like SQ37512' });
+    // Blank = for the customer's next order. Otherwise a sales quote number.
+    if (orderText && !/^SQ\d{3,}$/.test(orderText)) return res.status(400).json({ error: 'Enter the order or sales quote number, like SQ37512, or leave it for their next order' });
+    const orderNo = orderText || null;
 
     const note = (await loadCreditNotes(req.rep!, {}, v.account.id)).find(n => n.creditNo.toUpperCase() === creditNo);
     if (!note) return res.status(400).json({ error: `${creditNo} isn't a credit note on this account` });
@@ -255,7 +258,7 @@ creditRouter.post('/account/:id/reserve', async (req, res) => {
     if (note.reservationId) return res.status(400).json({ error: `${creditNo} is already reserved for ${note.reservedFor}` });
 
     // If the order is already in the CRM it must be this customer's, and not voided.
-    const order = await prisma.quote.findFirst({ where: { number: orderNo }, select: { accountId: true, fulfillmentStatus: true } });
+    const order = orderNo ? await prisma.quote.findFirst({ where: { number: orderNo }, select: { accountId: true, fulfillmentStatus: true } }) : null;
     if (order && order.accountId !== v.account.id) return res.status(400).json({ error: `${orderNo} belongs to a different customer` });
     if (order && (order.fulfillmentStatus ?? '').toUpperCase() === 'VOIDED') return res.status(400).json({ error: `${orderNo} is voided` });
 
