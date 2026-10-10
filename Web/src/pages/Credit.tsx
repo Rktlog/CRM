@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { apiGet, apiDownload } from '../lib/api';
 import { fmtMoney, fmtDate } from '../lib/types';
 import { groupReservations, groupStatus } from '../lib/creditGroups';
@@ -41,12 +41,17 @@ const STATUS_WORD = { reserved: 'Reserved', used: 'Used', cancelled: 'Released' 
 export default function Credit() {
   const me = useMe();
   const stateOptions = stateOptionsFor(me);
-  const [tab, setTab] = useState<'notes' | 'prepayments' | 'reservations' | 'moves'>('notes');
+  // Links like /credit?tab=prepayments&view=all&q=MOOII open straight onto a tab and a customer.
+  const [params] = useSearchParams();
+  const startTab = params.get('tab');
+  const [tab, setTab] = useState<'notes' | 'prepayments' | 'reservations' | 'moves'>(
+    startTab === 'prepayments' || startTab === 'reservations' || startTab === 'moves' ? startTab : 'notes');
   const [region, setRegion] = useState('');
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(params.get('q') ?? '');
   const [status, setStatus] = useState('open');
   const [resStatus, setResStatus] = useState('reserved');
-  const [heldView, setHeldView] = useState<'apply' | 'open' | 'all'>('apply');
+  const startView = params.get('view');
+  const [heldView, setHeldView] = useState<'apply' | 'open' | 'all'>(startView === 'open' || startView === 'all' ? startView : 'apply');
   const [held, setHeld] = useState<Held[] | null>(null);
   const [heldTotals, setHeldTotals] = useState<HeldTotals | null>(null);
   const [reservations, setReservations] = useState<Reservation[] | null>(null);

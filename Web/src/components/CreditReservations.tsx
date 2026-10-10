@@ -45,8 +45,22 @@ export default function CreditReservations({ accountId, accountName }: { account
 
   if (error || !credit) return null;
   const withCredit = credit.notes.filter(n => n.onAccount > 0.005);
-  // Nothing to show: no credit, nothing reserved.
-  if (credit.creditInDear <= 0.005 && !credit.reservations.length && !withCredit.length) return null;
+  const heldLink = `/credit?tab=prepayments&view=all&q=${encodeURIComponent(accountName ?? '')}`;
+  // Nothing at all: no credit, nothing reserved, nothing held on orders.
+  if (credit.creditInDear <= 0.005 && !credit.reservations.length && !withCredit.length && credit.otherCredit <= 0.005) return null;
+  // No credit notes, but money is held on orders: say why there is nothing to reserve, instead of vanishing.
+  if (credit.creditInDear <= 0.005 && !credit.reservations.length && !withCredit.length) {
+    return (
+      <div className="card credit-card">
+        <h3>Credit</h3>
+        <div className="acct-region">
+          No credit notes on account, so there is nothing to reserve here. {fmtMoney(credit.otherCredit)} is held on orders as a prepayment
+          or overpayment, which is not a credit note.{' '}
+          <Link to={heldLink} className="order-link">See those orders</Link>
+        </div>
+      </div>
+    );
+  }
 
   async function close(r: Reservation, status: 'used' | 'cancelled') {
     const what = status === 'used' ? 'Mark this credit as applied in DEAR? (When it has a credit no, this happens by itself.)' : 'Release this reservation and free the credit?';
@@ -81,7 +95,8 @@ export default function CreditReservations({ accountId, accountName }: { account
       )}
       {credit.otherCredit > 0.005 && (
         <div className="acct-region" style={{ marginBottom: 8 }}>
-          Also {fmtMoney(credit.otherCredit)} is held as a prepayment or overpayment on orders. That is not a credit note, so it is not counted above or free to reserve.
+          Also {fmtMoney(credit.otherCredit)} is held as a prepayment or overpayment on orders. That is not a credit note, so it is not counted above or free to reserve.{' '}
+          <Link to={heldLink} className="order-link">See those orders</Link>
         </div>
       )}
 

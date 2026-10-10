@@ -124,9 +124,13 @@ export default function AccountDetail() {
       const unapplied = q.unappliedCredit ?? 0;
       // Overpaid: DEAR's balance on the order is below zero.
       const overpaid = (q.amountDue ?? 0) < -0.005 ? -q.amountDue! : 0;
-      return { q, credit: unapplied + overpaid, notes, prepayment: Math.max(0, unapplied - fromNotes), overpaid };
+      return { q, credit: unapplied + overpaid, notes, fromNotes, prepayment: Math.max(0, unapplied - fromNotes), overpaid };
     });
   const totalCredit = creditOrders.reduce((s, c) => s + c.credit, 0);
+  // What that credit is made of: credit notes, prepayments not yet applied, overpaid orders.
+  const totalNotes = creditOrders.reduce((s, c) => s + c.fromNotes, 0);
+  const totalPrepaid = creditOrders.reduce((s, c) => s + c.prepayment, 0);
+  const totalOverpaid = creditOrders.reduce((s, c) => s + c.overpaid, 0);
   const balance = totalDue - totalCredit;
   const hasMoneyDetail = dueOrders.length > 0 || creditOrders.length > 0;
 
@@ -204,7 +208,9 @@ export default function AccountDetail() {
             <div className="acct-region">
               {[
                 dueOrders.length ? `${fmtMoney(totalDue)} owing on ${dueOrders.length} ${dueOrders.length === 1 ? 'invoice' : 'invoices'}` : '',
-                creditOrders.length ? `${fmtMoney(totalCredit)} credit on account` : '',
+                totalNotes > 0.005 ? `${fmtMoney(totalNotes)} on credit notes` : '',
+                totalPrepaid > 0.005 ? `${fmtMoney(totalPrepaid)} prepaid and not yet applied` : '',
+                totalOverpaid > 0.005 ? `${fmtMoney(totalOverpaid)} overpaid` : '',
               ].filter(Boolean).join(', ') || 'Nothing owing.'}
               {hasMoneyDetail && !showDue ? '. Click for details.' : ''}
             </div>
