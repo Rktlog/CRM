@@ -15,7 +15,7 @@ import Misc from './pages/Misc';
 import ProductSearch from './pages/ProductSearch';
 import Orders from './pages/Orders';
 import OrderDetail from './pages/OrderDetail';
-import AbandonedCarts from './pages/AbandonedCarts';
+import AbandonedCarts from './pages/Abandonedcarts';
 import Customers from './pages/Customers';
 import InactiveStockists from './pages/InactiveStockists';
 import Credit from './pages/Credit';
