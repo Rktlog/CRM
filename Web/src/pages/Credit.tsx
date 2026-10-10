@@ -5,13 +5,18 @@ import { fmtMoney, fmtDate } from '../lib/types';
 import { useMe, stateOptionsFor } from '../lib/useMe';
 import StateFilter from '../components/StateFilter';
 
-// Credit: every credit note on account, and every credit movement, so the team can
-// follow where credit has gone. Credit is applied in DEAR; reservations are the
-// team's plan and are marked used by themselves when DEAR shows them applied.
+// Credit: every credit note on account, every reservation (one row each, whose status
+// changes from Reserved to Used when DEAR shows the credit applied), and every credit
+// movement, so the team can follow where credit has gone. Credit is applied in DEAR.
 
 type NoteRow = {
   accountId: string; account: string; region: string; rep: string | null; orderNo: string; creditNo: string; date: string | null;
-  total: number; applied: number; refunded: number; onAccount: number; reservationId: string | null; reservedFor: string | null;
+  total: number; applied: number; refunded: number; onAccount: number; reservedAmount: number; reservedFor: string | null; free: number;
+};
+type Reservation = {
+  id: string; name: string; accountId: string; account: string; region: string; rep: string | null; amount: number;
+  creditNo: string | null; orderRef: string | null; usedOnOrder: string | null; note: string | null;
+  status: 'reserved' | 'used' | 'cancelled'; createdAt: string; createdBy: string | null; resolvedAt: string | null; resolvedBy: string | null;
 };
 type Totals = { onAccount: number; reserved: number; free: number; openNotes: number; customers: number };
 type Move = {
@@ -19,18 +24,19 @@ type Move = {
   creditNo: string | null; reference: string | null; amount: number; by: string | null;
 };
 const PAGE = 100;
-const TONE: Record<string, string> = {
-  'Credit note issued': 'teal', 'Applied to invoice': 'neutral', 'Refunded to customer': 'rust',
-  Reserved: 'amber', Used: 'teal', Released: 'neutral',
-};
+const TONE: Record<string, string> = { 'Credit note issued': 'teal', 'Applied to invoice': 'neutral', 'Refunded to customer': 'rust' };
+const STATUS_TONE = { reserved: 'amber', used: 'teal', cancelled: 'neutral' } as const;
+const STATUS_WORD = { reserved: 'Reserved', used: 'Used', cancelled: 'Released' } as const;
 
 export default function Credit() {
   const me = useMe();
   const stateOptions = stateOptionsFor(me);
-  const [tab, setTab] = useState<'notes' | 'moves'>('notes');
+  const [tab, setTab] = useState<'notes' | 'reservations' | 'moves'>('notes');
   const [region, setRegion] = useState('');
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('open');
+  const [resStatus, setResStatus] = useState('reserved');
+  const [reservations, setReservations] = useState<Reservation[] | null>(null);
   const [type, setType] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -60,13 +66,19 @@ export default function Credit() {
         p.set('status', status);
         setLoading(true);
         apiGet(`/credit/notes?${p.toString()}`).then(d => { setNotes(d.rows); setTotals(d.totals); }).catch(e => setError(e.message)).finally(() => setLoading(false));
+      } else if (tab === 'reservations') {
+        apiGet(`/credit/notes?${base().toString()}`).then(d => setTotals(d.totals)).catch(() => {});
+        const p2 = base();
+        if (resStatus) p2.set('status', resStatus);
+        setLoading(true);
+        apiGet(`/credit/reservations?${p2.toString()}`).then(d => setReservations(d.rows)).catch(e => setError(e.message)).finally(() => setLoading(false));
       } else {
         apiGet(`/credit/notes?${base().toString()}`).then(d => setTotals(d.totals)).catch(() => {});
         loadMoves(0, false);
       }
     }, search ? 300 : 0);
     return () => clearTimeout(t);
-  }, [tab, region, search, status, type, from, to]);
+  }, [tab, region, search, status, resStatus, type, from, to]);
 
   function loadMoves(offset: number, append: boolean) {
     const p = base();
@@ -98,7 +110,7 @@ export default function Credit() {
     <>
       <h1>Credit</h1>
       <div className="stock-as-of">
-        Every credit note on account and every credit movement. Credit is applied in DEAR. A reservation is the team's plan, and it is marked used by itself once DEAR shows it applied.
+        Every credit note on account, every reservation and every credit movement. Credit is applied in DEAR. A reservation is the team's plan, and the same row is marked used by itself once DEAR shows that credit note applied.
       </div>
 
       <div className="stat-row" style={{ margin: '12px 0' }}>
@@ -116,6 +128,7 @@ export default function Credit() {
 
       <div className="tab-bar" style={{ marginBottom: 12 }}>
         <button className={'tab' + (tab === 'notes' ? ' active' : '')} onClick={() => setTab('notes')}>Credit on account</button>
+        <button className={'tab' + (tab === 'reservations' ? ' active' : '')} onClick={() => setTab('reservations')}>Reservations</button>
         <button className={'tab' + (tab === 'moves' ? ' active' : '')} onClick={() => setTab('moves')}>Movements</button>
       </div>
 
@@ -136,7 +149,7 @@ export default function Credit() {
             : (
               <div className="manifest">
                 <div className="m-row head" style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 0.8fr 0.8fr 0.9fr 0.9fr 1.2fr' }}>
-                  <div>Customer</div><div>State</div><div>Credit no</div><div>Date</div><div className="num">Total</div><div className="num">Applied</div><div className="num">On account</div><div>Reserved for</div>
+                  <div>Customer</div><div>State</div><div>Credit no</div><div>Date</div><div className="num">Total</div><div className="num">Applied</div><div className="num">On account</div><div>Reserved</div>
                 </div>
                 {notes.map(n => (
                   <div className="m-row" key={n.creditNo + n.orderNo} style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 0.8fr 0.8fr 0.9fr 0.9fr 1.2fr', cursor: 'default' }}>
@@ -147,7 +160,52 @@ export default function Credit() {
                     <div className="num">{fmtMoney(n.total)}</div>
                     <div className="num">{fmtMoney(n.applied + n.refunded)}</div>
                     <div className="num"><b>{fmtMoney(n.onAccount)}</b></div>
-                    <div>{n.reservedFor ? <span className="pill amber">{n.reservedFor}</span> : n.onAccount > 0.005 ? <span className="acct-region">Free</span> : <span className="acct-region">Used</span>}</div>
+                    <div>
+                      {n.reservedAmount > 0.005 && <span className="pill amber">{fmtMoney(n.reservedAmount)}{n.reservedFor ? ` · ${n.reservedFor}` : ''}</span>}
+                      {n.reservedAmount <= 0.005 && <span className="acct-region">{n.onAccount > 0.005 ? 'Free' : 'Used'}</span>}
+                      {n.reservedAmount > 0.005 && n.free > 0.005 && <div className="acct-region">{fmtMoney(n.free)} free</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+        </>
+      )}
+
+      {!error && tab === 'reservations' && (
+        <>
+          <div className="controls" style={{ marginBottom: 8 }}>
+            <select value={resStatus} onChange={e => setResStatus(e.target.value)} aria-label="Reservation status">
+              <option value="reserved">Reserved</option>
+              <option value="used">Used</option>
+              <option value="cancelled">Released</option>
+              <option value="">All reservations</option>
+            </select>
+          </div>
+          {loading && !reservations ? <div className="empty-state">Loading…</div>
+            : !reservations || !reservations.length ? <div className="empty-state">No reservations match.</div>
+            : (
+              <div className="manifest">
+                <div className="m-row head" style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 0.9fr 1fr 1.6fr 1fr' }}>
+                  <div>Name</div><div>State</div><div className="num">Amount</div><div>Credit no</div><div>Sales order / quote</div><div>Note</div><div>Status</div>
+                </div>
+                {reservations.map(r => (
+                  <div className="m-row" key={r.id} style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 0.9fr 1fr 1.6fr 1fr', cursor: 'default' }}>
+                    <div>
+                      <Link to={`/accounts/${r.accountId}`} className="order-link">{r.name}</Link>
+                      <div className="acct-region">{r.name !== r.account ? `${r.account}. ` : ''}{r.createdBy ?? ''}{r.createdBy ? ', ' : ''}{r.createdAt ? fmtDate(r.createdAt) : ''}</div>
+                    </div>
+                    <div>{r.region}</div>
+                    <div className="num"><b>{fmtMoney(r.amount)}</b></div>
+                    <div>{r.creditNo ?? ''}</div>
+                    <div>{r.usedOnOrder ?? r.orderRef ?? <span className="acct-region">Next order</span>}</div>
+                    <div className="acct-region">{r.note ?? ''}</div>
+                    <div>
+                      <span className={`pill ${STATUS_TONE[r.status]}`}>{STATUS_WORD[r.status]}</span>
+                      {r.status !== 'reserved' && r.resolvedAt && (
+                        <div className="acct-region">{fmtDate(r.resolvedAt)}{r.status === 'used' && r.resolvedBy === 'Found in DEAR' ? ', DEAR' : r.resolvedBy ? `, ${r.resolvedBy}` : ''}</div>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -160,7 +218,7 @@ export default function Credit() {
           <div className="controls" style={{ marginBottom: 8, flexWrap: 'wrap' }}>
             <select value={type} onChange={e => setType(e.target.value)} aria-label="Movement type">
               <option value="">All movements</option>
-              {(types.length ? types : ['Credit note issued', 'Applied to invoice', 'Refunded to customer', 'Reserved', 'Used', 'Released']).map(t => <option key={t} value={t}>{t}</option>)}
+              {(types.length ? types : ['Credit note issued', 'Applied to invoice', 'Refunded to customer']).map(t => <option key={t} value={t}>{t}</option>)}
             </select>
             <label className="acct-region">From <input type="date" value={from} onChange={e => setFrom(e.target.value)} /></label>
             <label className="acct-region">To <input type="date" value={to} onChange={e => setTo(e.target.value)} /></label>

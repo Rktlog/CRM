@@ -6,7 +6,7 @@ import { LIVE_ORDER, isHistory, isOwing } from '../lib/orderSource';
 import { wholesalePrice, retailPrice } from '../lib/pricing';
 import { buildPriceList, priceListWorkbook, PriceListAvailability, PriceListStatus } from '../lib/priceList';
 import { computeConversion } from './conversion';
-import { loadCreditNotes, loadMovements, regionsParam } from './credit';
+import { loadCreditNotes, loadMovements, loadReservations, regionsParam } from './credit';
 
 // Where a marketing or warranty order was sent: the ship-to name, address and
 // state. These orders are billed to one account (e.g. "Rhino Rhino Marketing")
@@ -16,7 +16,7 @@ const STATE_CODES: Record<string, string> = {
   VICTORIA: 'VIC', 'NEW SOUTH WALES': 'NSW', QUEENSLAND: 'QLD', 'WESTERN AUSTRALIA': 'WA', 'SOUTH AUSTRALIA': 'SA',
   TASMANIA: 'TAS', 'AUSTRALIAN CAPITAL TERRITORY': 'ACT', 'NORTHERN TERRITORY': 'NT',
 };
-function shipTo(q: {
+export function shipTo(q: {
   shippingDetails: unknown; shippingCompany: string | null; shippingAddress: string | null;
   account: { name: string; region: string };
 }) {
@@ -745,6 +745,7 @@ exportsRouter.get('/:type', async (req, res) => {
         const regions = regionsParam(req.query.region);
         const date = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined);
         const notes = await loadCreditNotes(req.rep!, { regions, q: String(req.query.q ?? '').trim() || undefined });
+        const reservations = await loadReservations(req.rep!, { regions, q: String(req.query.q ?? '').trim() || undefined });
         const moves = await loadMovements(req.rep!, {
           regions, q: String(req.query.q ?? '').trim() || undefined, type: String(req.query.type ?? '') || undefined,
           from: date(req.query.from), to: date(req.query.to), limit: 20000,
@@ -752,7 +753,15 @@ exportsRouter.get('/:type', async (req, res) => {
         return sendWorkbook(res, 'credit.xlsx', [
           { name: 'Credit notes', rows: notes.map(n => ({
             Customer: n.account, State: n.region, Rep: n.rep ?? '', 'Credit no': n.creditNo, Date: n.date ?? '', Order: n.orderNo,
-            Total: n.total, Applied: n.applied, Refunded: n.refunded, 'On account': n.onAccount, 'Reserved for': n.reservedFor ?? '',
+            Total: n.total, Applied: n.applied, Refunded: n.refunded, 'On account': n.onAccount,
+            Reserved: n.reservedAmount, 'Reserved for': n.reservedFor ?? '', Free: n.free,
+          })) },
+          { name: 'Reservations', rows: reservations.map(r => ({
+            Name: r.name, Customer: r.account, State: r.region, Rep: r.rep ?? '', Amount: r.amount, 'Credit no': r.creditNo ?? '',
+            'Sales order / quote': r.orderRef ?? 'Next order', 'Used on': r.usedOnOrder ?? '', Note: r.note ?? '',
+            Status: r.status === 'cancelled' ? 'Released' : r.status === 'used' ? 'Used' : 'Reserved',
+            'Reserved on': xlDate(new Date(r.createdAt)), 'Reserved by': r.createdBy ?? '',
+            'Closed on': r.resolvedAt ? xlDate(new Date(r.resolvedAt)) : '', 'Closed by': r.resolvedBy ?? '',
           })) },
           { name: 'Movements', rows: moves.rows.map(m => ({
             Date: m.date ?? '', Type: m.type, Customer: m.account, State: m.region, Rep: m.rep ?? '',
