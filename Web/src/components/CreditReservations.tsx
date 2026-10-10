@@ -12,6 +12,10 @@ import { groupReservations, groupStatus, type ReservationGroup } from '../lib/cr
 // Several credit notes can be reserved for the SAME order in one go (tick them, enter the
 // order once). Reservations for the same order are shown together:
 // "SQ37512: 3 credit notes, $425.00, Used".
+//
+// Each piece of money appears ONCE. A reservation row carries its credit note's details
+// (date), and a credit note only gets a row of its own for the part that is still free, so
+// the same $197.87 is never listed both as a credit note and as a reservation.
 
 type Note = {
   creditNo: string; date: string | null; orderNo: string; total: number; onAccount: number;
@@ -45,6 +49,9 @@ export default function CreditReservations({ accountId, accountName }: { account
 
   if (error || !credit) return null;
   const withCredit = credit.notes.filter(n => n.onAccount > 0.005);
+  // A credit note is listed on its own only for the part that is still free; reserved parts show as reservations.
+  const freeNotes = withCredit.filter(n => n.free > 0.005);
+  const noteOf = new Map(credit.notes.map(n => [n.creditNo.toUpperCase(), n]));
   const heldLink = `/credit?tab=prepayments&view=all&q=${encodeURIComponent(accountName ?? '')}`;
   // Nothing at all: no credit, nothing reserved, nothing held on orders.
   if (credit.creditInDear <= 0.005 && !credit.reservations.length && !withCredit.length && credit.otherCredit <= 0.005) return null;
@@ -100,18 +107,19 @@ export default function CreditReservations({ accountId, accountName }: { account
         </div>
       )}
 
-      {withCredit.length > 0 && (
+      {freeNotes.length > 0 && (
         <div className="credit-list">
-          {withCredit.map(n => (
+          {freeNotes.map(n => (
             <div className="credit-row" key={n.creditNo}>
               <div>
                 <div className="acct-name">{n.creditNo} <span className="acct-region">{n.date ? fmtDate(n.date) : ''}</span></div>
-                <div className="acct-region">{fmtMoney(n.onAccount)} on account{n.onAccount < n.total - 0.005 ? ` (of ${fmtMoney(n.total)})` : ''}</div>
+                <div className="acct-region">
+                  {fmtMoney(n.free)} free
+                  {n.reservedAmount > 0.005 ? `, the rest of this credit note is reserved` : ' on account'}
+                  {n.onAccount < n.total - 0.005 ? ` (credit note of ${fmtMoney(n.total)})` : ''}
+                </div>
               </div>
-              <div style={{ textAlign: 'right' }}>
-                {n.reservedAmount > 0.005 && <span className="pill amber">Reserved {fmtMoney(n.reservedAmount)}{n.reservedFor ? ` for ${n.reservedFor}` : ''}</span>}
-                {n.free > 0.005 && <div><span className={n.reservedAmount > 0.005 ? 'acct-region' : 'pill teal'}>{n.reservedAmount > 0.005 ? `${fmtMoney(n.free)} free` : 'Free'}</span></div>}
-              </div>
+              <div style={{ textAlign: 'right' }}><span className="pill teal">Free</span></div>
             </div>
           ))}
         </div>
@@ -120,8 +128,8 @@ export default function CreditReservations({ accountId, accountName }: { account
       {groups.length > 0 && (
         <div className="credit-list">
           {groups.map(g => g.items.length === 1
-            ? <ReservationRow key={g.items[0].id} r={g.items[0]} accountName={accountName} onClose={close} />
-            : <GroupBlock key={g.key} g={g} accountName={accountName} onClose={close} onReleaseAll={releaseAll} />)}
+            ? <ReservationRow key={g.items[0].id} r={g.items[0]} accountName={accountName} onClose={close} note={noteOf.get((g.items[0].creditNo ?? '').toUpperCase())} />
+            : <GroupBlock key={g.key} g={g} accountName={accountName} onClose={close} onReleaseAll={releaseAll} noteOf={noteOf} />)}
         </div>
       )}
 
@@ -147,8 +155,8 @@ export default function CreditReservations({ accountId, accountName }: { account
 }
 
 // Reservations for the same order, together: "SQ37512: 3 credit notes, $425.00" and one status.
-function GroupBlock({ g, accountName, onClose, onReleaseAll }: {
-  g: ReservationGroup<Reservation>; accountName?: string;
+function GroupBlock({ g, accountName, onClose, onReleaseAll, noteOf }: {
+  g: ReservationGroup<Reservation>; accountName?: string; noteOf: Map<string, Note>;
   onClose: (r: Reservation, status: 'used' | 'cancelled') => void; onReleaseAll: (g: ReservationGroup<Reservation>) => void;
 }) {
   const st = groupStatus(g);
@@ -164,19 +172,20 @@ function GroupBlock({ g, accountName, onClose, onReleaseAll }: {
           {open > 1 && <div><button className="link-btn" onClick={() => onReleaseAll(g)}>Release all {open}</button></div>}
         </div>
       </div>
-      {g.items.map(r => <ReservationRow key={r.id} r={r} accountName={accountName} onClose={onClose} nested />)}
+      {g.items.map(r => <ReservationRow key={r.id} r={r} accountName={accountName} onClose={onClose} nested note={noteOf.get((r.creditNo ?? '').toUpperCase())} />)}
     </div>
   );
 }
 
-function ReservationRow({ r, accountName, onClose, nested }: {
-  r: Reservation; accountName?: string; onClose: (r: Reservation, status: 'used' | 'cancelled') => void; nested?: boolean;
+function ReservationRow({ r, accountName, onClose, nested, note }: {
+  r: Reservation; accountName?: string; onClose: (r: Reservation, status: 'used' | 'cancelled') => void; nested?: boolean; note?: Note;
 }) {
   return (
     <div className="credit-row" style={{ ...(r.status === 'reserved' ? {} : { opacity: 0.75 }), ...(nested ? { paddingLeft: 14 } : {}) }}>
       <div>
         <div className="acct-name">
           {fmtMoney(r.amount)}{r.creditNo ? `, ${r.creditNo}` : ''}
+          {note?.date && <span className="acct-region"> (credit note of {fmtDate(note.date)}{note.total > r.amount + 0.005 ? `, ${fmtMoney(note.total)} in all` : ''})</span>}
           {r.direction === 'out' && <> for <Link to={`/accounts/${r.toAccountId}`} className="order-link">{r.toName}</Link></>}
           {!nested && <>{' '}<span className="acct-region">{r.orderRef ? `for ${r.orderRef}` : 'for their next order'}</span></>}
         </div>
