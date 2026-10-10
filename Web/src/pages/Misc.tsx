@@ -4,15 +4,16 @@ import { apiGet, apiDownload } from '../lib/api';
 import { fmtMoney, fmtDateWithYear } from '../lib/types';
 
 // Warranty and marketing orders. Marketing orders are all billed to one account
-// ("Rhino Rhino Marketing"), which says nothing about them, so each row is identified
-// by WHO IT WAS SENT TO and which state, the same as the Excel report. The billing
-// account is not shown for marketing; for warranty it is shown only when the orders
-// are billed to more than one account. A row opens the order.
+// ("Rhino Rhino Marketing"), which says nothing about them, so each row shows the FULL
+// SHIP-TO DETAILS (name, contact, street, suburb, state, postcode) and the state. A
+// line that is only the billing account's name is left out. The billing account column
+// is not shown for marketing; for warranty only when the orders are billed to more than
+// one account. A row opens the order.
 
 type MiscRow = {
   id: string; number: string; date: string; accountId: string; accountName: string;
   region: string; amount: number; reference: string | null; source: string;
-  sentTo: string; sentToContact: string; sentToSuburb: string; sentToState: string;
+  sentTo: string; sentToContact: string; sentToSuburb: string; sentToState: string; sentToLines: string[];
 };
 type MiscData = { type: string; count: number; total: number; rows: MiscRow[] };
 type SortKey = 'accountName' | 'sentTo' | 'state' | 'date' | 'amount';
@@ -50,14 +51,15 @@ export default function Misc() {
     const needle = search.trim().toLowerCase();
     const key: SortKey = sortKey === 'accountName' && !showAccount ? 'date' : sortKey;
     // Search who it was sent to (name, contact, suburb), the state and the order number.
-    const rows = data.rows.filter(r => !needle || [r.sentTo, r.sentToContact, r.sentToSuburb, r.sentToState, r.number, showAccount ? r.accountName : '']
+    const rows = data.rows.filter(r => !needle || [...(r.sentToLines ?? []), r.sentToState, r.number, showAccount ? r.accountName : '']
       .some(v => (v ?? '').toLowerCase().includes(needle)));
     return [...rows].sort((a, b) => {
-      // No state saved always goes last, whichever way it is sorted.
-      if (key === 'state' && !a.sentToState !== !b.sentToState) return a.sentToState ? -1 : 1;
+      // Nothing saved (no ship-to, or no state) always goes last, whichever way it is sorted.
+      const blank = (r: MiscRow) => (key === 'state' ? !r.sentToState : key === 'sentTo' ? !r.sentToLines?.length : false);
+      if (blank(a) !== blank(b)) return blank(a) ? 1 : -1;
       let cmp = 0;
       if (key === 'accountName') cmp = a.accountName.localeCompare(b.accountName);
-      else if (key === 'sentTo') cmp = a.sentTo.localeCompare(b.sentTo);
+      else if (key === 'sentTo') cmp = (a.sentToLines?.[0] ?? '').localeCompare(b.sentToLines?.[0] ?? '');
       else if (key === 'state') cmp = a.sentToState.localeCompare(b.sentToState);
       else if (key === 'date') cmp = new Date(a.date).getTime() - new Date(b.date).getTime();
       else if (key === 'amount') cmp = a.amount - b.amount;
@@ -110,7 +112,7 @@ export default function Misc() {
           <div className="toolbar">
             <input
               className="search-input"
-              placeholder="Search sent to, suburb, state or order…"
+              placeholder="Search ship-to name, address, suburb, state or order…"
               value={search}
               onChange={e => setSearch(e.target.value)}
             />
@@ -145,10 +147,14 @@ export default function Misc() {
                       </div>
                     )}
                     <div>
-                      <div className="acct-name">{r.sentTo}</div>
-                      {(r.sentToContact && r.sentToContact !== r.sentTo) || r.sentToSuburb ? (
-                        <div className="acct-region">{[r.sentToContact !== r.sentTo ? r.sentToContact : '', r.sentToSuburb].filter(Boolean).join(' · ')}</div>
-                      ) : null}
+                      {r.sentToLines && r.sentToLines.length ? (
+                        <>
+                          <div className="acct-name">{r.sentToLines[0]}</div>
+                          {r.sentToLines.slice(1).map((line, i) => <div className="acct-region" key={i}>{line}</div>)}
+                        </>
+                      ) : (
+                        <div className="acct-region">No ship-to saved</div>
+                      )}
                     </div>
                     <div>{r.sentToState || <span className="acct-region">—</span>}</div>
                     <div className="num">{r.number}</div>
