@@ -4,16 +4,17 @@ import { apiGet, apiPatch, apiPost } from '../lib/api';
 import { fmtMoney, fmtDate } from '../lib/types';
 
 // Credit on an account: the customer's credit notes, and which of them the team
-// has set aside for an order. To reserve, pick the credit note and enter the order
-// or sales quote number. Nobody has to mark it used: when DEAR shows that credit
-// applied to that order, the CRM marks it used by itself.
+// has set aside. Reserve a credit note for the customer's next order (the default),
+// or for a specific order by its sales quote number. Nobody has to mark it used:
+// when DEAR shows that credit applied, the CRM marks it used by itself and notes
+// which order it went to.
 
 type Note = {
   creditNo: string; date: string | null; orderNo: string; total: number; onAccount: number;
   reservationId: string | null; reservedFor: string | null;
 };
 type Reservation = {
-  id: string; amount: number; orderRef: string | null; creditNo: string | null; note: string | null;
+  id: string; amount: number; orderRef: string | null; creditNo: string | null; usedOnOrder: string | null; note: string | null;
   status: 'reserved' | 'used' | 'cancelled'; createdAt: string; resolvedAt: string | null;
   fromAccountId: string; fromName: string; toAccountId: string; toName: string;
   createdBy: string | null; resolvedBy: string | null; direction: 'own' | 'out' | 'in'; stale: boolean;
@@ -88,7 +89,7 @@ export default function CreditReservations({ accountId }: { accountId: string; a
             <div className="credit-row" key={r.id}>
               <div>
                 <div className="acct-name">
-                  {r.creditNo ? <>{r.creditNo} ({fmtMoney(r.amount)}) reserved for {r.orderRef ?? 'an order'}</>
+                  {r.creditNo ? <>{r.creditNo} ({fmtMoney(r.amount)}) reserved for {r.orderRef ?? 'their next order'}</>
                     : <>{fmtMoney(r.amount)} reserved{r.direction === 'out' ? <> for <Link to={`/accounts/${r.toAccountId}`} className="order-link">{r.toName}</Link></> : ''}{r.orderRef ? `, ${r.orderRef}` : ''}</>}
                 </div>
                 <div className="acct-region">
@@ -99,7 +100,7 @@ export default function CreditReservations({ accountId }: { accountId: string; a
                     This credit note has changed in DEAR since it was reserved, so check before promising it.
                   </div>
                 )}
-                {r.creditNo && <div className="acct-region">Waiting for DEAR to show it applied to {r.orderRef}. It is marked used by itself.</div>}
+                {r.creditNo && <div className="acct-region">Waiting for DEAR to show it applied to {r.orderRef ?? 'their next order'}. It is marked used by itself.</div>}
               </div>
               <div className="credit-actions">
                 <button className="btn secondary" onClick={() => close(r, 'cancelled')}>Release</button>
@@ -132,10 +133,10 @@ export default function CreditReservations({ accountId }: { accountId: string; a
               {closed.map(r => (
                 <div className="credit-row" key={r.id}>
                   <div>
-                    <div>{r.creditNo ?? fmtMoney(r.amount)}{r.creditNo ? ` (${fmtMoney(r.amount)})` : ''} for {r.orderRef ?? 'an order'}</div>
+                    <div>{r.creditNo ?? fmtMoney(r.amount)}{r.creditNo ? ` (${fmtMoney(r.amount)})` : ''} for {r.orderRef ?? 'their next order'}</div>
                     <div className="acct-region">
                       {r.status === 'used'
-                        ? (r.resolvedBy ? `Marked used by ${r.resolvedBy}` : 'Used: DEAR showed it applied')
+                        ? (r.resolvedBy ? `Marked used by ${r.resolvedBy}` : `Used${r.usedOnOrder ? ` on ${r.usedOnOrder}` : ''}: DEAR showed it applied`)
                         : `Released${r.resolvedBy ? ` by ${r.resolvedBy}` : ''}`}
                       {r.resolvedAt ? ` on ${fmtDate(r.resolvedAt)}` : ''}
                     </div>
@@ -148,7 +149,7 @@ export default function CreditReservations({ accountId }: { accountId: string; a
       )}
 
       <div className="acct-region credit-footnote">
-        Reserving records the plan. The credit is applied in DEAR, and once DEAR shows it applied to that order the reservation is marked used.
+        Reserving records the plan. The credit is applied in DEAR, and once DEAR shows it applied the reservation is marked used by itself.
       </div>
     </div>
   );
@@ -158,17 +159,18 @@ function ReserveForm({ accountId, options, onDone, onCancel }: {
   accountId: string; options: Credit['reservable']; onDone: () => void; onCancel: () => void;
 }) {
   const [creditNo, setCreditNo] = useState(options[0]?.creditNo ?? '');
+  const [mode, setMode] = useState<'next' | 'order'>('next');   // their next order, or a specific one
   const [orderNo, setOrderNo] = useState('');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const valid = !!creditNo && /^SQ\d{3,}$/i.test(orderNo.trim());
+  const valid = !!creditNo && (mode === 'next' || /^SQ\d{3,}$/i.test(orderNo.trim()));
 
   async function save() {
     setSaving(true);
     setError(null);
     try {
-      await apiPost(`/credit/account/${accountId}/reserve`, { creditNo, orderNo: orderNo.trim(), note: note || undefined });
+      await apiPost(`/credit/account/${accountId}/reserve`, { creditNo, orderNo: mode === 'order' ? orderNo.trim() : undefined, note: note || undefined });
       onDone();
     } catch (e: any) {
       setError(e.message);
@@ -188,11 +190,17 @@ function ReserveForm({ accountId, options, onDone, onCancel }: {
             ))}
           </select>
         </label>
-        <label style={{ flex: 1 }}>
-          Order or sales quote no
-          <input value={orderNo} onChange={e => setOrderNo(e.target.value)} placeholder="e.g. SQ37512" className="credit-input" />
-        </label>
       </div>
+      <div className="plan-log-types" style={{ margin: '8px 0' }}>
+        <button type="button" className={'btn secondary' + (mode === 'next' ? ' on' : '')} onClick={() => setMode('next')}>Their next order</button>
+        <button type="button" className={'btn secondary' + (mode === 'order' ? ' on' : '')} onClick={() => setMode('order')}>A specific order</button>
+      </div>
+      {mode === 'order' && (
+        <label>
+          Order or sales quote no
+          <input value={orderNo} onChange={e => setOrderNo(e.target.value)} placeholder="e.g. SQ37512" className="credit-input" autoFocus />
+        </label>
+      )}
       <label>
         Note (optional)
         <input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. agreed with Kim on the phone" className="credit-input" />
@@ -202,7 +210,7 @@ function ReserveForm({ accountId, options, onDone, onCancel }: {
       <div className="plan-actions" style={{ marginTop: 8 }}>
         <button className="btn" onClick={save} disabled={!valid || saving}>{saving ? 'Saving…' : 'Reserve'}</button>
         <button className="link-btn" onClick={onCancel}>Cancel</button>
-        <span className="acct-region">The whole credit note is reserved. It is marked used when DEAR shows it applied to that order.</span>
+        <span className="acct-region">The whole credit note is reserved. It is marked used when DEAR shows it applied{mode === 'next' ? ' to any order' : ' to that order'}.</span>
       </div>
     </div>
   );
