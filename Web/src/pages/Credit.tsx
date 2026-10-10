@@ -2,12 +2,16 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet, apiDownload } from '../lib/api';
 import { fmtMoney, fmtDate } from '../lib/types';
+import { groupReservations, groupStatus } from '../lib/creditGroups';
 import { useMe, stateOptionsFor } from '../lib/useMe';
 import StateFilter from '../components/StateFilter';
 
 // Credit: every credit note on account, every reservation (one row each, whose status
 // changes from Reserved to Used when DEAR shows the credit applied), and every credit
 // movement, so the team can follow where credit has gone. Credit is applied in DEAR.
+// The Prepayments tab lists money held on orders that is not a credit note: customers who
+// paid up front, and overpaid orders. Finished orders that still hold money need applying
+// in DEAR (or refunding); money on open orders is held until the order is invoiced.
 
 type NoteRow = {
   accountId: string; account: string; region: string; rep: string | null; orderNo: string; creditNo: string; date: string | null;
@@ -18,7 +22,13 @@ type Reservation = {
   creditNo: string | null; orderRef: string | null; usedOnOrder: string | null; note: string | null;
   status: 'reserved' | 'used' | 'cancelled'; createdAt: string; createdBy: string | null; resolvedAt: string | null; resolvedBy: string | null;
 };
-type Totals = { onAccount: number; reserved: number; free: number; openNotes: number; customers: number };
+type Totals = { onAccount: number; reserved: number; free: number; openNotes: number; customers: number; heldOnOrders?: number; toApply?: number };
+type Held = {
+  id: string; number: string; accountId: string; account: string; region: string; rep: string | null; status: string;
+  orderDate: string | null; kind: 'Prepayment' | 'Overpaid'; amount: number; finished: boolean;
+};
+type HeldTotals = { toApply: { amount: number; count: number }; open: { amount: number; count: number }; all: { amount: number; count: number } };
+const nice = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '');
 type Move = {
   date: string | null; type: string; accountId: string; account: string; region: string; rep: string | null;
   creditNo: string | null; reference: string | null; amount: number; by: string | null;
@@ -31,11 +41,14 @@ const STATUS_WORD = { reserved: 'Reserved', used: 'Used', cancelled: 'Released' 
 export default function Credit() {
   const me = useMe();
   const stateOptions = stateOptionsFor(me);
-  const [tab, setTab] = useState<'notes' | 'reservations' | 'moves'>('notes');
+  const [tab, setTab] = useState<'notes' | 'prepayments' | 'reservations' | 'moves'>('notes');
   const [region, setRegion] = useState('');
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('open');
   const [resStatus, setResStatus] = useState('reserved');
+  const [heldView, setHeldView] = useState<'apply' | 'open' | 'all'>('apply');
+  const [held, setHeld] = useState<Held[] | null>(null);
+  const [heldTotals, setHeldTotals] = useState<HeldTotals | null>(null);
   const [reservations, setReservations] = useState<Reservation[] | null>(null);
   const [type, setType] = useState('');
   const [from, setFrom] = useState('');
@@ -66,6 +79,12 @@ export default function Credit() {
         p.set('status', status);
         setLoading(true);
         apiGet(`/credit/notes?${p.toString()}`).then(d => { setNotes(d.rows); setTotals(d.totals); }).catch(e => setError(e.message)).finally(() => setLoading(false));
+      } else if (tab === 'prepayments') {
+        apiGet(`/credit/notes?${base().toString()}`).then(d => setTotals(d.totals)).catch(() => {});
+        const p3 = base();
+        p3.set('view', heldView);
+        setLoading(true);
+        apiGet(`/credit/prepayments?${p3.toString()}`).then(d => { setHeld(d.rows); setHeldTotals(d.totals); }).catch(e => setError(e.message)).finally(() => setLoading(false));
       } else if (tab === 'reservations') {
         apiGet(`/credit/notes?${base().toString()}`).then(d => setTotals(d.totals)).catch(() => {});
         const p2 = base();
@@ -78,7 +97,7 @@ export default function Credit() {
       }
     }, search ? 300 : 0);
     return () => clearTimeout(t);
-  }, [tab, region, search, status, resStatus, type, from, to]);
+  }, [tab, region, search, status, resStatus, heldView, type, from, to]);
 
   function loadMoves(offset: number, append: boolean) {
     const p = base();
@@ -119,6 +138,14 @@ export default function Credit() {
         <Stat label="Free to use" value={totals ? fmtMoney(totals.free) : '…'} sub="not reserved" />
       </div>
 
+      {totals && (totals.heldOnOrders ?? 0) > 0.005 && (
+        <div className="acct-region" style={{ margin: '-4px 0 12px' }}>
+          Not counted above: {fmtMoney(totals.heldOnOrders!)} held as prepayments or overpayments on orders. They are not credit notes.{' '}
+          {(totals.toApply ?? 0) > 0.005 ? `${fmtMoney(totals.toApply!)} of it is on finished orders and needs applying in DEAR. ` : ''}
+          <button className="link-btn" onClick={() => setTab('prepayments')}>See the Prepayments tab</button>
+        </div>
+      )}
+
       <div className="controls" style={{ marginBottom: 10, flexWrap: 'wrap' }}>
         <StateFilter value={region} onChange={setRegion} options={stateOptions} allLabel={me?.role === 'manager' ? 'All states' : 'All my states'} />
         <input type="search" placeholder="Search customer, credit no or order" value={search} onChange={e => setSearch(e.target.value)}
@@ -128,6 +155,7 @@ export default function Credit() {
 
       <div className="tab-bar" style={{ marginBottom: 12 }}>
         <button className={'tab' + (tab === 'notes' ? ' active' : '')} onClick={() => setTab('notes')}>Credit on account</button>
+        <button className={'tab' + (tab === 'prepayments' ? ' active' : '')} onClick={() => setTab('prepayments')}>Prepayments</button>
         <button className={'tab' + (tab === 'reservations' ? ' active' : '')} onClick={() => setTab('reservations')}>Reservations</button>
         <button className={'tab' + (tab === 'moves' ? ' active' : '')} onClick={() => setTab('moves')}>Movements</button>
       </div>
@@ -172,6 +200,46 @@ export default function Credit() {
         </>
       )}
 
+      {!error && tab === 'prepayments' && (
+        <>
+          <div className="acct-region" style={{ marginBottom: 8, maxWidth: 760 }}>
+            Money held on orders that is not a credit note. A <b>finished</b> order that still holds a prepayment or is overpaid needs
+            the money applied to its invoice in DEAR, or refunded. Money on an <b>open</b> order is held until the order is invoiced.
+          </div>
+          <div className="tab-bar" style={{ marginBottom: 10 }}>
+            {([
+              ['apply', 'To apply in DEAR', heldTotals?.toApply],
+              ['open', 'Held for open orders', heldTotals?.open],
+              ['all', 'All', heldTotals?.all],
+            ] as const).map(([key, label, t]) => (
+              <button key={key} className={'tab' + (heldView === key ? ' active' : '')} onClick={() => setHeldView(key)}>
+                {label}{t ? ` · ${fmtMoney(t.amount)} (${t.count})` : ''}
+              </button>
+            ))}
+          </div>
+          {loading && !held ? <div className="empty-state">Loading…</div>
+            : !held || !held.length ? <div className="empty-state">{heldView === 'apply' ? 'Nothing to apply: no finished order is holding a prepayment.' : 'None.'}</div>
+            : (
+              <div className="manifest">
+                <div className="m-row head" style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 1.1fr 0.9fr 0.9fr 0.9fr' }}>
+                  <div>Customer</div><div>State</div><div>Order</div><div>Status</div><div>Order date</div><div>Type</div><div className="num">Amount</div>
+                </div>
+                {held.map(h => (
+                  <div className="m-row" key={h.id + h.kind} style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 1.1fr 0.9fr 0.9fr 0.9fr', cursor: 'default' }}>
+                    <div><Link to={`/accounts/${h.accountId}`} className="order-link">{h.account}</Link>{h.rep && <div className="acct-region">{h.rep}</div>}</div>
+                    <div>{h.region}</div>
+                    <div><Link to={`/orders/${h.id}`} className="order-link">{h.number}</Link></div>
+                    <div><span className={`pill ${h.finished ? 'amber' : 'neutral'}`}>{nice(h.status) || '—'}</span></div>
+                    <div>{h.orderDate ? fmtDate(h.orderDate) : ''}</div>
+                    <div><span className={`pill ${h.kind === 'Overpaid' ? 'rust' : 'teal'}`}>{h.kind}</span></div>
+                    <div className="num"><b>{fmtMoney(h.amount)}</b></div>
+                  </div>
+                ))}
+              </div>
+            )}
+        </>
+      )}
+
       {!error && tab === 'reservations' && (
         <>
           <div className="controls" style={{ marginBottom: 8 }}>
@@ -189,25 +257,42 @@ export default function Credit() {
                 <div className="m-row head" style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 0.9fr 1fr 1.6fr 1fr' }}>
                   <div>Name</div><div>State</div><div className="num">Amount</div><div>Credit no</div><div>Sales order / quote</div><div>Note</div><div>Status</div>
                 </div>
-                {reservations.map(r => (
-                  <div className="m-row" key={r.id} style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 0.9fr 1fr 1.6fr 1fr', cursor: 'default' }}>
-                    <div>
-                      <Link to={`/accounts/${r.accountId}`} className="order-link">{r.name}</Link>
-                      <div className="acct-region">{r.name !== r.account ? `${r.account}. ` : ''}{r.createdBy ?? ''}{r.createdBy ? ', ' : ''}{r.createdAt ? fmtDate(r.createdAt) : ''}</div>
-                    </div>
-                    <div>{r.region}</div>
-                    <div className="num"><b>{fmtMoney(r.amount)}</b></div>
-                    <div>{r.creditNo ?? ''}</div>
-                    <div>{r.usedOnOrder ?? r.orderRef ?? <span className="acct-region">Next order</span>}</div>
-                    <div className="acct-region">{r.note ?? ''}</div>
-                    <div>
-                      <span className={`pill ${STATUS_TONE[r.status]}`}>{STATUS_WORD[r.status]}</span>
-                      {r.status !== 'reserved' && r.resolvedAt && (
-                        <div className="acct-region">{fmtDate(r.resolvedAt)}{r.status === 'used' && r.resolvedBy === 'Found in DEAR' ? ', DEAR' : r.resolvedBy ? `, ${r.resolvedBy}` : ''}</div>
+                {groupReservations(reservations).map(g => {
+                  const st = groupStatus(g);
+                  return (
+                    <div key={g.key} data-group={g.items.length > 1 ? (g.orderRef ?? 'next') : undefined}>
+                      {g.items.length > 1 && (
+                        // Reservations for the same order, together: "SQ37512: 3 credit notes, $425.00, Used"
+                        <div className="m-row" style={{ gridTemplateColumns: '1fr auto', cursor: 'default', background: 'var(--paper)' }}>
+                          <div>
+                            <b>{g.orderRef ?? 'Their next order'}: {g.items.length} credit notes, {fmtMoney(g.total)}</b>
+                            <span className="acct-region"> · {g.items[0].name}</span>
+                          </div>
+                          <div><span className={`pill ${st.tone}`}>{st.word}</span></div>
+                        </div>
                       )}
+                      {g.items.map(r => (
+                      <div className="m-row" key={r.id} style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 0.9fr 1fr 1.6fr 1fr', cursor: 'default' }}>
+                        <div>
+                          <Link to={`/accounts/${r.accountId}`} className="order-link">{r.name}</Link>
+                          <div className="acct-region">{r.name !== r.account ? `${r.account}. ` : ''}{r.createdBy ?? ''}{r.createdBy ? ', ' : ''}{r.createdAt ? fmtDate(r.createdAt) : ''}</div>
+                        </div>
+                        <div>{r.region}</div>
+                        <div className="num"><b>{fmtMoney(r.amount)}</b></div>
+                        <div>{r.creditNo ?? ''}</div>
+                        <div>{r.usedOnOrder ?? r.orderRef ?? <span className="acct-region">Next order</span>}</div>
+                        <div className="acct-region">{r.note ?? ''}</div>
+                        <div>
+                          <span className={`pill ${STATUS_TONE[r.status]}`}>{STATUS_WORD[r.status]}</span>
+                          {r.status !== 'reserved' && r.resolvedAt && (
+                            <div className="acct-region">{fmtDate(r.resolvedAt)}{r.status === 'used' && r.resolvedBy === 'Found in DEAR' ? ', DEAR' : r.resolvedBy ? `, ${r.resolvedBy}` : ''}</div>
+                          )}
+                        </div>
+                      </div>
+                      ))}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
         </>

@@ -194,15 +194,55 @@ export async function loadMovements(rep: Rep, f: CreditFilters): Promise<{ rows:
   };
 }
 
-// ---------- Credit in DEAR (unused credit notes, unapplied prepayments, overpayments) ----------
-async function creditInDear(accountId: string): Promise<number> {
-  const [r] = await prisma.$queryRaw<{ credit: number }[]>`
-    select (coalesce(sum(case when unapplied_credit > 0 then unapplied_credit else 0 end), 0)
-          + coalesce(sum(case when amount_due < 0 then -amount_due else 0 end), 0))::float8 as credit
-    from crm.quotes
-    where account_id = ${accountId}::uuid and source <> 'rhino-history' and number not like 'Q%'`;
-  return cents(r?.credit ?? 0);
+// ---------- Money held on orders that is NOT a credit note ----------
+// The sync also counts a prepayment that hasn't been applied to an invoice yet (a customer
+// who paid up front for an order) and an order that is overpaid. That money is held for the
+// order, it is not a credit note and it is not free to reserve, so it is kept out of
+// "credit" and listed on its own (the Prepayments tab). One row per order and kind.
+//   Finished orders (completed, credited, closed) that still hold money need applying in
+//   DEAR or refunding; money on open orders is simply held until the order is invoiced.
+export type HeldRow = {
+  id: string; number: string; accountId: string; account: string; region: string; rep: string | null;
+  status: string; orderDate: string | null; kind: 'Prepayment' | 'Overpaid'; amount: number; finished: boolean;
+};
+const isFinished = (status: string) => /^(COMPLETED|CREDITED|CLOSED)/i.test(status.trim());
+
+export async function loadHeld(rep: Rep, f: CreditFilters, accountId?: string): Promise<HeldRow[]> {
+  const ids = await scopeIds(rep);
+  const w: Prisma.Sql[] = [scopeWhere(ids, f.regions)];
+  if (accountId) w.push(Prisma.sql`a.id = ${accountId}::uuid`);
+  if (f.q) {
+    const like = `%${f.q}%`;
+    w.push(Prisma.sql`(a.name ilike ${like} or q.number ilike ${like})`);
+  }
+  const rows = await prisma.$queryRaw<(Omit<HeldRow, 'finished' | 'orderDate'> & { orderDate: Date | null })[]>`
+    with o as (
+      select q.id, q.number, a.id as account_id, a.name as account, a.region, rp.name as rep,
+             coalesce(q.fulfillment_status, '') as status, q.sent_at as order_date,
+             greatest(coalesce(q.unapplied_credit, 0)::numeric
+               - coalesce((select sum((c->>'onAccount')::numeric) from jsonb_array_elements(q.credit_notes) c), 0), 0) as prepayment,
+             greatest(-coalesce(q.amount_due, 0)::numeric, 0) as overpaid
+      from crm.quotes q
+      join crm.accounts a on a.id = q.account_id
+      left join crm.reps rp on rp.id = a.rep_id
+      where q.source <> 'rhino-history' and q.number not like 'Q%' and ${Prisma.join(w, ' and ')}
+    )
+    select id, number, account_id as "accountId", account, region, rep, status, order_date as "orderDate", 'Prepayment' as kind, prepayment::float8 as amount
+    from o where prepayment > 0.005
+    union all
+    select id, number, account_id, account, region, rep, status, order_date, 'Overpaid', overpaid::float8
+    from o where overpaid > 0.005
+    order by amount desc
+    limit 5000`;
+  return rows.map(r => ({
+    ...r, amount: cents(r.amount), finished: isFinished(r.status),
+    orderDate: r.orderDate ? new Date(r.orderDate).toISOString().slice(0, 10) : null,
+  }));
 }
+
+const heldTotal = (rows: { amount: number }[]) => cents(rows.reduce((t, r) => t + r.amount, 0));
+
+const notesTotal = (notes: { onAccount: number }[]) => cents(notes.reduce((t, n) => t + (n.onAccount > 0.005 ? n.onAccount : 0), 0));
 
 async function reservedFrom(accountId: string): Promise<number> {
   const [r] = await prisma.$queryRaw<{ total: number }[]>`
@@ -226,7 +266,9 @@ creditRouter.get('/account/:id', async (req, res) => {
     if ('error' in v) { const d = denied(v.error!); return res.status(d.status).json(d.body); }
     await reconcile();
 
-    const [credit, reserved, notes] = await Promise.all([creditInDear(v.account.id), reservedFrom(v.account.id), loadCreditNotes(req.rep!, {}, v.account.id)]);
+    const [reserved, notes] = await Promise.all([reservedFrom(v.account.id), loadCreditNotes(req.rep!, {}, v.account.id)]);
+    const credit = notesTotal(notes);                          // credit notes on account: the credit
+    const held = heldTotal(await loadHeld(req.rep!, {}, v.account.id));   // prepaid / overpaid on orders: shown apart
     const rows = await prisma.$queryRaw<any[]>`
       select c.id, coalesce(nullif(c.name, ''), ${v.account.name}) as "name", c.amount, nullif(c.order_ref, '') as "orderRef",
              c.credit_no as "creditNo", c.used_on_order as "usedOnOrder", c.note, c.status,
@@ -247,6 +289,7 @@ creditRouter.get('/account/:id', async (req, res) => {
     const onAccountOf = new Map(notes.map(n => [n.creditNo.toUpperCase(), n.onAccount]));
     res.json({
       creditInDear: credit,
+      otherCredit: held,
       reserved,
       available: cents(Math.max(0, credit - reserved)),
       // credit notes with credit left that is not already reserved: what can be reserved
@@ -268,51 +311,98 @@ creditRouter.get('/account/:id', async (req, res) => {
 });
 
 // ---------- POST /credit/account/:id/reserve ----------
-// { name?, amount, creditNo?, orderNo?, note? }. Any amount up to the credit that is free;
-// the credit note number and the order number are optional (no order = their next order).
-// Only this customer's own credit. The credit note number is what lets the CRM mark it
-// used by itself, so it is worth filling in.
+// One credit note:      { name?, amount, creditNo?, orderNo?, note? }
+// Several at once:      { name?, orderNo?, note?, items: [{ creditNo, amount? }, ...] }
+// Several credit notes can be set aside for the SAME order in one go: one reservation is made
+// per credit note (so each is marked used by itself when DEAR shows that note applied), and
+// either all of them are made or none. Any amount up to the credit that is free; the credit
+// note number is optional for a single one, and the order number is optional (blank = their
+// next order). Only this customer's own credit.
 creditRouter.post('/account/:id/reserve', async (req, res) => {
   try {
     const v = await visibleAccount(req.rep!, req.params.id);
     if ('error' in v) { const d = denied(v.error!); return res.status(d.status).json(d.body); }
 
-    const creditNo = String(req.body?.creditNo ?? '').trim().toUpperCase().slice(0, 40);
     const orderText = String(req.body?.orderNo ?? '').trim().toUpperCase();
     if (orderText && !/^SQ\d{3,}$/.test(orderText)) return res.status(400).json({ error: 'Enter the sales order or quote number like SQ37512, or leave it blank for their next order' });
     const orderNo = orderText || null;
     const name = String(req.body?.name ?? '').trim().slice(0, 120) || v.account.name;
     const text = typeof req.body?.note === 'string' && req.body.note.trim() ? req.body.note.trim().slice(0, 1000) : null;
 
+    const many = Array.isArray(req.body?.items);
+    const rawItems: { creditNo?: unknown; amount?: unknown }[] = many ? req.body.items : [{ creditNo: req.body?.creditNo, amount: req.body?.amount }];
+    if (many && !rawItems.length) return res.status(400).json({ error: 'Tick at least one credit note' });
+    if (rawItems.length > 25) return res.status(400).json({ error: 'That is too many credit notes at once' });
+
     const notes = await loadCreditNotes(req.rep!, {}, v.account.id);
-    const cn = creditNo ? notes.find(n => n.creditNo.toUpperCase() === creditNo) : undefined;
-    // A number that looks like a credit note must be one of this customer's.
-    if (creditNo && !cn && /^CR\d+$/.test(creditNo)) return res.status(400).json({ error: `${creditNo} isn't a credit note on this account` });
+    const seen = new Set<string>();
+    const planned: { creditNo: string | null; amount: number; cn?: CreditNoteRow }[] = [];
+    for (const it of rawItems) {
+      const creditNo = String(it.creditNo ?? '').trim().toUpperCase().slice(0, 40);
+      if (many && !creditNo) return res.status(400).json({ error: 'Each item needs a credit note' });
+      if (creditNo) {
+        if (seen.has(creditNo)) return res.status(400).json({ error: `${creditNo} is listed twice` });
+        seen.add(creditNo);
+      }
+      const cn = creditNo ? notes.find(n => n.creditNo.toUpperCase() === creditNo) : undefined;
+      // A number that looks like a credit note must be one of this customer's.
+      if (creditNo && !cn && /^CR\d+$/.test(creditNo)) return res.status(400).json({ error: `${creditNo} isn't a credit note on this account` });
 
-    const given = req.body?.amount;
-    let amount = given === undefined || given === null || given === '' ? (cn ? cn.free : NaN) : Number(given);
-    if (!Number.isFinite(amount)) return res.status(400).json({ error: 'Enter the amount' });
-    amount = cents(amount);
-    if (amount <= 0.005) return res.status(400).json({ error: 'Enter an amount above zero' });
+      const given = it.amount;
+      let amount = given === undefined || given === null || given === '' ? (cn ? cn.free : NaN) : Number(given);
+      if (!Number.isFinite(amount)) return res.status(400).json({ error: 'Enter the amount' });
+      amount = cents(amount);
+      if (amount <= 0.005) return res.status(400).json({ error: 'Enter an amount above zero' });
+      planned.push({ creditNo: creditNo || null, amount, cn });
+    }
 
-    const [credit, reserved] = await Promise.all([creditInDear(v.account.id), reservedFrom(v.account.id)]);
-    const free = cents(Math.max(0, credit - reserved));
-    if (amount > free + 0.005) return res.status(400).json({ error: `Only ${free.toFixed(2)} of this customer's credit is free to reserve` });
-    if (cn && amount > cn.free + 0.005) return res.status(400).json({ error: `${cn.creditNo} has only ${cn.free.toFixed(2)} left to reserve` });
+    const reserved = await reservedFrom(v.account.id);
+    const free = cents(Math.max(0, notesTotal(notes) - reserved));
+    const totalAmount = cents(planned.reduce((t, p) => t + p.amount, 0));
+    if (totalAmount > free + 0.005) return res.status(400).json({ error: `Only ${free.toFixed(2)} of this customer's credit is free to reserve` });
+    for (const p of planned) {
+      if (p.cn && p.amount > p.cn.free + 0.005) return res.status(400).json({ error: `${p.cn.creditNo} has only ${p.cn.free.toFixed(2)} left to reserve` });
+    }
 
     // If the order is already in the CRM it must be this customer's, and not voided.
     const order = orderNo ? await prisma.quote.findFirst({ where: { number: orderNo }, select: { accountId: true, fulfillmentStatus: true } }) : null;
     if (order && order.accountId !== v.account.id) return res.status(400).json({ error: `${orderNo} belongs to a different customer` });
     if (order && (order.fulfillmentStatus ?? '').toUpperCase() === 'VOIDED') return res.status(400).json({ error: `${orderNo} is voided` });
 
-    const [row] = await prisma.$queryRaw<{ id: string }[]>`
+    // One statement, so all of them are made or none.
+    const tuples = planned.map(p => Prisma.sql`(${v.account.id}::uuid, ${v.account.id}::uuid, ${p.amount}, ${orderNo}, ${p.creditNo}, ${name}, ${text}, ${req.rep!.id}::uuid)`);
+    const made = await prisma.$queryRaw<{ id: string }[]>`
       insert into crm.credit_reservations (from_account_id, to_account_id, amount, order_ref, credit_no, name, note, created_by)
-      values (${v.account.id}::uuid, ${v.account.id}::uuid, ${amount}, ${orderNo}, ${creditNo || null}, ${name}, ${text}, ${req.rep!.id}::uuid)
+      values ${Prisma.join(tuples)}
       returning id`;
     await reconcile();   // DEAR may already show it applied
-    res.status(201).json({ id: row.id });
+    res.status(201).json({ id: made[0].id, ids: made.map(m => m.id), count: made.length, total: totalAmount });
   } catch (e) {
     console.error('credit reserve failed', e);
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// ---------- GET /credit/account/:id/order/:no ----------
+// What an order is worth and what is still to pay, so the reserve form can show how the credit
+// being set aside lines up with the order. { found: false } if it isn't in the CRM (yet).
+creditRouter.get('/account/:id/order/:no', async (req, res) => {
+  try {
+    const v = await visibleAccount(req.rep!, req.params.id);
+    if ('error' in v) { const d = denied(v.error!); return res.status(d.status).json(d.body); }
+    const no = String(req.params.no ?? '').trim().toUpperCase();
+    if (!/^SQ\d{3,}$/.test(no)) return res.status(400).json({ error: 'Enter an order number like SQ37512' });
+    const q = await prisma.quote.findFirst({
+      where: { number: no },
+      select: { accountId: true, fulfillmentStatus: true, total: true, amount: true, amountDue: true, amountPaid: true },
+    });
+    if (!q) return res.json({ found: false, number: no });
+    if (q.accountId !== v.account.id) return res.status(400).json({ error: `${no} belongs to a different customer` });
+    const total = cents(q.total ?? q.amount ?? 0);
+    const toPay = cents(q.amountDue != null ? Math.max(0, q.amountDue) : Math.max(0, total - (q.amountPaid ?? 0)));
+    res.json({ found: true, number: no, status: q.fulfillmentStatus ?? '', total, toPay });
+  } catch (e) {
+    console.error('credit order lookup failed', e);
     res.status(500).json({ error: (e as Error).message });
   }
 });
@@ -347,46 +437,66 @@ creditRouter.patch('/reservations/:id', async (req, res) => {
 
 // ---------- GET /credit/notes ----------   (the Credit page)
 // ?region=NSW,ACT &q= &status=open|reserved|used
+// The tiles are worked out from the same credit notes the table lists, whatever status the
+// table is showing, so the figures always add up to what you can see.
 creditRouter.get('/notes', async (req, res) => {
   try {
     await reconcile();
     const regions = regionsParam(req.query.region);
     const q = String(req.query.q ?? '').trim() || undefined;
-    const rows = await loadCreditNotes(req.rep!, { regions, q, status: String(req.query.status ?? '') });
+    const status = String(req.query.status ?? '');
+    const all = await loadCreditNotes(req.rep!, { regions, q });
 
-    // Tiles: credit in DEAR for each customer in view (credit notes, unapplied prepayments,
-    // overpayments), less what the team has reserved.
-    const ids = await scopeIds(req.rep!);
-    const w: Prisma.Sql[] = [scopeWhere(ids, regions)];
-    if (q) w.push(Prisma.sql`a.name ilike ${'%' + q + '%'}`);
-    const [t] = await prisma.$queryRaw<{ credit: number; reserved: number; free: number; customers: number }[]>`
-      with cred as (
-        select a.id,
-               (coalesce(sum(case when q.unapplied_credit > 0 then q.unapplied_credit else 0 end), 0)
-              + coalesce(sum(case when q.amount_due < 0 then -q.amount_due else 0 end), 0))::float8 as credit
-        from crm.accounts a
-        join crm.quotes q on q.account_id = a.id
-        where q.source <> 'rhino-history' and q.number not like 'Q%' and ${Prisma.join(w, ' and ')}
-        group by a.id
-      ), res as (
-        select from_account_id as id, sum(amount)::float8 as reserved
-        from crm.credit_reservations where status = 'reserved' group by from_account_id
-      )
-      select coalesce(sum(c.credit), 0)::float8 as credit,
-             coalesce(sum(least(coalesce(r.reserved, 0), c.credit)), 0)::float8 as reserved,
-             coalesce(sum(greatest(c.credit - coalesce(r.reserved, 0), 0)), 0)::float8 as free,
-             count(*)::int as customers
-      from cred c left join res r on r.id = c.id
-      where c.credit > 0.005`;
+    const rows = all.filter(r =>
+      status === 'open' ? r.free > 0.005
+      : status === 'reserved' ? r.reservedAmount > 0.005
+      : status === 'used' ? r.onAccount <= 0.005
+      : true);
+
+    // Credit notes on account, and what has been reserved, per customer.
+    const open = all.filter(r => r.onAccount > 0.005);
+    const onAccountBy = new Map<string, number>();
+    for (const r of open) onAccountBy.set(r.accountId, (onAccountBy.get(r.accountId) ?? 0) + r.onAccount);
+    const reservedBy = new Map<string, number>();
+    for (const r of await loadReservations(req.rep!, { regions, q, status: 'reserved' })) reservedBy.set(r.accountId, (reservedBy.get(r.accountId) ?? 0) + r.amount);
+    const onAccount = cents([...onAccountBy.values()].reduce((t, n) => t + n, 0));
+    const reserved = cents([...reservedBy.values()].reduce((t, n) => t + n, 0));
+    const free = cents([...onAccountBy].reduce((t, [id, n]) => t + Math.max(0, n - (reservedBy.get(id) ?? 0)), 0));
+
+    // Money held on orders that is not a credit note (prepayments not yet applied, overpaid
+    // orders): not counted above. The same rows as the Prepayments tab.
+    const held = await loadHeld(req.rep!, { regions, q });
+    const heldOnOrdersTotal = heldTotal(held);
+    const toApply = heldTotal(held.filter(h => h.finished));
+
     res.json({
-      totals: {
-        onAccount: cents(t?.credit ?? 0), reserved: cents(t?.reserved ?? 0), free: cents(t?.free ?? 0),
-        openNotes: rows.filter(r => r.onAccount > 0.005).length, customers: t?.customers ?? 0,
-      },
+      totals: { onAccount, reserved, free, openNotes: open.length, customers: onAccountBy.size, heldOnOrders: heldOnOrdersTotal, toApply },
       rows,
     });
   } catch (e) {
     console.error('credit notes failed', e);
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// ---------- GET /credit/prepayments ----------   (the Credit page: Prepayments tab)
+// ?region= &q= &view=apply|open|all   apply = finished orders still holding money (to apply in
+// DEAR or refund), open = held for orders not yet invoiced. The totals ignore the view.
+creditRouter.get('/prepayments', async (req, res) => {
+  try {
+    const all = await loadHeld(req.rep!, { regions: regionsParam(req.query.region), q: String(req.query.q ?? '').trim() || undefined });
+    const view = String(req.query.view ?? 'all');
+    const apply = all.filter(r => r.finished), open = all.filter(r => !r.finished);
+    res.json({
+      totals: {
+        toApply: { amount: heldTotal(apply), count: apply.length },
+        open: { amount: heldTotal(open), count: open.length },
+        all: { amount: heldTotal(all), count: all.length },
+      },
+      rows: view === 'apply' ? apply : view === 'open' ? open : all,
+    });
+  } catch (e) {
+    console.error('credit prepayments failed', e);
     res.status(500).json({ error: (e as Error).message });
   }
 });
