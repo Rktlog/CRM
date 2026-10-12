@@ -4,10 +4,20 @@ import { supabase } from '../lib/supabase';
 import { Account } from '../lib/types';
 import { useMe } from '../lib/useMe';
 import AccountPicker, { AccountSelection, resolveSelection } from './AccountPicker';
+import { ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
 
 type Props = {
   onCreated: () => void;
   onClose: () => void;
+  defaultType?: ActivityKind;   // which kind of log to start on (F2F visit if not given)
+};
+
+// What each kind of log is called once saved, and what the notes box asks.
+const SAVED: Record<ActivityKind, string> = { call: 'Phone call logged', email: 'Email logged', visit: 'F2F visit logged' };
+const PROMPT: Record<ActivityKind, string> = {
+  call: 'What was said on the call?',
+  email: 'What was the email about?',
+  visit: 'What happened at the F2F visit?',
 };
 
 // Resizes to a max dimension and re-encodes as JPEG at reduced quality,
@@ -52,14 +62,17 @@ function compressImage(file: File, maxDim = 1280, quality = 0.7): Promise<Blob> 
   });
 }
 
-export default function LogVisitModal({ onCreated, onClose }: Props) {
+// Logs a phone call, an email or an F2F visit against any store (or a new one). A photo can be
+// attached to a F2F visit.
+export default function LogVisitModal({ onCreated, onClose, defaultType }: Props) {
   const me = useMe();
+  const [type, setType] = useState<ActivityKind>(defaultType ?? 'visit');
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [selection, setSelection] = useState<AccountSelection>(null);
   // If a new store was saved but the next step failed, a retry reuses it
   // instead of creating the store twice.
   const savedStore = useRef<{ id: string; name: string } | null>(null);
-  // Name shown on the "Visit logged" confirmation, including new stores.
+  // Name shown on the confirmation, including new stores.
   const [savedName, setSavedName] = useState('');
   const [note, setNote] = useState('');
   const [photoFile, setPhotoFile] = useState<File | null>(null);
@@ -115,7 +128,7 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
       if (selection.kind === 'new') savedStore.current = account;
       let photoUrl: string | undefined;
 
-      if (photoFile) {
+      if (photoFile && type === 'visit') {
         const compressed = await compressImage(photoFile);
         const path = `${account.id}/${Date.now()}.jpg`;
         const { error: uploadError } = await supabase.storage
@@ -129,7 +142,7 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
 
       await apiPost('/activity', {
         accountId: account.id,
-        type: 'visit',
+        type,
         note: note.trim(),
         ...(photoUrl ? { photoUrl } : {}),
       });
@@ -147,9 +160,9 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
       <div className="modal-overlay" onClick={onClose}>
         <div className="modal-card" onClick={e => e.stopPropagation()} style={{ textAlign: 'center', padding: '32px 24px' }}>
           <div style={{ fontSize: 28, marginBottom: 8 }}>✓</div>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>F2F visit logged</div>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>{SAVED[type]}</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
-            {savedName}{photoFile ? ', photo attached' : ''}
+            {savedName}{photoFile && type === 'visit' ? ', photo attached' : ''}
           </div>
         </div>
       </div>
@@ -159,7 +172,22 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <form className="modal-card" onClick={e => e.stopPropagation()} onSubmit={handleSubmit}>
-        <h3 style={{ marginBottom: 16 }}>Log F2F visit</h3>
+        <h3 style={{ marginBottom: 12 }}>Log activity</h3>
+
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14 }} role="group" aria-label="Kind of activity">
+          {(['call', 'email', 'visit'] as const).map(k => (
+            <button
+              key={k}
+              type="button"
+              className="btn secondary"
+              aria-pressed={type === k}
+              style={{ fontWeight: type === k ? 700 : 400, opacity: type === k ? 1 : 0.65 }}
+              onClick={() => { setType(k); if (k !== 'visit') clearPhoto(); }}
+            >
+              {ACTIVITY_LABEL[k]}
+            </button>
+          ))}
+        </div>
 
         <AccountPicker accounts={accounts} onChange={setSelection} autoFocus />
 
@@ -168,11 +196,12 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
           <textarea
             value={note}
             onChange={e => setNote(e.target.value)}
-            placeholder="What happened at the F2F visit?"
+            placeholder={PROMPT[type]}
             rows={3}
           />
         </label>
 
+        {type === 'visit' && (
         <label className="modal-field">
           Photo (optional)
           {photoPreview ? (
@@ -194,13 +223,14 @@ export default function LogVisitModal({ onCreated, onClose }: Props) {
             <input type="file" accept="image/*" onChange={handlePhotoChange} />
           )}
         </label>
+        )}
 
         {error && <div className="login-error" style={{ marginBottom: 10 }}>{error}</div>}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
           <button type="button" className="btn secondary" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn" disabled={saving || !selection || !me || !note.trim()}>
-            {saving ? 'Saving…' : selection?.kind === 'new' ? 'Add store and log F2F visit' : 'Log F2F visit'}
+            {saving ? 'Saving…' : selection?.kind === 'new' ? `Add store and log ${ACTIVITY_LABEL[type]}` : `Log ${ACTIVITY_LABEL[type]}`}
           </button>
         </div>
       </form>

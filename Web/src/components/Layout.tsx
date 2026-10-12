@@ -14,7 +14,7 @@ const NAV = [
   { to: '/abandoned-carts', label: 'Abandoned carts' },
   { to: '/sales-data', label: 'Sales Data' },
   { to: '/reports', label: 'Reports' },
-  { to: '/visits', label: 'F2F visit log' },
+  { to: '/activity', label: 'Activity log' },
   { to: '/misc', label: 'Misc' },
   { to: '/settings', label: 'Settings' },
 ];

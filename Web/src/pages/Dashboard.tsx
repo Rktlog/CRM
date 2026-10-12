@@ -72,7 +72,7 @@ export default function Dashboard() {
           </div>
         )}
         <div className="stat flag-teal clickable" onClick={() => navigate('/pipeline')} title="Open the Pipeline">
-          <div className="stat-label">Open deals</div>
+          <div className="stat-label">New Business</div>
           <div className="stat-value num">{openDeals}</div>
           <div className="stat-sub">{approached} approached, {quoteSent} quote sent, {paymentCleared} awaiting dispatch</div>
         </div>

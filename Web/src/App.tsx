@@ -8,7 +8,7 @@ import Accounts from './pages/Accounts';
 import AccountDetail from './pages/AccountDetail';
 import SalesData from './pages/SalesData';
 import Settings from './pages/Settings';
-import Visits from './pages/Visits';
+import ActivityLog from './pages/ActivityLog';
 import Planner from './pages/Planner';
 import Reports from './pages/Reports';
 import Misc from './pages/Misc';
@@ -58,7 +58,9 @@ function Routed() {
         <Route path="inactive-stockists" element={<InactiveStockists />} />
         <Route path="credit" element={<Credit />} />
         <Route path="settings" element={<Settings />} />
-        <Route path="visits" element={<Visits />} />
+        <Route path="activity" element={<ActivityLog />} />
+        {/* the old address for this page */}
+        <Route path="visits" element={<Navigate to="/activity" replace />} />
       </Route>
     </Routes>
   );
