@@ -6,6 +6,7 @@ import { LIVE_ORDER, isHistory, isOwing } from '../lib/orderSource';
 import { wholesalePrice, retailPrice } from '../lib/pricing';
 import { buildPriceList, priceListWorkbook, PriceListAvailability, PriceListStatus } from '../lib/priceList';
 import { computeConversion, parsePeriod, regionsOf } from './conversion';
+import { overview, campaignReport } from '../lib/marketing/overview';
 import { loadCreditNotes, loadMovements, loadReservations, loadHeld, regionsParam } from './credit';
 
 // Where a marketing or warranty order was sent: the ship-to name, address and
@@ -738,6 +739,50 @@ exportsRouter.get('/:type', async (req, res) => {
           { name: 'Inactive stockists', rows: detail('inactive_stockist') },
         ].map(sh => (sh.rows.length ? sh : { ...sh, rows: [{ Note: 'None in this period' }] }));
         return sendWorkbook(res, 'conversion.xlsx', sheets);
+      }
+
+      case 'marketing': {
+        // All marketing emails in a period: the headline numbers, each campaign, the automatic emails, and the orders credited to emails.
+        if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Marketing is for managers' });
+        const period = parsePeriod(req.query);
+        const o = await overview(period.from, period.to);
+        const t = o.totals as any, r = o.rates as any;
+        const summary = [
+          ['Period from', xlDate(period.from)], ['Period to', xlDate(period.to)], ['Emails sent', t.sent], ['Delivered', t.delivered], ['Delivered %', r.delivered],
+          ['Opened (people)', t.opened], ['Opened % of delivered', r.opened], ['Clicked (people)', t.clicked], ['Clicked % of delivered', r.clicked],
+          ['Unsubscribed', t.unsubscribed], ['Bounced', t.bounced], ['Spam complaints', t.complained],
+          [`Orders after a click (within ${o.attributionDays} days)`, o.orders.count], ['Sales from those orders (ex GST)', o.orders.revenue],
+          ['Note', 'Opens are approximate: some inboxes load pictures automatically. Clicks and orders are the reliable measures.'],
+        ].map(([Measure, Value]) => ({ Measure, Value }));
+        const campaigns = o.campaigns.map((c: any) => ({ Campaign: c.name, Subject: c.subject, Sent: xlDate(c.sentAt), Emails: c.sent, Delivered: c.delivered, Opened: c.opened, 'Open %': c.openRate,
+          Clicked: c.clicked, 'Click %': c.clickRate, Unsubscribed: c.unsubscribed, Bounced: c.bounced, Orders: c.orders, 'Sales ex GST': c.revenue }));
+        const autos = o.automations.map((a: any) => ({ 'Automatic email': a.name, Type: a.marketing ? 'Marketing' : 'Order email', Sent: a.sent, Opened: a.opened, Clicked: a.clicked, Waiting: a.waiting, Orders: a.orders, 'Sales ex GST': a.revenue }));
+        const orders = o.orders.recent.map((x: any) => ({ Order: x.number, 'Order date': xlDate(x.orderAt), Customer: x.accountName, 'Sales ex GST': x.value, 'Credited to': x.campaignName ?? x.automationKey ?? '', 'Clicked on': xlDate(x.clickedAt) }));
+        return sendWorkbook(res, 'marketing.xlsx', [
+          { name: 'Summary', rows: summary }, { name: 'Campaigns', rows: campaigns.length ? campaigns : [{ Note: 'No campaigns sent in this period' }] },
+          { name: 'Automatic emails', rows: autos }, { name: 'Orders from emails', rows: orders.length ? orders : [{ Note: 'No orders credited in this period' }] },
+        ]);
+      }
+
+      case 'marketing-campaign': {
+        // One campaign: the numbers, every recipient, the links clicked, and the orders credited to it.
+        if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Marketing is for managers' });
+        const id = String(req.query.id ?? '');
+        const r = /^[0-9a-f-]{36}$/i.test(id) ? await campaignReport(id) : null;
+        if (!r) return res.status(404).json({ error: 'Campaign not found' });
+        const st = r.stats as any;
+        const summary = [
+          ['Campaign', r.campaign.name], ['Subject', r.campaign.subject], ['Sent', xlDate(r.campaign.sentAt)], ['Recipients', st.total], ['Sent', st.sent], ['Delivered', st.delivered],
+          ['Opened (people)', st.opened], ['Open %', st.openRate], ['Clicked (people)', st.clicked], ['Click %', st.clickRate], ['Unsubscribed', st.unsubscribed], ['Bounced', st.bounced],
+          ['Not sent (skipped or failed)', st.skipped + st.failed], [`Orders after a click (within ${r.attributionDays} days)`, r.orders.count], ['Sales from those orders (ex GST)', r.orders.revenue],
+        ].map(([Measure, Value]) => ({ Measure, Value }));
+        const rec = r.recipients.map((x: any) => ({ Email: x.email, Name: x.name ?? '', Store: x.company ?? '', Status: x.status, Opens: x.opens, Clicks: x.clicks, 'First sent': xlDate(x.sentAt), Unsubscribed: x.unsubscribedAt ? 'Yes' : '', Note: x.error ?? '' }));
+        const links = r.links.map((x: any) => ({ Link: x.url, Clicks: x.clicks, People: x.people }));
+        const orders = r.orders.rows.map((x: any) => ({ Order: x.number, 'Order date': xlDate(x.orderAt), Customer: x.accountName, 'Sales ex GST': x.value, 'Clicked on': xlDate(x.clickedAt) }));
+        return sendWorkbook(res, 'campaign-report.xlsx', [
+          { name: 'Summary', rows: summary }, { name: 'Recipients', rows: rec.length ? rec : [{ Note: 'No recipients' }] },
+          { name: 'Links clicked', rows: links.length ? links : [{ Note: 'No clicks yet' }] }, { name: 'Orders', rows: orders.length ? orders : [{ Note: 'No orders credited yet' }] },
+        ]);
       }
 
       case 'credit-movements': {

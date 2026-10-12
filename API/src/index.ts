@@ -16,6 +16,8 @@ import { ordersRouter } from './routes/orders';
 import { abandonedCartsRouter } from './routes/Abandonedcarts';
 import { creditRouter } from './routes/credit';
 import { conversionRouter } from './routes/conversion';
+import { marketingRouter } from './routes/marketing';
+import { marketingPublicRouter } from './routes/marketingPublic';
 
 const app = express();
 // Restricts which origins can call this API — wide-open cors() would
@@ -28,6 +30,7 @@ app.use(express.json());
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
+app.use('/m', marketingPublicRouter);
 app.use('/accounts', requireAuth, accountsRouter);
 app.use('/activity', requireAuth, activityRouter);
 app.use('/reports', requireAuth, reportsRouter);
@@ -42,6 +45,7 @@ app.use('/orders', requireAuth, ordersRouter);
 app.use('/abandoned-carts', requireAuth, abandonedCartsRouter);
 app.use('/credit', requireAuth, creditRouter);
 app.use('/conversion', requireAuth, conversionRouter);
+app.use('/marketing', requireAuth, marketingRouter);
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => console.log(`API listening on :${port}`));

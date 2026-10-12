@@ -17,6 +17,7 @@ const REPORTS: { key: string; label: string; blurb: string; group: string }[] = 
   { key: 'inactive-customers', label: 'Inactive customers', blurb: 'Overdue relative to their own pace — a ready-made outreach list.', group: 'Account & team' },
   { key: 'rep-activity', label: 'Rep activity log', blurb: 'Phone calls, emails and F2F visits logged over a date range.', group: 'Account & team' },
   { key: 'conversion', label: 'Conversion report', blurb: 'Abandoned carts, new prospects, new leads and inactive stockists, each followed to an order and a sales quote. Every customer listed.', group: 'Account & team' },
+  { key: 'marketing', label: 'Marketing report', blurb: 'Emails sent, opened and clicked, each campaign, the automatic emails, and the orders that followed an email click. Managers only.', group: 'Account & team' },
   { key: 'credit-movements', label: 'Credit report', blurb: 'Every credit note on account and every credit movement: issued, applied, refunded, reserved, used.', group: 'Account & team' },
 ];
 
@@ -45,7 +46,7 @@ export default function Reports() {
       if (region) params.set('region', region);
       if (isManager && repId) params.set('repId', repId);
       if (key === 'budget-vs-actual') params.set('year', String(year));
-      if (key === 'rep-activity' || key === 'conversion') params.set('days', String(days));
+      if (key === 'rep-activity' || key === 'conversion' || key === 'marketing') params.set('days', String(days));
       await apiDownload(`/exports/${key}?${params.toString()}`, `${key}.xlsx`);
     } catch (e) {
       alert('Download failed — check the API is running.');
@@ -128,7 +129,7 @@ export default function Reports() {
         <div className="section" key={group}>
           <div className="panel-title">{group}</div>
           <div className="manifest">
-            {REPORTS.filter(r => r.group === group).map(r => (
+            {REPORTS.filter(r => r.group === group && (isManager || r.key !== 'marketing')).map(r => (
               <div className="m-row" key={r.key} style={{ gridTemplateColumns: '1.4fr 2fr 0.8fr', cursor: 'default' }}>
                 <div className="acct-name">{r.label}</div>
                 <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>{r.blurb}</div>

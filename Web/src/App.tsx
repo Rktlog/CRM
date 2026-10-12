@@ -21,6 +21,14 @@ import InactiveStockists from './pages/InactiveStockists';
 import Credit from './pages/Credit';
 import Catalogue from './pages/Catalogue';
 import Conversion from './pages/Conversion';
+import Marketing from './pages/Marketing';
+import MarketingCampaigns from './pages/MarketingCampaigns';
+import MarketingCampaign from './pages/MarketingCampaign';
+import MarketingReport from './pages/MarketingReport';
+import MarketingAudience from './pages/MarketingAudience';
+import MarketingTemplates from './pages/MarketingTemplates';
+import MarketingAutomations from './pages/MarketingAutomations';
+import MarketingSettings from './pages/MarketingSettings';
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { session, loading } = useAuth();
@@ -53,6 +61,14 @@ function Routed() {
         <Route path="products" element={<ProductSearch />} />
         <Route path="catalogue" element={<Catalogue />} />
         <Route path="conversion" element={<Conversion />} />
+        <Route path="marketing" element={<Marketing />} />
+        <Route path="marketing/campaigns" element={<MarketingCampaigns />} />
+        <Route path="marketing/campaigns/:id" element={<MarketingCampaign />} />
+        <Route path="marketing/campaigns/:id/report" element={<MarketingReport />} />
+        <Route path="marketing/audience" element={<MarketingAudience />} />
+        <Route path="marketing/templates" element={<MarketingTemplates />} />
+        <Route path="marketing/automations" element={<MarketingAutomations />} />
+        <Route path="marketing/settings" element={<MarketingSettings />} />
         <Route path="orders" element={<Orders />} />
         <Route path="orders/:id" element={<OrderDetail />} />
         <Route path="abandoned-carts" element={<AbandonedCarts />} />

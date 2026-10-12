@@ -12,6 +12,7 @@ const NAV = [
   { to: '/products', label: 'Products' },
   { to: '/catalogue', label: 'Catalogue' },
   { to: '/abandoned-carts', label: 'Abandoned carts' },
+  { to: '/marketing', label: 'Marketing', managerOnly: true },
   { to: '/sales-data', label: 'Sales Data' },
   { to: '/reports', label: 'Reports' },
   { to: '/activity', label: 'Activity log' },
@@ -26,7 +27,7 @@ export default function Layout() {
     <div id="app">
       <div className="rail">
         <div className="brand">Rhino <span>Radar</span></div>
-        {NAV.map(item => (
+        {NAV.filter(item => !('managerOnly' in item) || role === 'manager').map(item => (
           <NavLink
             key={item.to}
             to={item.to}
