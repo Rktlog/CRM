@@ -16,9 +16,11 @@ export const createActivitySchema = z.object({
   type: z.enum(['call', 'email', 'visit']),
   note: z.string().min(1),
   photoUrl: z.string().url().optional(),
+    occurredAt: z.string().datetime().optional(),
 });
 
 export const updateActivitySchema = z.object({
   type: z.enum(['call', 'email', 'visit']).optional(),
   note: z.string().min(1).optional(),
+    occurredAt: z.string().datetime().optional(),
 });

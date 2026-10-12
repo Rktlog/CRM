@@ -5,6 +5,7 @@ import { Account } from '../lib/types';
 import { useMe } from '../lib/useMe';
 import AccountPicker, { AccountSelection, resolveSelection } from './AccountPicker';
 import { ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
+import { todayLocal, isoForDay } from '../lib/logDate';
 
 type Props = {
   onCreated: () => void;
@@ -67,6 +68,7 @@ function compressImage(file: File, maxDim = 1280, quality = 0.7): Promise<Blob> 
 export default function LogVisitModal({ onCreated, onClose, defaultType }: Props) {
   const me = useMe();
   const [type, setType] = useState<ActivityKind>(defaultType ?? 'visit');
+  const [day, setDay] = useState(todayLocal());   // when it happened: today unless changed
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [selection, setSelection] = useState<AccountSelection>(null);
   // If a new store was saved but the next step failed, a retry reuses it
@@ -118,7 +120,7 @@ export default function LogVisitModal({ onCreated, onClose, defaultType }: Props
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!selection || !me || !note.trim()) return;
+    if (!selection || !me || !note.trim() || day > todayLocal()) return;
     setSaving(true);
     setError(null);
     try {
@@ -144,6 +146,7 @@ export default function LogVisitModal({ onCreated, onClose, defaultType }: Props
         accountId: account.id,
         type,
         note: note.trim(),
+        ...(day && day !== todayLocal() ? { occurredAt: isoForDay(day) } : {}),   // today is left to the server's clock
         ...(photoUrl ? { photoUrl } : {}),
       });
       setSavedName(account.name);
@@ -192,6 +195,12 @@ export default function LogVisitModal({ onCreated, onClose, defaultType }: Props
         <AccountPicker accounts={accounts} onChange={setSelection} autoFocus />
 
         <label className="modal-field">
+          Date
+          <input type="date" value={day} max={todayLocal()} onChange={e => setDay(e.target.value || todayLocal())} />
+        </label>
+        {day > todayLocal() && <div className="login-error" style={{ marginBottom: 10 }}>A log can't be dated in the future. Pick today or an earlier date.</div>}
+
+        <label className="modal-field">
           Notes
           <textarea
             value={note}
@@ -229,7 +238,7 @@ export default function LogVisitModal({ onCreated, onClose, defaultType }: Props
 
         <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
           <button type="button" className="btn secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn" disabled={saving || !selection || !me || !note.trim()}>
+          <button type="submit" className="btn" disabled={saving || !selection || !me || !note.trim() || day > todayLocal()}>
             {saving ? 'Saving…' : selection?.kind === 'new' ? `Add store and log ${ACTIVITY_LABEL[type]}` : `Log ${ACTIVITY_LABEL[type]}`}
           </button>
         </div>

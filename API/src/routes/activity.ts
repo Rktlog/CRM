@@ -6,6 +6,16 @@ import { parseFollowUp } from '../lib/followup';
 
 export const activityRouter = Router();
 
+// A log can be given a past date (a call made yesterday, logged today) but not a future one.
+// A day and a half of slack covers time zones; anything before 2015 is a typing mistake.
+function badLogDate(iso?: string): string | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (t > Date.now() + 36 * 3600 * 1000) return "A log can't be dated in the future";
+  if (new Date(iso).getFullYear() < 2015) return 'That date looks wrong';
+  return null;
+}
+
 // List activity across all accounts a rep can see, optionally
 // filtered by type — this is what the Visit log page reads, one
 // query instead of the frontend fetching every account's full
@@ -44,6 +54,9 @@ activityRouter.post('/', async (req, res) => {
     return res.status(400).json({ error: parsed.error.flatten() });
   }
 
+  const dateProblem = badLogDate(parsed.data.occurredAt);
+  if (dateProblem) return res.status(400).json({ error: dateProblem });
+
   const account = await prisma.account.findUnique({
     where: { id: parsed.data.accountId },
   });
@@ -54,7 +67,11 @@ activityRouter.post('/', async (req, res) => {
   }
 
   const activity = await prisma.activity.create({
-    data: { ...parsed.data, repId: req.rep!.id },
+    data: {
+      ...parsed.data,
+      ...(parsed.data.occurredAt ? { occurredAt: new Date(parsed.data.occurredAt) } : {}),   // else the database stamps "now"
+      repId: req.rep!.id,
+    },
   });
 
   const updates: Record<string, unknown> = {};
@@ -131,6 +148,9 @@ activityRouter.patch('/:id', async (req, res) => {
     return res.status(400).json({ error: parsed.error.flatten() });
   }
 
+  const dateProblem = badLogDate(parsed.data.occurredAt);
+  if (dateProblem) return res.status(400).json({ error: dateProblem });
+
   const activity = await prisma.activity.findUnique({ where: { id: req.params.id } });
   if (!activity) return res.status(404).json({ error: 'Activity not found' });
 
@@ -141,7 +161,11 @@ activityRouter.patch('/:id', async (req, res) => {
 
   const updated = await prisma.activity.update({
     where: { id: req.params.id },
-    data: { ...parsed.data, updatedAt: new Date() }, // so the team log shows the edit
+    data: {
+      ...parsed.data,
+      ...(parsed.data.occurredAt ? { occurredAt: new Date(parsed.data.occurredAt) } : {}),
+      updatedAt: new Date(), // so the team log shows the edit
+    },
   });
 
   res.json(updated);

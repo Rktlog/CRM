@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { territoryWhere } from '../lib/territory';
 import { loadCarts } from './Abandonedcarts';
+
 // Conversion: how much of the team's activity turns into business.
 // Four starting points, each followed to an Order and to a Sales Quote:
 //   Abandoned cart   a B2B portal cart left behind
@@ -10,8 +11,12 @@ import { loadCarts } from './Abandonedcarts';
 //   Inactive stockist  has ordered before, but not in the 12 months before the period
 // "Order" = a confirmed order (not a draft or quote, voided or fully credited).
 // "Sales Quote" = a sales quote was raised (open, or since turned into an order).
-// Only things dated on or after the starting point count. DEAR's SQ number is the
-// same record from quote to order, so every order was first a sales quote.
+// Only things dated on or after the starting point count, and up to the end of the chosen
+// period (a day count ending now, a calendar month, or a fiscal quarter). DEAR's SQ number is
+// the same record from quote to order, so every order was first a sales quote.
+// Can be narrowed to some states (the customer's state; a cart not matched to a customer has
+// no state, so it drops out when states are chosen). Every row carries the ids needed to open
+// the customer, the order and the quote.
 
 export const conversionRouter = Router();
 
@@ -31,11 +36,11 @@ export const FUNNELS = [
 ] as const;
 
 export type ConvAccount = { id: string; name: string; region: string; repName: string | null; inDear: boolean; createdAt: Date; hasActivity: boolean };
-export type ConvQuote = { accountId: string; number: string; sentAt: Date; status: string; history: boolean };
+export type ConvQuote = { id: string; accountId: string; number: string; sentAt: Date; status: string; history: boolean };
 export type ConvCart = { id: string; abandonedAt: Date; contact: string; email: string; value: number; accountId: string | null; accountName: string | null; repName: string | null };
 export type ConvRow = {
-  who: string; state: string; rep: string | null; started: Date; email?: string; cartValue?: number;
-  orderNo: string | null; orderDate: Date | null; quoteNo: string | null; quoteDate: Date | null;
+  who: string; state: string; rep: string | null; started: Date; email?: string; cartValue?: number; accountId: string | null;
+  orderId: string | null; orderNo: string | null; orderDate: Date | null; quoteId: string | null; quoteNo: string | null; quoteDate: Date | null;
 };
 export type Funnel = { key: string; title: string; description: string; started: number; orders: number; quotes: number; rows: ConvRow[] };
 
@@ -43,8 +48,13 @@ const isOrder = (q: ConvQuote) => q.history || !NOT_AN_ORDER.includes(q.status.t
 const isQuote = (q: ConvQuote) => !q.history && !NO_QUOTE.includes(q.status.toUpperCase());
 
 // The pure calculation, kept apart from the database so it can be tested.
-export function buildFunnels(input: { accounts: ConvAccount[]; quotes: ConvQuote[]; carts: ConvCart[]; from: Date; to: Date }): Funnel[] {
-  const { accounts, quotes, carts, from, to } = input;
+export function buildFunnels(input: { accounts: ConvAccount[]; quotes: ConvQuote[]; carts: ConvCart[]; from: Date; to: Date; regions?: string[] }): Funnel[] {
+  const { quotes, from, to, regions } = input;
+  const stateOk = (state: string) => !regions?.length || regions.includes(state);
+  const accounts = input.accounts.filter(a => stateOk(a.region));
+  const acct = new Map(input.accounts.map(a => [a.id, a]));
+  // Carts abandoned within the period; with states chosen, only carts matched to a customer in them.
+  const carts = input.carts.filter(c => c.abandonedAt >= from && c.abandonedAt <= to && (!regions?.length || (c.accountId != null && acct.has(c.accountId) && stateOk(acct.get(c.accountId)!.region))));
   const byAccount = new Map<string, ConvQuote[]>();
   for (const q of [...quotes].sort((a, b) => a.sentAt.getTime() - b.sentAt.getTime())) {
     byAccount.set(q.accountId, [...(byAccount.get(q.accountId) ?? []), q]);
@@ -56,7 +66,11 @@ export function buildFunnels(input: { accounts: ConvAccount[]; quotes: ConvQuote
   const row = (who: string, state: string, rep: string | null, started: Date, accountId: string | null, extra: Partial<ConvRow> = {}): ConvRow => {
     const o = firstFrom(accountId, started, isOrder);
     const s = firstFrom(accountId, started, isQuote);
-    return { who, state, rep, started, orderNo: o?.number ?? null, orderDate: o?.sentAt ?? null, quoteNo: s?.number ?? null, quoteDate: s?.sentAt ?? null, ...extra };
+    return {
+      who, state, rep, started, accountId,
+      orderId: o?.id ?? null, orderNo: o?.number ?? null, orderDate: o?.sentAt ?? null,
+      quoteId: s?.id ?? null, quoteNo: s?.number ?? null, quoteDate: s?.sentAt ?? null, ...extra,
+    };
   };
 
   const inactiveBefore = new Date(from.getTime() - 365 * DAY);
@@ -80,8 +94,7 @@ export function buildFunnels(input: { accounts: ConvAccount[]; quotes: ConvQuote
       rows.inactive_stockist.push(row(a.name, a.region, a.repName, from, a.id));
     }
   }
-  // Account names and states for the cart rows come from the accounts list.
-  const acct = new Map(accounts.map(a => [a.id, a]));
+  // States for the cart rows come from the customers list.
   for (const [i, c] of carts.entries()) if (c.accountId && acct.has(c.accountId)) rows.abandoned_cart[i].state = acct.get(c.accountId)!.region;
 
   return FUNNELS.map(f => {
@@ -90,11 +103,43 @@ export function buildFunnels(input: { accounts: ConvAccount[]; quotes: ConvQuote
   });
 }
 
+// ---- The period ----
+// Either ?days=90 (the last N days, ending now) or ?from=2026-07-01&to=2026-09-30 (whole days,
+// Melbourne time: a calendar month or a fiscal quarter). A period that ends in the future is
+// cut off at now.
+const MEL = 'Australia/Melbourne';
+function melbourneOffsetMinutes(at: Date): number {
+  const parts = new Intl.DateTimeFormat('en-AU', { timeZone: MEL, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(at);
+  const g = (t: string) => Number(parts.find(x => x.type === t)!.value);
+  return Math.round((Date.UTC(g('year'), g('month') - 1, g('day'), g('hour'), g('minute'), g('second')) - Math.floor(at.getTime() / 1000) * 1000) / 60000);
+}
+export function melbourneDayStart(ymd: string): Date {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const midnightUtc = Date.UTC(y, m - 1, d);
+  const guess = midnightUtc - melbourneOffsetMinutes(new Date(midnightUtc + 2 * 3600000)) * 60000;   // offset around noon
+  return new Date(midnightUtc - melbourneOffsetMinutes(new Date(guess)) * 60000);                    // then at that very moment
+}
+export function parsePeriod(q: Record<string, unknown>): { from: Date; to: Date; days: number } {
+  const isDay = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v));
+  const now = new Date();
+  if (isDay(q.from) && isDay(q.to)) {
+    const from = melbourneDayStart(q.from);
+    let to = new Date(melbourneDayStart(q.to).getTime() + 86400000 - 1);
+    if (to > now) to = now;
+    if (from > to) throw new Error('That period starts after it ends');
+    if (to.getTime() - from.getTime() > 800 * DAY) throw new Error('That period is too long (the most is about two years)');
+    return { from, to, days: Math.max(1, Math.round((to.getTime() - from.getTime()) / DAY)) };
+  }
+  const days = Math.min(365, Math.max(7, Math.round(Number(q.days)) || 90));
+  return { from: new Date(now.getTime() - days * DAY), to: now, days };
+}
+export const regionsOf = (v: unknown) => (typeof v === 'string' && v ? v.split(',').map(x => x.trim()).filter(Boolean) : undefined);
+
 // Fetches what the calculation needs, for what this person can see.
-export async function computeConversion(rep: { id: string; role: string }, days: number) {
-  const to = new Date();
-  const from = new Date(to.getTime() - days * DAY);
+export async function computeConversion(rep: { id: string; role: string }, opts: { from: Date; to: Date; regions?: string[] }) {
+  const { from, to, regions } = opts;
   const scope: any = { AND: [await territoryWhere(rep as any), { archived: false, misc: false }] };
+  const daysBack = String(Math.ceil((Date.now() - from.getTime()) / DAY) + 1);
 
   const [accountRows, quoteRows, carts] = await Promise.all([
     prisma.account.findMany({
@@ -103,19 +148,19 @@ export async function computeConversion(rep: { id: string; role: string }, days:
     }),
     prisma.quote.findMany({
       where: { miscType: null, account: scope },
-      select: { accountId: true, number: true, sentAt: true, fulfillmentStatus: true, source: true },
+      select: { id: true, accountId: true, number: true, sentAt: true, fulfillmentStatus: true, source: true },
     }),
-    loadCarts(rep, String(days)),
+    loadCarts(rep, daysBack),
   ]);
 
   const funnels = buildFunnels({
-    from, to,
+    from, to, regions,
     accounts: accountRows.map(a => ({
       id: a.id, name: a.name, region: a.region, repName: a.rep?.name ?? null,
       inDear: !!a.dearCustomerId, createdAt: a.createdAt, hasActivity: a._count.activity > 0,
     })),
     quotes: quoteRows.map(q => ({
-      accountId: q.accountId, number: q.number, sentAt: q.sentAt, status: q.fulfillmentStatus ?? '',
+      id: q.id, accountId: q.accountId, number: q.number, sentAt: q.sentAt, status: q.fulfillmentStatus ?? '',
       history: q.source === 'rhino-history' || q.number.startsWith('Q'),
     })),
     carts: carts.map(c => ({
@@ -123,17 +168,27 @@ export async function computeConversion(rep: { id: string; role: string }, days:
       accountId: c.account?.id ?? null, accountName: c.account?.name ?? null, repName: c.account?.rep ?? null,
     })),
   });
-  return { days, from, to, funnels };
+  return { from, to, funnels };
 }
 
-// GET /conversion?days=90   (the Dashboard section; no per-account rows)
+// GET /conversion?days=90            or  ?from=2026-07-01&to=2026-09-30     (a month, a fiscal quarter)
+//     &region=NSW,ACT                 only these states
+//     &funnel=prospect&detail=1       one funnel with every customer in it (to open them)
 conversionRouter.get('/', async (req, res) => {
   try {
-    const days = Math.min(365, Math.max(7, Math.round(Number(req.query.days)) || 90));
-    const r = await computeConversion(req.rep!, days);
-    res.json({ days, from: r.from, to: r.to, funnels: r.funnels.map(({ rows, ...f }) => f) });
+    const { from, to, days } = parsePeriod(req.query);
+    const r = await computeConversion(req.rep!, { from, to, regions: regionsOf(req.query.region) });
+    const base = { days, from: r.from, to: r.to };
+    if (req.query.detail === '1') {
+      const f = r.funnels.find(x => x.key === req.query.funnel);
+      if (!f) return res.status(400).json({ error: 'Unknown funnel' });
+      return res.json({ ...base, funnel: f });
+    }
+    res.json({ ...base, funnels: r.funnels.map(({ rows, ...f }) => f) });
   } catch (e) {
-    console.error('conversion failed', e);
-    res.status(500).json({ error: (e as Error).message });
+    const msg = (e as Error).message;
+    const mine = /period|starts after|too long/.test(msg);
+    if (!mine) console.error('conversion failed', e);
+    res.status(mine ? 400 : 500).json({ error: msg });
   }
 });

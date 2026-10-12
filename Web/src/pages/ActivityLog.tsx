@@ -3,17 +3,19 @@ import { useNavigate } from 'react-router-dom';
 import { apiGet } from '../lib/api';
 import { fmtDate } from '../lib/types';
 import { ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
+import { useMe } from '../lib/useMe';
 import LogVisitModal from '../components/LogVisitModal';
+import EditActivityModal from '../components/EditActivityModal';
 
 // Activity log: every phone call, email and F2F visit logged against any store the person can
 // see, newest first, and a place to log a new one. (This was the F2F visit log.)
 
 type Row = {
-  id: string; accountId: string; accountName: string; accountRegion: string; repName: string | null;
+  id: string; accountId: string; accountName: string; accountRegion: string; repId: string | null; repName: string | null;
   type: ActivityKind; occurredAt: string; note: string; photoUrl: string | null;
 };
 type Filter = '' | ActivityKind;
-const COLS = '1.4fr 0.8fr 1fr 1fr 2fr 0.7fr';
+const COLS = '1.4fr 0.8fr 1fr 1fr 2fr 0.7fr 0.4fr';
 
 export default function ActivityLog() {
   const [type, setType] = useState<Filter>('');
@@ -21,6 +23,10 @@ export default function ActivityLog() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [logging, setLogging] = useState(false);
+  const [editing, setEditing] = useState<Row | null>(null);
+  const me = useMe();
+  // The rep who logged it, or a manager, can edit it (the API checks this too).
+  const canEdit = (r: Row) => !!me && (me.role === 'manager' || r.repId === me.id);
   const navigate = useNavigate();
 
   function load() {
@@ -63,7 +69,7 @@ export default function ActivityLog() {
       ) : (
         <div className="manifest">
           <div className="m-row head" style={{ gridTemplateColumns: COLS }}>
-            <div>Account</div><div>Type</div><div>Rep</div><div>Date</div><div>Note</div><div>Photo</div>
+            <div>Account</div><div>Type</div><div>Rep</div><div>Date</div><div>Note</div><div>Photo</div><div></div>
           </div>
           {shown.map(v => (
             <div className="m-row" key={v.id} style={{ gridTemplateColumns: COLS }} onClick={() => navigate(`/accounts/${v.accountId}`)}>
@@ -79,6 +85,11 @@ export default function ActivityLog() {
                 {v.type !== 'visit' ? <span className="acct-region">—</span>
                   : v.photoUrl ? <span className="pill teal">Attached</span> : <span className="pill neutral">None</span>}
               </div>
+              <div>
+                {canEdit(v) && (
+                  <button className="edit-link" onClick={e => { e.stopPropagation(); setEditing(v); }}>Edit</button>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -88,6 +99,10 @@ export default function ActivityLog() {
         <div style={{ marginTop: 12, fontSize: 12, color: 'var(--muted)' }}>
           Showing the most recent 300{type ? ` ${ACTIVITY_LABEL[type].toLowerCase()} logs` : ' logs'}.
         </div>
+      )}
+
+      {editing && (
+        <EditActivityModal activity={editing} onSaved={load} onClose={() => setEditing(null)} />
       )}
 
       {logging && (

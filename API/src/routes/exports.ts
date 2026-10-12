@@ -5,7 +5,7 @@ import { territoryWhere, canSeeAccount } from '../lib/territory';
 import { LIVE_ORDER, isHistory, isOwing } from '../lib/orderSource';
 import { wholesalePrice, retailPrice } from '../lib/pricing';
 import { buildPriceList, priceListWorkbook, PriceListAvailability, PriceListStatus } from '../lib/priceList';
-import { computeConversion } from './conversion';
+import { computeConversion, parsePeriod, regionsOf } from './conversion';
 import { loadCreditNotes, loadMovements, loadReservations, loadHeld, regionsParam } from './credit';
 
 // Where a marketing or warranty order was sent: the ship-to name, address and
@@ -715,8 +715,8 @@ exportsRouter.get('/:type', async (req, res) => {
 
       case 'conversion': {
         // Abandoned cart / Prospect / New lead / Inactive stockist, each to an Order and a Sales Quote.
-        const days = Math.min(365, Math.max(7, Math.round(Number(req.query.days)) || 90));
-        const r = await computeConversion(req.rep!, days);
+        const period = parsePeriod(req.query);   // ?days=90 or ?from=&to= (a month or a fiscal quarter)
+        const r = await computeConversion(req.rep!, { from: period.from, to: period.to, regions: regionsOf(req.query.region) });
         const pct = (n: number, d: number) => (d ? Math.round((n / d) * 1000) / 10 : 0);
         const summary = r.funnels.map(f => ({
           Funnel: f.title, 'How it is counted': f.description,

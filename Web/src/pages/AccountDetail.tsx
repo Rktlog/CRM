@@ -8,6 +8,7 @@ import PriceListModal from '../components/PriceListModal';
 import CreditReservations from '../components/CreditReservations';
 import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fmtDateWithYear, daysBetween, flagFor, isHistoryOrder, isOwingOrder, amountOwing, fmtDuration } from '../lib/types';
 import { pickCurrentOrder } from '../lib/currentOrder';
+import { todayLocal, dateInputValue, isoForDay } from '../lib/logDate';
 
 export default function AccountDetail() {
   const { id } = useParams<{ id: string }>();
@@ -55,6 +56,8 @@ export default function AccountDetail() {
   const [editNote, setEditNote] = useState('');
   const [editType, setEditType] = useState<'call' | 'email' | 'visit'>('call');
   const [editSaving, setEditSaving] = useState(false);
+  const [logDay, setLogDay] = useState(todayLocal());   // the date of a new log: today unless changed
+  const [editDay, setEditDay] = useState('');
 
   function load() {
     if (!id) return;
@@ -68,8 +71,9 @@ export default function AccountDetail() {
     if (!note.trim() || !id) return;
     setSaving(true);
     try {
-      await apiPost('/activity', { accountId: id, type, note });
+      await apiPost('/activity', { accountId: id, type, note, ...(logDay && logDay !== todayLocal() ? { occurredAt: isoForDay(logDay) } : {}) });
       setNote('');
+      setLogDay(todayLocal());
       load();
     } catch (err: any) {
       setError(err.message);
@@ -79,10 +83,14 @@ export default function AccountDetail() {
   }
 
   async function handleEditSave(activityId: string) {
-    if (!editNote.trim()) return;
+    if (!editNote.trim() || editDay > todayLocal()) return;
     setEditSaving(true);
     try {
-      await apiPatch(`/activity/${activityId}`, { note: editNote, type: editType });
+      const orig = account?.activity.find(a => a.id === activityId);
+      await apiPatch(`/activity/${activityId}`, {
+        note: editNote, type: editType,
+        ...(orig && editDay && editDay !== dateInputValue(orig.occurredAt) ? { occurredAt: isoForDay(editDay) } : {}),
+      });
       setEditingActivityId(null);
       load();
     } catch (err: any) {
@@ -293,9 +301,15 @@ export default function AccountDetail() {
                 rows={3}
                 style={{ width: '100%', marginBottom: 8 }}
               />
-              <button className="btn" type="submit" disabled={saving}>
-                {saving ? 'Saving…' : 'Log activity'}
-              </button>
+              <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button className="btn" type="submit" disabled={saving || logDay > todayLocal()}>
+                  {saving ? 'Saving…' : 'Log activity'}
+                </button>
+                <label className="acct-region" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  Date
+                  <input type="date" value={logDay} max={todayLocal()} onChange={e => setLogDay(e.target.value || todayLocal())} />
+                </label>
+              </div>
             </form>
           </div>
 
@@ -321,6 +335,10 @@ export default function AccountDetail() {
                           </button>
                         ))}
                       </div>
+                      <label className="acct-region" style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+                        Date
+                        <input type="date" value={editDay} max={todayLocal()} onChange={e => setEditDay(e.target.value)} />
+                      </label>
                       <textarea
                         value={editNote}
                         onChange={e => setEditNote(e.target.value)}
@@ -339,12 +357,12 @@ export default function AccountDetail() {
                   ) : (
                     <>
                       <div className="ti-top">
-                        <span style={{ fontWeight: 500, textTransform: 'capitalize' }}>{t.type}</span>
+                        <span style={{ fontWeight: 500 }}>{ACTIVITY_LABEL[t.type]}</span>
                         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span className="num" style={{ color: 'var(--muted)' }}>{fmtDate(t.occurredAt)}</span>
                           <button
                             className="edit-link"
-                            onClick={() => { setEditingActivityId(t.id); setEditNote(t.note); setEditType(t.type); }}
+                            onClick={() => { setEditingActivityId(t.id); setEditNote(t.note); setEditType(t.type); setEditDay(dateInputValue(t.occurredAt)); }}
                           >
                             Edit
                           </button>
