@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import StateFilter from './StateFilter';
 import { Link, useNavigate } from 'react-router-dom';
+import OrderNoteChip from './OrderNoteChip'
 import { apiGet, apiDownload } from '../lib/api';
 import { fmtMoney, fmtDateWithYear, fmtDuration, fmtPayDate } from '../lib/types';
 import { useMe, stateOptionsFor } from '../lib/useMe';
@@ -189,6 +190,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
                   <td>
                     <Link to={`/orders/${r.orderId}`} className="order-link num">{r.invoice || r.number}</Link>
                     <div className="cust-meta">{r.number}{r.type !== 'Sale' ? `, ${r.type}` : ''}</div>
+                      <OrderNoteChip noteCount={r.noteCount} lastNote={r.lastNote} />
                   </td>
                   <td>
                     <Link to={`/accounts/${r.accountId}`} className="ledger-link">{r.customer}</Link>
@@ -227,6 +229,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
                     <Link to={`/orders/${r.id}`} className="order-link num">{r.number}</Link>
                     {r.reference && <div className="cust-meta">{r.reference}</div>}
                     {r.type && r.type !== 'Sale' && <div className="cust-meta">{r.type}</div>}
+                    <OrderNoteChip noteCount={r.noteCount} lastNote={r.lastNote} />
                   </td>
                   <td>
                     <Link to={`/accounts/${r.accountId}`} className="ledger-link">{r.customer}</Link>

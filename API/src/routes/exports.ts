@@ -704,12 +704,12 @@ exportsRouter.get('/:type', async (req, res) => {
         const since = new Date(Date.now() - days * 86400000);
         const activities = await prisma.activity.findMany({
           where: { occurredAt: { gte: since }, ...(isManager ? {} : { repId: req.rep!.id }) },
-          include: { rep: { select: { name: true } }, account: { select: { name: true, region: true } } },
+          include: { rep: { select: { name: true } }, account: { select: { name: true, region: true } }, quote: { select: { number: true } } },
           orderBy: { occurredAt: 'desc' },
         });
         const rows = activities.map(a => ({
           Date: a.occurredAt.toISOString().slice(0, 10), Rep: a.rep?.name ?? 'Unknown', Type: ({ call: 'Phone', email: 'Email', visit: 'F2F visit' } as Record<string, string>)[a.type] ?? a.type,
-          Account: a.account?.name ?? 'Unknown', Region: a.account?.region ?? '', Note: a.note,
+          Account: a.account?.name ?? 'Unknown', Region: a.account?.region ?? '', Order: a.quote?.number ?? '', Note: a.note,
         }));
         return sendWorkbook(res, 'rep-activity.xlsx', [{ name: 'Rep Activity', rows }]);
       }
@@ -804,12 +804,10 @@ exportsRouter.get('/:type', async (req, res) => {
           })) },
           { name: 'Prepayments', rows: held.map(h => ({
             Customer: h.account, State: h.region, Rep: h.rep ?? '', Order: h.number, Status: h.status, 'Order date': h.orderDate ?? '',
-             Type: h.kind, Amount: h.amount, 'Free to reserve': h.free, Reserved: h.reserved,
-            Action: h.cancelled ? 'Cancelled order: apply in DEAR or refund' : h.finished ? 'Finished order: apply in DEAR or refund' : 'Held for the open order',
+            Type: h.kind, Amount: h.amount, Action: h.finished ? 'Finished order: apply in DEAR or refund' : 'Held for the open order',
           })) },
           { name: 'Reservations', rows: reservations.map(r => ({
-             Name: r.name, Customer: r.account, 'For customer': r.forAccount, State: r.region, Rep: r.rep ?? '', Amount: r.amount,
-            'Credit no': r.creditNo ?? (r.sourceKind === 'prepayment' ? `Prepaid on ${r.sourceOrder}` : ''),
+            Name: r.name, Customer: r.account, State: r.region, Rep: r.rep ?? '', Amount: r.amount, 'Credit no': r.creditNo ?? '',
             'Sales order / quote': r.orderRef ?? 'Next order', 'Used on': r.usedOnOrder ?? '', Note: r.note ?? '',
             Status: r.status === 'cancelled' ? 'Released' : r.status === 'used' ? 'Used' : 'Reserved',
             'Reserved on': xlDate(new Date(r.createdAt)), 'Reserved by': r.createdBy ?? '',

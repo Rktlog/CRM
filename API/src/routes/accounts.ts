@@ -4,6 +4,7 @@ import { createAccountSchema } from '../schemas';
 import { territoryWhere, canSeeAccount } from '../lib/territory';
 import { priceListOptions } from '../lib/priceList';
 import { LIVE_ORDER } from '../lib/orderSource';
+import { orderNoteSummary } from '../lib/orderNotes';
 
 export const accountsRouter = Router();
 
@@ -204,7 +205,7 @@ accountsRouter.get('/:id', async (req, res) => {
       rep: { select: { name: true } },
       activity: {
         orderBy: { occurredAt: 'desc' },
-        include: { rep: { select: { name: true } } },
+        include: { rep: { select: { name: true } }, quote: { select: { id: true, number: true } } },
       },
       quotes: { orderBy: { sentAt: 'desc' }, include: { lines: true } },
     },
@@ -233,10 +234,13 @@ accountsRouter.get('/:id', async (req, res) => {
     .map(([sku, v]) => ({ sku, ...v, total: Math.round(v.total * 100) / 100 }))
     .sort((a, b) => b.total - a.total);
 
+  const notes = await orderNoteSummary(rest.quotes.map(q => q.id));   // what the team has said about each order
+
   const flattened = {
     ...rest,
+    quotes: rest.quotes.map(q => ({ ...q, ...(notes.get(q.id) ?? {}) })),
     repName: rep?.name ?? null,
-    activity: activity.map(({ rep: activityRep, ...a }) => ({ ...a, repName: activityRep?.name ?? null })),
+    activity: activity.map(({ rep: activityRep, quote, ...a }) => ({ ...a, repName: activityRep?.name ?? null, orderId: quote?.id ?? null, orderNumber: quote?.number ?? null })),
     productBreakdown,
   };
 

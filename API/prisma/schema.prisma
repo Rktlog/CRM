@@ -169,6 +169,8 @@ model Activity {
   type       ActivityType
   note       String
   photoUrl   String?      @map("photo_url")
+  quoteId    String?      @map("quote_id") @db.Uuid   // the order this log is about, if any
+  quote      Quote?       @relation(fields: [quoteId], references: [id])
   occurredAt DateTime     @default(now()) @map("occurred_at")
   createdAt  DateTime     @default(now()) @map("created_at")  // when it was logged
   updatedAt  DateTime?    @map("updated_at")                  // when it was last edited
@@ -208,6 +210,7 @@ model Quote {
   source    String   @default("cin7")
   syncedAt  DateTime @default(now()) @map("synced_at")
   lines     QuoteLine[]
+  activity  Activity[]   // the team's logs and notes about this order
   // Set when the order is a warranty replacement or marketing/sample
   // giveaway — a real order, but not a commercial sale. Drives the
   // Misc page's two tabs and is excluded from all performance figures.

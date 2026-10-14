@@ -53,6 +53,8 @@ export type Account = {
 
 export type QuoteLineItem = { sku: string; productName: string; brand: string | null; quantity: number; unitPrice: number; lineTotal: number };
 
+export type OrderLastNote = { text: string; type: string; by: string | null; at: string };
+ 
 export type Quote = {
   id: string;
   number: string;
@@ -79,6 +81,8 @@ export type Quote = {
   unappliedCredit?: number | null; // credit on account from this order (unused credit notes, unapplied prepayments)
   creditNotes?: unknown;
   lines?: QuoteLineItem[];
+  noteCount?: number;            // team notes on this order
+  lastNote?: OrderLastNote | null;
 };
 
 export type Activity = {
@@ -89,6 +93,8 @@ export type Activity = {
   occurredAt: string;
   repId: string;
   repName: string | null;
+  orderId?: string | null;       // the order this log is about, if any
+  orderNumber?: string | null;
 };
 
 export type ProductLine = { sku: string; productName: string; brand: string | null; quantity: number; total: number };

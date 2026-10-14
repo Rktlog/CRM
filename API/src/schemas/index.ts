@@ -16,6 +16,8 @@ export const createActivitySchema = z.object({
   type: z.enum(['call', 'email', 'visit']),
   note: z.string().min(1),
   photoUrl: z.string().url().optional(),
+  // The order this log is about, if any. It has to be one of this account's orders.
+  orderId: z.string().uuid().optional(),
     occurredAt: z.string().datetime().optional(),
 });
 

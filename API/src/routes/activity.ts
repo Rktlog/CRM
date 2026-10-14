@@ -32,13 +32,16 @@ activityRouter.get('/', async (req, res) => {
     include: {
       account: { select: { id: true, name: true, region: true } },
       rep: { select: { name: true } },
+      quote: { select: { id: true, number: true } },
     },
     orderBy: { occurredAt: 'desc' },
     take: 300,
   });
 
-  const flattened = activities.map(({ account, rep, ...a }) => ({
+  const flattened = activities.map(({ account, rep, quote, ...a }) => ({
     ...a,
+    orderId: quote?.id ?? null,
+    orderNumber: quote?.number ?? null,
     accountId: account.id,
     accountName: account.name,
     accountRegion: account.region,
@@ -66,9 +69,18 @@ activityRouter.post('/', async (req, res) => {
     return res.status(403).json({ error: 'This account is outside your states' });
   }
 
+  // A log can be about one of this account's orders ("chasing payment on SQ36566"). It is the same log, so it
+  // shows in the account's main log too.
+  const { orderId, ...logData } = parsed.data;
+  if (orderId) {
+    const order = await prisma.quote.findUnique({ where: { id: orderId }, select: { accountId: true } });
+    if (!order || order.accountId !== account.id) return res.status(400).json({ error: "That order doesn't belong to this account" });
+  }
+ 
   const activity = await prisma.activity.create({
     data: {
-      ...parsed.data,
+      ...logData,
+      ...(orderId ? { quoteId: orderId } : {}),
       ...(parsed.data.occurredAt ? { occurredAt: new Date(parsed.data.occurredAt) } : {}),   // else the database stamps "now"
       repId: req.rep!.id,
     },
@@ -122,14 +134,16 @@ activityRouter.get('/feed', async (req, res) => {
            x.occurred_at as "occurredAt", x.created_at as "createdAt", x.updated_at as "updatedAt",
            greatest(x.created_at, coalesce(x.updated_at, x.created_at)) as "sortAt",
            a.id as "accountId", a.name as "accountName", a.region as "accountRegion",
+           qq.id as "orderId", qq.number as "orderNumber",
            r.id as "repId", r.name as "repName"
     from crm.activity x
-    join crm.accounts a on a.id = x.account_id
+     join crm.accounts a on a.id = x.account_id
     join crm.reps r on r.id = x.rep_id
+    left join crm.quotes qq on qq.id = x.quote_id
     where greatest(x.created_at, coalesce(x.updated_at, x.created_at)) >= ${since}
       and (${repId}::uuid is null or x.rep_id = ${repId}::uuid)
       and (${type}::text is null or x.type::text = ${type}::text)
-      and (${q}::text is null or x.note ilike ${q}::text or a.name ilike ${q}::text)
+      and (${q}::text is null or x.note ilike ${q}::text or a.name ilike ${q}::text or qq.number ilike ${q}::text)
       and (${before}::timestamp is null or greatest(x.created_at, coalesce(x.updated_at, x.created_at)) < ${before}::timestamp)
     order by "sortAt" desc
     limit ${PAGE + 1}`;

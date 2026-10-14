@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { apiGet } from '../lib/api';
 import { fmtDate } from '../lib/types';
 import { ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
@@ -13,6 +13,7 @@ import EditActivityModal from '../components/EditActivityModal';
 type Row = {
   id: string; accountId: string; accountName: string; accountRegion: string; repId: string | null; repName: string | null;
   type: ActivityKind; occurredAt: string; note: string; photoUrl: string | null;
+  orderId?: string | null; orderNumber?: string | null;
 };
 type Filter = '' | ActivityKind;
 const COLS = '1.4fr 0.8fr 1fr 1fr 2fr 0.7fr 0.4fr';
@@ -80,7 +81,10 @@ export default function ActivityLog() {
               <div><span className={`pill ${v.type === 'visit' ? 'teal' : 'neutral'}`}>{ACTIVITY_LABEL[v.type] ?? v.type}</span></div>
               <div>{v.repName ?? '—'}</div>
               <div>{fmtDate(v.occurredAt)}</div>
-              <div style={{ color: 'var(--ink-soft)' }}>{v.note}</div>
+              <div style={{ color: 'var(--ink-soft)' }}>
+                {v.orderNumber && v.orderId && <div><Link to={`/orders/${v.orderId}`} className="order-link" onClick={e => e.stopPropagation()}>On order {v.orderNumber}</Link></div>}
+                {v.note}
+              </div>
               <div>
                 {v.type !== 'visit' ? <span className="acct-region">—</span>
                   : v.photoUrl ? <span className="pill teal">Attached</span> : <span className="pill neutral">None</span>}

@@ -5,6 +5,7 @@ import { isHistory } from '../lib/orderSource';
 import { searchWords } from './products';
 import * as XLSX from 'xlsx';
 import { openQuotes, toShip, unpaidInvoices, balances, AGE_BUCKETS } from '../lib/receivables';
+import { orderNoteSummary } from '../lib/orderNotes';
 
 export const ordersRouter = Router();
 
@@ -124,6 +125,7 @@ ordersRouter.get('/search', async (req, res) => {
     },
   });
 
+  const notes = await orderNoteSummary(quotes.map(o => o.id));   // what the team has said about each order
   res.json({
     query: q,
     statuses,
@@ -154,6 +156,7 @@ ordersRouter.get('/search', async (req, res) => {
       accountName: o.account.name,
       region: o.account.region,
       itemCount: o._count.lines,
+      ...(notes.get(o.id) ?? {}),
     })),
   });
 });
@@ -244,11 +247,16 @@ ordersRouter.get('/views/:view', async (req, res) => {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheet.length ? sheet : [{ Note: 'Nothing to show.' }]), name.slice(0, 31));
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${name}-${new Date().toISOString().slice(0, 10)}.xlsx"`);
-    return res.send(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+   return res.send(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+  }
+  // What the team has said about each order, so chasing and follow-ups show in the list.
+  if (Array.isArray(data?.rows)) {
+    const notes = await orderNoteSummary(data.rows.map((r: any) => r.orderId ?? r.id));
+    data = { ...data, rows: data.rows.map((r: any) => { const n = notes.get(r.orderId ?? r.id); return n ? { ...r, ...n } : r; }) };
   }
   res.json(data);
 });
-
+  
 ordersRouter.get('/:id', async (req, res) => {
   const o = await prisma.quote.findUnique({
     where: { id: req.params.id },

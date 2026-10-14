@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiGet } from '../lib/api';
 import { fmtMoney, fmtDateWithYear, fmtPayDate } from '../lib/types';
 import { orderStatusPills, paymentTag, stageTag } from '../lib/orderStatus';
+import OrderLog from '../components/OrderLog';
 
 type Line = {
   sku: string; productName: string; brand: string | null;
@@ -109,6 +110,8 @@ export default function OrderDetail() {
 
       <div className="detail-grid">
         <div>
+          <OrderLog orderId={order.id} accountId={order.account.id} accountName={order.account.name} />
+ 
           <div className="card">
             <h3>Items</h3>
             {order.lines.length === 0 ? (

@@ -6,7 +6,7 @@ import { apiGet } from '../lib/api';
 // manager doesn't have to open each account. Refreshes itself every minute.
 
 type LogRow = {
-  id: string; type: 'call' | 'email' | 'visit'; note: string; photoUrl: string | null;
+  id: string; type: 'call' | 'email' | 'visit'; note: string; photoUrl: string | null; orderId?: string | null; orderNumber?: string | null;
   occurredAt: string; createdAt: string; updatedAt: string | null; sortAt: string; edited: boolean;
   accountId: string; accountName: string; accountRegion: string; repId: string; repName: string;
 };
@@ -143,6 +143,7 @@ export default function TeamLogCard() {
                     <span className={`pill ${r.type === 'visit' ? 'teal' : r.type === 'email' ? 'neutral' : 'amber'}`}>{TYPE_LABEL[r.type]}</span>
                     <Link to={`/accounts/${r.accountId}`} className="acct-name">{r.accountName}</Link>
                     <span className="acct-region">{r.accountRegion}</span>
+                    {r.orderNumber && r.orderId && <Link to={`/orders/${r.orderId}`} className="order-link">on {r.orderNumber}</Link>}
                     {r.edited && <span className="pill neutral" title={`Edited ${when(r.updatedAt!)}`}>Edited</span>}
                     {!sameDay(r.occurredAt, r.createdAt) && (
                       <span className="acct-region">for {new Date(r.occurredAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}</span>

@@ -4,6 +4,7 @@ import OrderViews, { ViewKey } from '../components/OrderViews';
 import { apiGet } from '../lib/api';
 import { fmtMoney, fmtDateWithYear } from '../lib/types';
 import { orderStatusPills } from '../lib/orderStatus';
+import OrderNoteChip from '../components/OrderNoteChip';
 
 type OrderRow = {
   id: string;
@@ -25,6 +26,8 @@ type OrderRow = {
   accountName: string;
   region: string;
   itemCount: number;
+  noteCount?: number;
+  lastNote?: import('../lib/types').OrderLastNote | null;
 };
 
 const COLS = '1fr 1.8fr 0.9fr 0.8fr 1.1fr';
@@ -199,8 +202,9 @@ function AllOrders() {
                 <div className="acct-name num">{o.number}</div>
                 <div className="acct-region">
                   {o.itemCount} {o.itemCount === 1 ? 'item' : 'items'}
-                  {o.invoiceNumber ? `, inv ${o.invoiceNumber}` : ''}
+                 {o.invoiceNumber ? `, inv ${o.invoiceNumber}` : ''}
                 </div>
+                <OrderNoteChip noteCount={o.noteCount} lastNote={o.lastNote} />
               </div>
               <div>
                 <div className="acct-name">{o.accountName}</div>

@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, FormEvent } from 'react';
 import { useMe, ALL_STATES } from '../lib/useMe';
 import { useParams, Link } from 'react-router-dom';
 import { ACTIVITY_LABEL } from '../lib/activityLabels';
+import OrderNoteChip from '../components/OrderNoteChip';
 import { apiGet, apiPost, apiPatch, apiDownload } from '../lib/api';
 import { orderStatusPills, stageTag, paymentTag } from '../lib/orderStatus';
 import PriceListModal from '../components/PriceListModal';
@@ -25,6 +26,7 @@ export default function AccountDetail() {
   const [showPriceList, setShowPriceList] = useState(false);
   const [showDue, setShowDue] = useState(false);
   const [type, setType] = useState<'call' | 'email' | 'visit'>('call');
+  const [orderId, setOrderId] = useState('');   // optional: the order this log is about
   const [saving, setSaving] = useState(false);
   const [editingActivityId, setEditingActivityId] = useState<string | null>(null);
   const [openOrderId, setOpenOrderId] = useState<string | null>(null);
@@ -73,8 +75,9 @@ export default function AccountDetail() {
     if (!note.trim() || !id) return;
     setSaving(true);
     try {
-      await apiPost('/activity', { accountId: id, type, note, ...(logDay && logDay !== todayLocal() ? { occurredAt: isoForDay(logDay) } : {}) });
+      await apiPost('/activity', { accountId: id, type, note, ...(orderId ? { orderId } : {}), ...(logDay && logDay !== todayLocal() ? { occurredAt: isoForDay(logDay) } : {}) });
       setNote('');
+      setOrderId('');
       setLogDay(todayLocal());
       load();
     } catch (err: any) {
@@ -242,6 +245,7 @@ export default function AccountDetail() {
                           {(q.amountPaid ?? 0) > 0.005 && <>, paid {fmtMoney(q.amountPaid!)}</>}
                           {(q.creditedTotal ?? 0) > 0.005 && <>, credited {fmtMoney(q.creditedTotal!)}</>}
                         </div>
+                        <OrderNoteChip noteCount={q.noteCount} lastNote={q.lastNote} />
                       </div>
                       <div className="due-amount">
                         <div className={'num' + (days > 30 ? ' overdue' : '')}>{fmtMoney(due)}</div>
@@ -298,6 +302,12 @@ export default function AccountDetail() {
                   </button>
                 ))}
               </div>
+               {account.quotes.length > 0 && (
+                <select value={orderId} onChange={e => setOrderId(e.target.value)} aria-label="Which order is this about" style={{ width: '100%', marginBottom: 8 }}>
+                  <option value="">About the account (no particular order)</option>
+                  {account.quotes.slice(0, 15).map(q => <option key={q.id} value={q.id}>About order {q.number}, {fmtDateWithYear(q.sentAt)}</option>)}
+                </select>
+              )}
               <textarea
                 value={note}
                 onChange={e => setNote(e.target.value)}
@@ -373,6 +383,7 @@ export default function AccountDetail() {
                         </span>
                       </div>
                       {t.repName && <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>Logged by {t.repName}</div>}
+                      {t.orderNumber && t.orderId && <div style={{ fontSize: 11.5 }}>About order <Link to={`/orders/${t.orderId}`} className="order-link">{t.orderNumber}</Link></div>}
                       <div className="ti-note">{t.note}</div>
                       {t.photoUrl && (
                         <a href={t.photoUrl} target="_blank" rel="noreferrer" className="ti-photo" title="Open the full-size photo">
