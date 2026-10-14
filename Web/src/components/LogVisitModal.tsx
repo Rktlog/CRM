@@ -236,7 +236,7 @@ export default function LogVisitModal({ onCreated, onClose, defaultType }: Props
 
         {error && <div className="login-error" style={{ marginBottom: 10 }}>{error}</div>}
 
-        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+        <div className="modal-actions" style={{ display: 'flex', gap: 8, marginTop: 6 }}>
           <button type="button" className="btn secondary" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn" disabled={saving || !selection || !me || !note.trim() || day > todayLocal()}>
             {saving ? 'Saving…' : selection?.kind === 'new' ? `Add store and log ${ACTIVITY_LABEL[type]}` : `Log ${ACTIVITY_LABEL[type]}`}

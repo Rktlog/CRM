@@ -836,3 +836,37 @@ a.pd-list-card:hover { border-color: var(--teal); }
 
 /* Sidebar name */
 .brand-echo { -webkit-text-stroke: 1px var(--amber); color: transparent; margin-left: 0.25em; }
+
+/* ---- Phones, and phones with the display magnified ------------------------------------------
+   A pop-up taller than the screen used to be pinned in the middle with no way to scroll, so the
+   buttons at the bottom could not be reached. Now the pop-up scrolls, starts at the top when it is
+   tall, and keeps its buttons stuck to the bottom of the screen. */
+.modal-overlay {
+  overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  align-items: flex-start;            /* a tall pop-up starts at the top, so nothing is cut off above */
+  padding: 16px; box-sizing: border-box;
+}
+.modal-card { margin: auto; box-sizing: border-box; }   /* margin:auto still centres a short one */
+.modal-actions {
+  position: sticky; bottom: 0; z-index: 2; background: var(--panel);
+  margin: 0 -28px -28px; padding: 12px 28px calc(12px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 760px) {
+  .modal-overlay { padding: 8px; }
+  .modal-card { width: 100%; max-width: 520px; padding: 18px; gap: 12px; }
+  .modal-actions { margin: 0 -18px -18px; padding: 10px 18px calc(10px + env(safe-area-inset-bottom, 0px)); }
+  .modal-actions .btn { flex: 1; }
+  /* An iPhone zooms in whenever a box smaller than 16px is tapped, and a pop-up that is already too big
+     leaves no way back out. 16px stops that. */
+  input, select, textarea { font-size: 16px; }
+  .btn, .tab { min-height: 40px; touch-action: manipulation; }
+  .content { min-width: 0; }
+  .controls { flex-wrap: wrap; }
+  .tab-bar { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tab { flex-shrink: 0; white-space: nowrap; }
+  .content table { display: block; max-width: 100%; overflow-x: auto; }   /* plain tables scroll instead of widening the page */
+  .manifest .m-row { min-width: 640px; }                                  /* lists with many columns get room, and scroll sideways */
+  .terms-menu { max-width: calc(100vw - 32px); }
+}

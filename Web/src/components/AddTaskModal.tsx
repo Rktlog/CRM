@@ -80,7 +80,7 @@ export default function AddTaskModal({ onCreated, onClose, initialDate }: Props)
 
         {error && <div className="login-error" style={{ marginBottom: 10 }}>{error}</div>}
 
-        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+       <div className="modal-actions" style={{ display: 'flex', gap: 8, marginTop: 6 }}>
           <button type="button" className="btn secondary" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn" disabled={saving || !selection || !me}>
             {saving ? 'Saving…' : selection?.kind === 'new' ? 'Add store and schedule' : 'Schedule'}

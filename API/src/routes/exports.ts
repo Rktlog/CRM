@@ -804,10 +804,12 @@ exportsRouter.get('/:type', async (req, res) => {
           })) },
           { name: 'Prepayments', rows: held.map(h => ({
             Customer: h.account, State: h.region, Rep: h.rep ?? '', Order: h.number, Status: h.status, 'Order date': h.orderDate ?? '',
-            Type: h.kind, Amount: h.amount, Action: h.finished ? 'Finished order: apply in DEAR or refund' : 'Held for the open order',
+             Type: h.kind, Amount: h.amount, 'Free to reserve': h.free, Reserved: h.reserved,
+            Action: h.cancelled ? 'Cancelled order: apply in DEAR or refund' : h.finished ? 'Finished order: apply in DEAR or refund' : 'Held for the open order',
           })) },
           { name: 'Reservations', rows: reservations.map(r => ({
-            Name: r.name, Customer: r.account, State: r.region, Rep: r.rep ?? '', Amount: r.amount, 'Credit no': r.creditNo ?? '',
+             Name: r.name, Customer: r.account, 'For customer': r.forAccount, State: r.region, Rep: r.rep ?? '', Amount: r.amount,
+            'Credit no': r.creditNo ?? (r.sourceKind === 'prepayment' ? `Prepaid on ${r.sourceOrder}` : ''),
             'Sales order / quote': r.orderRef ?? 'Next order', 'Used on': r.usedOnOrder ?? '', Note: r.note ?? '',
             Status: r.status === 'cancelled' ? 'Released' : r.status === 'used' ? 'Used' : 'Reserved',
             'Reserved on': xlDate(new Date(r.createdAt)), 'Reserved by': r.createdBy ?? '',

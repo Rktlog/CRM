@@ -20,14 +20,16 @@ type NoteRow = {
 type Reservation = {
   id: string; name: string; accountId: string; account: string; region: string; rep: string | null; amount: number;
   creditNo: string | null; orderRef: string | null; usedOnOrder: string | null; note: string | null;
+  sourceKind?: 'credit_note' | 'prepayment'; sourceOrder?: string | null; toAccountId?: string; forAccount?: string;
   status: 'reserved' | 'used' | 'cancelled'; createdAt: string; createdBy: string | null; resolvedAt: string | null; resolvedBy: string | null;
 };
-type Totals = { onAccount: number; reserved: number; free: number; openNotes: number; customers: number; heldOnOrders?: number; toApply?: number };
+type Totals = { onAccount: number; reserved: number; free: number; openNotes: number; customers: number; heldOnOrders?: number; toApply?: number; prepaidFree?: number };
 type Held = {
   id: string; number: string; accountId: string; account: string; region: string; rep: string | null; status: string;
   orderDate: string | null; kind: 'Prepayment' | 'Overpaid'; amount: number; finished: boolean;
+  cancelled?: boolean; reservable?: boolean; reserved?: number; free?: number;
 };
-type HeldTotals = { toApply: { amount: number; count: number }; open: { amount: number; count: number }; all: { amount: number; count: number } };
+type HeldTotals = { free?: { amount: number; count: number }; toApply: { amount: number; count: number }; open: { amount: number; count: number }; all: { amount: number; count: number } };
 const nice = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '');
 type Move = {
   date: string | null; type: string; accountId: string; account: string; region: string; rep: string | null;
@@ -51,7 +53,7 @@ export default function Credit() {
   const [status, setStatus] = useState('open');
   const [resStatus, setResStatus] = useState('reserved');
   const startView = params.get('view');
-  const [heldView, setHeldView] = useState<'apply' | 'open' | 'all'>(startView === 'open' || startView === 'all' ? startView : 'apply');
+  const [heldView, setHeldView] = useState<'free' | 'apply' | 'open' | 'all'>(startView === 'open' || startView === 'all' || startView === 'apply' ? startView : 'free');
   const [held, setHeld] = useState<Held[] | null>(null);
   const [heldTotals, setHeldTotals] = useState<HeldTotals | null>(null);
   const [reservations, setReservations] = useState<Reservation[] | null>(null);
@@ -146,7 +148,8 @@ export default function Credit() {
       {totals && (totals.heldOnOrders ?? 0) > 0.005 && (
         <div className="acct-region" style={{ margin: '-4px 0 12px' }}>
           Not counted above: {fmtMoney(totals.heldOnOrders!)} held as prepayments or overpayments on orders. They are not credit notes.{' '}
-          {(totals.toApply ?? 0) > 0.005 ? `${fmtMoney(totals.toApply!)} of it is on finished orders and needs applying in DEAR. ` : ''}
+          {(totals.prepaidFree ?? 0) > 0.005 ? `${fmtMoney(totals.prepaidFree!)} of it is prepaid money on cancelled or finished orders and can be reserved. ` : ''}
+          {(totals.toApply ?? 0) > 0.005 ? `${fmtMoney(totals.toApply!)} is on finished or cancelled orders and needs applying in DEAR. ` : ''}
           <button className="link-btn" onClick={() => setTab('prepayments')}>See the Prepayments tab</button>
         </div>
       )}
@@ -208,11 +211,13 @@ export default function Credit() {
       {!error && tab === 'prepayments' && (
         <>
           <div className="acct-region" style={{ marginBottom: 8, maxWidth: 760 }}>
-            Money held on orders that is not a credit note. A <b>finished</b> order that still holds a prepayment or is overpaid needs
-            the money applied to its invoice in DEAR, or refunded. Money on an <b>open</b> order is held until the order is invoiced.
+            Money held on orders that is not a credit note. Prepaid money on a <b>cancelled or finished</b> order is spare, so it can be
+            <b> reserved</b> for that customer's next order (press Reserve to open the customer). It still has to be
+            applied or refunded in DEAR. Money on an <b>open</b> order is held until the order is invoiced.
           </div>
           <div className="tab-bar" style={{ marginBottom: 10 }}>
             {([
+              ['free', 'Free to reserve', heldTotals?.free],
               ['apply', 'To apply in DEAR', heldTotals?.toApply],
               ['open', 'Held for open orders', heldTotals?.open],
               ['all', 'All', heldTotals?.all],
@@ -223,21 +228,25 @@ export default function Credit() {
             ))}
           </div>
           {loading && !held ? <div className="empty-state">Loading…</div>
-            : !held || !held.length ? <div className="empty-state">{heldView === 'apply' ? 'Nothing to apply: no finished order is holding a prepayment.' : 'None.'}</div>
+            : !held || !held.length ? <div className="empty-state">{heldView === 'free' ? 'No prepaid money is free to reserve. It becomes free when an order that was prepaid is cancelled or finished.' : heldView === 'apply' ? 'Nothing to apply: no finished or cancelled order is holding a prepayment.' : 'None.'}</div>
             : (
               <div className="manifest">
-                <div className="m-row head" style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 1.1fr 0.9fr 0.9fr 0.9fr' }}>
-                  <div>Customer</div><div>State</div><div>Order</div><div>Status</div><div>Order date</div><div>Type</div><div className="num">Amount</div>
+                <div className="m-row head" style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 1.1fr 0.9fr 0.8fr 0.9fr 0.9fr 0.7fr' }}>
+                  <div>Customer</div><div>State</div><div>Order</div><div>Status</div><div>Order date</div><div>Type</div><div className="num">Amount</div><div className="num">Free to reserve</div><div></div>
                 </div>
                 {held.map(h => (
-                  <div className="m-row" key={h.id + h.kind} style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 1.1fr 0.9fr 0.9fr 0.9fr', cursor: 'default' }}>
+                  <div className="m-row" key={h.id + h.kind} style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 1.1fr 0.9fr 0.8fr 0.9fr 0.9fr 0.7fr', cursor: 'default' }}>
                     <div><Link to={`/accounts/${h.accountId}`} className="order-link">{h.account}</Link>{h.rep && <div className="acct-region">{h.rep}</div>}</div>
                     <div>{h.region}</div>
                     <div><Link to={`/orders/${h.id}`} className="order-link">{h.number}</Link></div>
-                    <div><span className={`pill ${h.finished ? 'amber' : 'neutral'}`}>{nice(h.status) || '—'}</span></div>
+                    <div><span className={`pill ${h.cancelled ? 'rust' : h.finished ? 'amber' : 'neutral'}`}>{h.cancelled ? 'Cancelled' : nice(h.status) || '—'}</span></div>
                     <div>{h.orderDate ? fmtDate(h.orderDate) : ''}</div>
                     <div><span className={`pill ${h.kind === 'Overpaid' ? 'rust' : 'teal'}`}>{h.kind}</span></div>
                     <div className="num"><b>{fmtMoney(h.amount)}</b></div>
+                    <div className="num">
+                      {h.reservable ? <><b>{fmtMoney(h.free ?? 0)}</b>{(h.reserved ?? 0) > 0.005 && <div className="acct-region">{fmtMoney(h.reserved!)} reserved</div>}</> : <span className="acct-region">held</span>}
+                    </div>
+                    <div>{(h.free ?? 0) > 0.005 && <Link to={`/accounts/${h.accountId}`} className="order-link">Reserve</Link>}</div>
                   </div>
                 ))}
               </div>
@@ -270,7 +279,7 @@ export default function Credit() {
                         // Reservations for the same order, together: "SQ37512: 3 credit notes, $425.00, Used"
                         <div className="m-row" style={{ gridTemplateColumns: '1fr auto', cursor: 'default', background: 'var(--paper)' }}>
                           <div>
-                            <b>{g.orderRef ?? 'Their next order'}: {g.items.length} credit notes, {fmtMoney(g.total)}</b>
+                            <b>{g.orderRef ?? 'Their next order'}: {g.items.length} {g.items.every(x => x.sourceKind === 'prepayment') ? 'prepayments' : g.items.some(x => x.sourceKind === 'prepayment') ? 'items' : 'credit notes'}, {fmtMoney(g.total)}</b>
                             <span className="acct-region"> · {g.items[0].name}</span>
                           </div>
                           <div><span className={`pill ${st.tone}`}>{st.word}</span></div>
@@ -280,11 +289,11 @@ export default function Credit() {
                       <div className="m-row" key={r.id} style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 0.9fr 1fr 1.6fr 1fr', cursor: 'default' }}>
                         <div>
                           <Link to={`/accounts/${r.accountId}`} className="order-link">{r.name}</Link>
-                          <div className="acct-region">{r.name !== r.account ? `${r.account}. ` : ''}{r.createdBy ?? ''}{r.createdBy ? ', ' : ''}{r.createdAt ? fmtDate(r.createdAt) : ''}</div>
+                          <div className="acct-region">{r.name !== r.account ? `${r.account}. ` : ''}{r.forAccount && r.forAccount !== r.account ? `For ${r.forAccount}. ` : ''}{r.createdBy ?? ''}{r.createdBy ? ', ' : ''}{r.createdAt ? fmtDate(r.createdAt) : ''}</div>
                         </div>
                         <div>{r.region}</div>
                         <div className="num"><b>{fmtMoney(r.amount)}</b></div>
-                        <div>{r.creditNo ?? ''}</div>
+                        <div>{r.creditNo ?? (r.sourceKind === 'prepayment' ? `Prepaid on ${r.sourceOrder}` : '')}</div>
                         <div>{r.usedOnOrder ?? r.orderRef ?? <span className="acct-region">Next order</span>}</div>
                         <div className="acct-region">{r.note ?? ''}</div>
                         <div>

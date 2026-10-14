@@ -140,7 +140,7 @@ export default function PriceListModal({ accountId, accountName, onClose }: {
 
         {error && <div className="login-error" style={{ marginBottom: 10 }}>{error}</div>}
 
-        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+        <div className="modal-actions" style={{ display: 'flex', gap: 8, marginTop: 6 }}>
           <button type="button" className="btn secondary" onClick={onClose}>Cancel</button>
           <button type="button" className="btn" onClick={download} disabled={downloading || !canDownload}>
             {downloading ? 'Building…' : '⬇ Download price list'}

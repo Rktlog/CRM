@@ -70,7 +70,7 @@ export default function EditActivityModal({ activity, onSaved, onClose }: Props)
         </label>
 
         {error && <div className="login-error" style={{ marginBottom: 10 }}>{error}</div>}
-        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+        <div className="modal-actions" style={{ display: 'flex', gap: 8, marginTop: 6 }}>
           <button type="button" className="btn secondary" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn" disabled={saving || !note.trim() || !day || future || !changed}>
             {saving ? 'Saving…' : 'Save'}

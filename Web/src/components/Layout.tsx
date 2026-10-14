@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useCloseDropdowns } from '../lib/useCloseDropdowns';
 
 const NAV = [
   { to: '/', label: 'Dashboard' },
@@ -22,7 +23,8 @@ const NAV = [
 
 export default function Layout() {
   const { signOut, name, role } = useAuth();
-
+ useCloseDropdowns();   // tick-box dropdowns close when you click anywhere outside them
+ 
   return (
     <div id="app">
       <div className="rail">
