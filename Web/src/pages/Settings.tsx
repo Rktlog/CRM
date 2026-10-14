@@ -4,6 +4,8 @@ import { apiGet, apiPut, apiPatch } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import { fmtMoney } from '../lib/types';
 import RepHiddenAccounts from '../components/RepHiddenAccounts';
+import GmailCard from '../components/GmailCard';
+import CalendarSyncCard from '../components/CalendarSyncCard'
 
 type Rep = { id: string; name: string; role: string };
 type Target = { id: string; repId: string; repName: string; year: number; quarter: number; amount: number };
@@ -163,6 +165,8 @@ export default function Settings() {
         </div>
       </div>
 
+       <CalendarSyncCard />
+       <GmailCard />
 
       {isManager && (
         <div className="section">
