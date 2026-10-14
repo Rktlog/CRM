@@ -18,7 +18,9 @@ import { creditRouter } from './routes/credit';
 import { conversionRouter } from './routes/conversion';
 import { marketingRouter } from './routes/marketing';
 import { marketingPublicRouter } from './routes/marketingPublic';
-
+import { gmailRouter, gmailCallbackRouter, gmailCronRouter } from './routes/gmail';
+import { calendarRouter, calendarCronRouter, calendarCallbackRouter } from './routes/calendar';
+ 
 const app = express();
 // Restricts which origins can call this API — wide-open cors() would
 // let any website make authenticated requests using a stolen/leaked
@@ -46,6 +48,11 @@ app.use('/abandoned-carts', requireAuth, abandonedCartsRouter);
 app.use('/credit', requireAuth, creditRouter);
 app.use('/conversion', requireAuth, conversionRouter);
 app.use('/marketing', requireAuth, marketingRouter);
+app.use('/gmail/callback', gmailCallbackRouter);   // Google sends the rep back here: no login
+app.use('/gmail-cron', gmailCronRouter);           // secret header, no login (every 15 minutes)
+app.use('/gmail', requireAuth, gmailRouter);
+app.use('/calendar/callback', calendarCallbackRouter);   // Google sends the rep back here: no login
+app.use('/calendar-cron', calendarCronRouter)
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => console.log(`API listening on :${port}`));

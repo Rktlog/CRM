@@ -10,6 +10,7 @@ import AccountEmails from '../components/marketing/AccountEmails';
 import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fmtDateWithYear, daysBetween, flagFor, isHistoryOrder, isOwingOrder, amountOwing, fmtDuration } from '../lib/types';
 import { pickCurrentOrder } from '../lib/currentOrder';
 import { todayLocal, dateInputValue, isoForDay } from '../lib/logDate';
+import AccountGmail from '../components/AccountGmail';
 
 export default function AccountDetail() {
   const { id } = useParams<{ id: string }>();
@@ -279,7 +280,8 @@ export default function AccountDetail() {
           {/* Credit and reservations: what the team has set aside, on both accounts */}
           <CreditReservations accountId={account.id} accountName={account.name} />
           <AccountEmails accountId={account.id} />
-
+              <AccountGmail accountId={account.id} />
+ 
           <div className="card">
             <h3>Log a phone call, email, or F2F visit</h3>
             <form onSubmit={handleLog}>
