@@ -1,631 +1,190 @@
-import { Router } from 'express';
-import { hiddenAccountIds } from '../lib/territory';
-import { prisma } from '../lib/prisma';
-import { isHistory, isOwing } from '../lib/orderSource';
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { apiGet, apiDownload } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
+import { SavedReport, downloadUrl, fileName } from '../lib/reportDefinition';
 
-export const reportsRouter = Router();
+type Rep = { id: string; name: string };
 
-type Range = '3m' | '6m' | '12m' | 'fy_quarter' | 'fy_year' | 'last_fy_quarter' | 'last_fy_year';
+const REPORTS: { key: string; label: string; blurb: string; group: string }[] = [
+  { key: 'sales-by-sku', label: 'Sales by SKU', blurb: 'Every product, quantity and revenue, this FY.', group: 'Sales breakdowns' },
+  { key: 'sales-by-brand', label: 'Sales by brand', blurb: 'Brand-level rollup, this FY.', group: 'Sales breakdowns' },
+  { key: 'sales-by-category', label: 'Sales by category', blurb: 'Gift, Toy, Pharmacy etc., this FY.', group: 'Sales breakdowns' },
+  { key: 'sales-by-region', label: 'Sales by region', blurb: 'State-by-state breakdown, this FY.', group: 'Sales breakdowns' },
+  { key: 'sales-by-account', label: 'Sales by account', blurb: 'Every account, last FY vs this FY.', group: 'Sales breakdowns' },
+  { key: 'full-orders', label: 'Full order list', blurb: 'Every invoice, one row each — real transaction history.', group: 'Working lists' },
+  { key: 'unpaid-quotes', label: 'Unpaid quotes', blurb: 'A real follow-up worklist, ready to work through.', group: 'Working lists' },
+  { key: 'budget-vs-actual', label: 'Budget vs actual', blurb: "Every rep's quarterly target next to real invoiced totals.", group: 'Working lists' },
+  { key: 'accounts', label: 'Full account list', blurb: 'Every account — contact details, region, spend, stage.', group: 'Account & team' },
+  { key: 'inactive-customers', label: 'Inactive customers', blurb: 'Overdue relative to their own pace — a ready-made outreach list.', group: 'Account & team' },
+  { key: 'rep-activity', label: 'Rep activity log', blurb: 'Phone calls, emails and F2F visits logged over a date range.', group: 'Account & team' },
+  { key: 'conversion', label: 'Conversion report', blurb: 'Abandoned carts, new prospects, new leads and inactive stockists, each followed to an order and a sales quote. Every customer listed.', group: 'Account & team' },
+  { key: 'marketing', label: 'Marketing report', blurb: 'Emails sent, opened and clicked, each campaign, the automatic emails, and the orders that followed an email click. Managers only.', group: 'Account & team' },
+  { key: 'credit-movements', label: 'Credit report', blurb: 'Every credit note on account and every credit movement: issued, applied, refunded, reserved, used.', group: 'Account & team' },
+  { key: 'eol', label: 'EOL sell-through report', blurb: 'Sales since the start date and stock left for the clearance brands, one sheet each: summary by brand and customer, sales by SKU, purchases, staff purchases, remaining stock. Managers only.', group: 'Products & stock' },
+];
 
-function startOfMonth(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth(), 1);
+const ALL_STATES = ['NSW', 'ACT', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'NT', 'NZ'];
+
+export default function Reports() {
+  const { role } = useAuth();
+  const isManager = role === 'manager';
+  const [reps, setReps] = useState<Rep[]>([]);
+  const [region, setRegion] = useState('');
+  const [repId, setRepId] = useState('');
+  const [year, setYear] = useState(new Date().getFullYear());
+  const [days, setDays] = useState(30);
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [custom, setCustom] = useState<SavedReport[]>([]);
+  const [customBusy, setCustomBusy] = useState<string | null>(null);
+
+  useEffect(() => { apiGet('/custom-reports').then(setCustom).catch(() => {}); }, []);
+
+  async function downloadCustom(r: SavedReport) {
+    setCustomBusy(r.id);
+    try { await apiDownload(downloadUrl(r.definition, r.name), fileName(r.name)); }
+    catch (e) { alert((e as Error).message); }
+    finally { setCustomBusy(null); }
+  }
+
+  useEffect(() => {
+    if (isManager) apiGet('/reports/reps').then(setReps).catch(() => {});
+  }, [isManager]);
+
+  async function download(key: string) {
+    setDownloading(key);
+    try {
+      const params = new URLSearchParams();
+      if (region) params.set('region', region);
+      if (isManager && repId) params.set('repId', repId);
+      if (key === 'budget-vs-actual') params.set('year', String(year));
+      if (key === 'rep-activity' || key === 'conversion' || key === 'marketing') params.set('days', String(days));
+      await apiDownload(`/exports/${key}?${params.toString()}`, `${key}.xlsx`);
+    } catch (e) {
+      alert(`Download failed: ${(e as Error).message}`);
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  async function downloadSearch() {
+    if (!searchTerm.trim()) return;
+    setSearching(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('q', searchTerm.trim());
+      if (region) params.set('region', region);
+      if (isManager && repId) params.set('repId', repId);
+      await apiDownload(`/exports/brand-search?${params.toString()}`, `search-${searchTerm.trim()}.xlsx`);
+    } catch (e) {
+      alert(`Download failed: ${(e as Error).message}`);
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  const groups = [...new Set(REPORTS.map(r => r.group))];
+
+  return (
+    <>
+      <h1>Reports</h1>
+      <div style={{ fontSize: 12.5, color: 'var(--muted)', marginBottom: 20, maxWidth: 620 }}>
+        Every report here is a real Excel download, generated fresh from your synced data —
+        never a cached snapshot. Filters apply to whichever ones they're relevant to.
+      </div>
+
+      <div className="controls" style={{ marginBottom: 24 }}>
+        <select value={region} onChange={e => setRegion(e.target.value)}>
+          <option value="">All regions</option>
+          {ALL_STATES.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        {isManager && (
+          <select value={repId} onChange={e => setRepId(e.target.value)}>
+            <option value="">All reps</option>
+            {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        )}
+        <select value={year} onChange={e => setYear(Number(e.target.value))}>
+          {[year - 1, year, year + 1].map(y => <option key={y} value={y}>{y} (for Budget vs actual)</option>)}
+        </select>
+        <select value={days} onChange={e => setDays(Number(e.target.value))}>
+          <option value={7}>Last 7 days</option>
+          <option value={30}>Last 30 days</option>
+          <option value={90}>Last 90 days</option>
+          <option value={365}>Last 365 days</option>
+        </select>
+        <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>(the last one is for the Rep activity log and the Conversion report)</span>
+      </div>
+
+      <div className="section">
+        <div className="panel-title" style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <span>Custom reports</span>
+          <Link to="/reports/builder" className="btn" style={{ marginLeft: 'auto', padding: '5px 12px', fontSize: 12, textDecoration: 'none' }}>+ Build a report</Link>
+        </div>
+        {custom.length === 0 ? (
+          <div style={{ fontSize: 12.5, color: 'var(--muted)', maxWidth: 620 }}>
+            Make your own report: pick what it is about (order lines, products and stock, or customers), the columns and filters, and download it as Excel. Save it to run again.
+          </div>
+        ) : (
+          <div className="manifest">
+            {custom.map(r => (
+              <div className="m-row" key={r.id} style={{ gridTemplateColumns: '1.4fr 2fr 0.9fr', cursor: 'default' }}>
+                <div className="acct-name">{r.name} {r.shared && <span className="pill neutral">Shared</span>}</div>
+                <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>
+                  {r.definition.dataset === 'sales' ? 'Order lines' : r.definition.dataset === 'products' ? 'Products and stock' : 'Customers and accounts'}
+                  {!r.mine && r.ownerName ? `, by ${r.ownerName}` : ''}
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button className="btn secondary" style={{ padding: '5px 12px', fontSize: 12 }} disabled={customBusy === r.id} onClick={() => downloadCustom(r)}>{customBusy === r.id ? '…' : '⬇ Excel'}</button>
+                  <Link to={`/reports/builder?id=${r.id}`} className="btn secondary" style={{ padding: '5px 12px', fontSize: 12, textDecoration: 'none' }}>{r.mine ? 'Edit' : 'Open'}</Link>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="section">
+        <div className="panel-title">Search by brand or product</div>
+        <div style={{ fontSize: 12.5, color: 'var(--muted)', marginBottom: 12, maxWidth: 560 }}>
+          Type a brand or product keyword — e.g. "Meri Meri" or "Miffy" — to get every customer who's
+          ordered it, with quantities and revenue, plus a SKU-level breakdown. Matches all-time, not
+          just this FY.
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            placeholder="Brand or product name…"
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && downloadSearch()}
+            style={{ flex: 1, maxWidth: 320, padding: '7px 10px', border: '1px solid var(--line)', borderRadius: 3 }}
+          />
+          <button className="btn" disabled={searching || !searchTerm.trim()} onClick={downloadSearch}>
+            {searching ? 'Downloading…' : '⬇ Excel'}
+          </button>
+        </div>
+      </div>
+
+      {groups.map(group => (
+        <div className="section" key={group}>
+          <div className="panel-title">{group}</div>
+          <div className="manifest">
+            {REPORTS.filter(r => r.group === group && (isManager || !['marketing', 'eol'].includes(r.key))).map(r => (
+              <div className="m-row" key={r.key} style={{ gridTemplateColumns: '1.4fr 2fr 0.8fr', cursor: 'default' }}>
+                <div className="acct-name">{r.label}</div>
+                <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>{r.blurb}</div>
+                <div>
+                  <button className="btn secondary" style={{ padding: '5px 12px', fontSize: 12 }} disabled={downloading === r.key} onClick={() => download(r.key)}>
+                    {downloading === r.key ? 'Downloading…' : '⬇ Excel'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </>
+  );
 }
-function addMonths(d: Date, n: number) {
-  return new Date(d.getFullYear(), d.getMonth() + n, 1);
-}
-function monthLabel(d: Date) {
-  return d.toLocaleDateString('en-AU', { month: 'short', year: '2-digit' });
-}
-
-// Australian financial year: 1 July - 30 June.
-function fyStart(forDate: Date): Date {
-  const year = forDate.getMonth() >= 6 ? forDate.getFullYear() : forDate.getFullYear() - 1;
-  return new Date(year, 6, 1); // July
-}
-
-// Turns a selected calendar year + a "calendar" | "fiscal" toggle
-// into a real, bounded window — start AND end, so a past year's
-// data can't leak into "this year" the way an unbounded >=
-// comparison would. Fiscal treats the selected year as the year the
-// FY STARTS in (year=2026 -> FY 2026/27, Jul 2026-Jun 2027) —
-// labelled explicitly so which one is shown is never ambiguous.
-function getPeriodWindow(year: number, period: 'calendar' | 'fiscal' | 'alltime') {
-  if (period === 'alltime') {
-    const now = new Date();
-    return {
-      start: new Date(2000, 0, 1), end: new Date(now.getFullYear() + 1, 0, 1),
-      priorStart: new Date(2000, 0, 1), priorEnd: new Date(2000, 0, 1), // no prior period for "all time"
-      label: 'All time (to date)', priorLabel: '—',
-    };
-  }
-  if (period === 'calendar') {
-    return {
-      start: new Date(year, 0, 1), end: new Date(year + 1, 0, 1),
-      priorStart: new Date(year - 1, 0, 1), priorEnd: new Date(year, 0, 1),
-      label: `${year}`, priorLabel: `${year - 1}`,
-    };
-  }
-  return {
-    start: new Date(year, 6, 1), end: new Date(year + 1, 6, 1),
-    priorStart: new Date(year - 1, 6, 1), priorEnd: new Date(year, 6, 1),
-    label: `FY ${year}/${String(year + 1).slice(2)}`, priorLabel: `FY ${year - 1}/${String(year).slice(2)}`,
-  };
-}
-function fyQuarterStart(forDate: Date): Date {
-  const fyStartDate = fyStart(forDate);
-  const monthsSinceFyStart = (forDate.getFullYear() - fyStartDate.getFullYear()) * 12 + (forDate.getMonth() - fyStartDate.getMonth());
-  const quarterIndex = Math.floor(monthsSinceFyStart / 3);
-  return addMonths(fyStartDate, quarterIndex * 3);
-}
-
-function resolveRange(range: Range, now: Date) {
-  let currentStart: Date, currentEnd: Date, previousStart: Date, previousEnd: Date, bucketMonths: number;
-
-  switch (range) {
-    case '3m':
-      currentEnd = startOfMonth(addMonths(now, 1));
-      currentStart = addMonths(currentEnd, -3);
-      previousEnd = currentStart;
-      previousStart = addMonths(previousEnd, -3);
-      bucketMonths = 1;
-      break;
-    case '6m':
-      currentEnd = startOfMonth(addMonths(now, 1));
-      currentStart = addMonths(currentEnd, -6);
-      previousEnd = currentStart;
-      previousStart = addMonths(previousEnd, -6);
-      bucketMonths = 1;
-      break;
-    case '12m':
-      currentEnd = startOfMonth(addMonths(now, 1));
-      currentStart = addMonths(currentEnd, -12);
-      previousEnd = currentStart;
-      previousStart = addMonths(previousEnd, -12);
-      bucketMonths = 1;
-      break;
-    case 'fy_quarter':
-      currentStart = fyQuarterStart(now);
-      currentEnd = addMonths(currentStart, 3);
-      previousStart = addMonths(currentStart, -12);
-      previousEnd = addMonths(previousStart, 3);
-      bucketMonths = 1;
-      break;
-    case 'fy_year':
-      currentStart = fyStart(now);
-      // Whole fiscal year, July through June — not year-to-date. If
-      // the current FY isn't finished yet, the remaining months will
-      // show as $0 on the chart, which is correct: there's no data
-      // there yet, not a comparison error.
-      currentEnd = addMonths(currentStart, 12);
-      previousStart = addMonths(currentStart, -12);
-      previousEnd = currentStart;
-      bucketMonths = 1;
-      break;
-    case 'last_fy_quarter':
-      // The most recently COMPLETED quarter, not the in-progress one
-      // — useful mid-quarter when "this quarter" is mostly $0 so far.
-      currentStart = addMonths(fyQuarterStart(now), -3);
-      currentEnd = addMonths(currentStart, 3);
-      previousStart = addMonths(currentStart, -12);
-      previousEnd = addMonths(previousStart, 3);
-      bucketMonths = 1;
-      break;
-    case 'last_fy_year':
-      // The most recently COMPLETED fiscal year, not the current one.
-      currentStart = addMonths(fyStart(now), -12);
-      currentEnd = fyStart(now);
-      previousStart = addMonths(currentStart, -12);
-      previousEnd = currentStart;
-      bucketMonths = 1;
-      break;
-  }
-
-  return { currentStart, currentEnd, previousStart, previousEnd, bucketMonths };
-}
-
-// Who sees what on Sales Data: managers see every state; reps see the
-// states they're assigned to (rep_regions), and can only narrow within
-// them. A rep with no states assigned sees nothing until a manager sets
-// them up. Enforced here, not only hidden in the page.
-async function salesScope(req: any, requested?: string[]): Promise<{ regions?: string[]; repId?: string; myRegions: string[] | null; hidden: string[] }> {
-  if (req.rep!.role === 'manager') return { regions: requested, myRegions: null, hidden: [] };
-  const assigned = (await prisma.repRegion.findMany({ where: { repId: req.rep!.id }, select: { region: true } })).map(r => r.region);
-  // Accounts a manager has hidden from this rep stay out of their figures too.
-  const hidden = await hiddenAccountIds(req.rep!.id);
-  if (!assigned.length) return { regions: ['__none__'], myRegions: [], hidden };
-  const regions = requested ? requested.filter(r => assigned.includes(r)) : assigned;
-  return { regions: regions.length ? regions : ['__none__'], myRegions: assigned, hidden };
-}
-
-// ---- What counts as a sale (Sales Data and the Dashboard) ----
-// The sales team's definition: TAX INVOICE figures on the TAX INVOICE date.
-//   - value: the invoice's product lines (already net of discount), ex GST,
-//     ex freight and other charges (incl. the card surcharge)
-//   - each invoice counts separately: a part-shipped order counts as each
-//     tax invoice is issued, in that invoice's month
-//   - credit notes are deducted, as negative sales on the credit note's date
-//   - ship date is never used
-// Drafts, quotes, voided and credited orders don't count. Spreadsheet history
-// (before DEAR) keeps its own paid flag, date and amount.
-// Customers' first/last order dates stay on the ORDER date (see firstOrderByAccount).
-const NOT_A_SALE = ['DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING', 'VOIDED', 'CREDITED'];
-const isHistoryOrder = (q: { source?: string | null; number: string }) => q.source === 'rhino-history' || q.number.startsWith('Q');
-type SaleSource = { source?: string | null; number: string; paid: boolean; amount: number; sentAt: Date;
-  invoiceDate?: Date | null; fulfillmentStatus?: string | null; goodsTotal?: number | null; taxTotal?: number | null; invoices?: any; creditNotes?: any };
-type SaleRow<T> = T & { amount: number; sentAt: Date; invoiceNumber?: string; invoicePaid?: boolean; isCredit?: boolean };
-
-function asSales<T extends SaleSource>(q: T): SaleRow<T>[] {
-  if (isHistoryOrder(q)) return q.paid ? [q] : [];
-  const status = (q.fulfillmentStatus ?? '').toUpperCase();
-  if (NOT_A_SALE.includes(status)) return [];
-  const orderGoods = q.goodsTotal ?? q.amount - (q.taxTotal ?? 0);
-  const invs = (Array.isArray(q.invoices) ? q.invoices : [])
-    .filter((i: any) => i?.date && String(i.status ?? '').toUpperCase() !== 'VOIDED');
-  // Credit notes: negative sales on the credit note's own date.
-  const credits: SaleRow<T>[] = (Array.isArray(q.creditNotes) ? q.creditNotes : [])
-    .filter((c: any) => c?.date && String(c.status ?? '').toUpperCase() !== 'VOIDED')
-    .map((c: any) => ({
-      ...q,
-      amount: -(c.goods != null ? Number(c.goods)
-        : Math.max(0, (Number(c.total) || 0) - (c.tax != null ? Number(c.tax) : (Number(c.total) || 0) / 11))),
-      sentAt: new Date(c.date),
-      invoiceNumber: c.number ? String(c.number) : undefined,
-      isCredit: true,
-    }));
-  if (!invs.length) return [...(q.invoiceDate ? [{ ...q, amount: orderGoods, sentAt: q.invoiceDate } as SaleRow<T>] : []), ...credits];
-  const invTotal = invs.reduce((s: number, i: any) => s + (Number(i.total) || 0), 0);
-  const invoiceRows: SaleRow<T>[] = invs.map((i: any) => ({
-    ...q,
-    // The invoice's own goods (synced from DEAR). For an order not re-read
-    // since, its share of the order's goods, in proportion to invoice totals.
-    amount: i.goods != null ? Number(i.goods)
-      : invTotal > 0 ? orderGoods * (Number(i.total) || 0) / invTotal
-      : orderGoods / invs.length,
-    sentAt: new Date(i.date),
-    invoiceNumber: i.number ? String(i.number) : undefined,
-    // paid in cash, or settled by a credit note
-    invoicePaid: i.total != null && i.paid != null
-      ? Number(i.paid) + Number(i.credited ?? 0) >= Number(i.total) - 0.005 : undefined,
-  }));
-  return [...invoiceRows, ...credits];
-}
-const salesOf = <T extends SaleSource>(qs: T[]) => qs.flatMap(q => asSales(q));
-// Product lines that are charges rather than goods (freight, card surcharge).
-const isChargeLine = (l: { sku?: string | null; productName?: string | null }) =>
-  /surcharge|freight/i.test(`${l.sku ?? ''} ${l.productName ?? ''}`);
-
-reportsRouter.get('/sales', async (req, res) => {
-  const range = (req.query.range as Range) || '3m';
-  if (!['3m', '6m', '12m', 'fy_quarter', 'fy_year', 'last_fy_quarter', 'last_fy_year'].includes(range)) {
-    return res.status(400).json({ error: 'Invalid range' });
-  }
-
-  const now = new Date();
-  const { currentStart, currentEnd, previousStart, previousEnd } = resolveRange(range, now);
-
-  // Same scoping as /ledger (see salesScope). Optional ?region= follows
-  // the region picked on the page. Excludes misc (marketing/warranty)
-  // accounts: real transactions, but they don't count toward performance.
-  const regionParam = req.query.region as string | undefined;
-  const scope = await salesScope(req, regionParam ? regionParam.split(',') : undefined);
-  const accounts = await prisma.account.findMany({
-    where: {
-      misc: false,
-      ...(scope.regions ? { region: { in: scope.regions } } : {}),
-      ...(scope.hidden.length ? { id: { notIn: scope.hidden } } : {}),
-      ...(scope.repId ? { repId: scope.repId } : {}),
-    },
-    select: { id: true },
-  });
-  const accountIds = accounts.map(a => a.id);
-
-  // Same definition as Sales Data: each tax invoice, on its own date, goods ex GST.
-  const quotes = salesOf(await prisma.quote.findMany({
-    where: {
-      accountId: { in: accountIds },
-      miscType: null,
-      // first invoiced up to a year before the window (a later invoice of an
-      // earlier order can fall inside it), or (history) ordered in it
-      OR: [
-        { invoiceDate: { gte: new Date(previousStart.getTime() - 365 * 86400000), lt: currentEnd } },
-        { invoiceDate: null, sentAt: { gte: previousStart, lt: currentEnd } },
-        { source: 'rhino-history', sentAt: { gte: previousStart, lt: currentEnd } },
-      ],
-    },
-    select: { amount: true, sentAt: true, source: true, number: true, paid: true, invoiceDate: true,
-              fulfillmentStatus: true, goodsTotal: true, taxTotal: true, invoices: true, creditNotes: true },
-  })).filter(q => q.sentAt >= previousStart && q.sentAt < currentEnd);
-
-  const currentQuotes = quotes.filter(q => q.sentAt >= currentStart && q.sentAt < currentEnd);
-  const previousQuotes = quotes.filter(q => q.sentAt >= previousStart && q.sentAt < previousEnd);
-
-  const currentTotal = currentQuotes.reduce((s, q) => s + q.amount, 0);
-  const previousTotal = previousQuotes.reduce((s, q) => s + q.amount, 0);
-  const changePct = previousTotal > 0 ? Math.round(((currentTotal - previousTotal) / previousTotal) * 100) : null;
-
-  // Month-by-month buckets, current and previous period aligned by
-  // relative position (month 1 of this period next to month 1 of the
-  // comparison period) so they can be charted side by side.
-  const monthCount = Math.round((currentEnd.getFullYear() * 12 + currentEnd.getMonth() - (currentStart.getFullYear() * 12 + currentStart.getMonth())));
-  const buckets = [];
-  for (let i = 0; i < monthCount; i++) {
-    const curMonthStart = addMonths(currentStart, i);
-    const curMonthEnd = addMonths(currentStart, i + 1);
-    const prevMonthStart = addMonths(previousStart, i);
-    const prevMonthEnd = addMonths(previousStart, i + 1);
-
-    const curSum = currentQuotes.filter(q => q.sentAt >= curMonthStart && q.sentAt < curMonthEnd).reduce((s, q) => s + q.amount, 0);
-    const prevSum = previousQuotes.filter(q => q.sentAt >= prevMonthStart && q.sentAt < prevMonthEnd).reduce((s, q) => s + q.amount, 0);
-
-    buckets.push({ label: monthLabel(curMonthStart), current: curSum, previous: prevSum });
-  }
-
-  // Earliest data actually available, so the frontend can warn if the
-  // comparison period reaches back further than real synced history.
-  const earliestQuote = await prisma.quote.findFirst({
-    where: { accountId: { in: accountIds } },
-    orderBy: { sentAt: 'asc' },
-    select: { sentAt: true },
-  });
-
-  res.json({
-    range,
-    currentLabel: `${monthLabel(currentStart)} – ${monthLabel(addMonths(currentEnd, -1))}`,
-    previousLabel: `${monthLabel(previousStart)} – ${monthLabel(addMonths(previousEnd, -1))}`,
-    currentTotal,
-    previousTotal,
-    changePct,
-    buckets,
-    earliestDataAt: earliestQuote?.sentAt ?? null,
-    comparisonReachesBeforeData: earliestQuote ? previousStart < earliestQuote.sentAt : false,
-  });
-});
-
-// Manager-only: how much activity each rep has logged recently.
-// Not enforced server-side beyond what RLS-equivalent scoping already
-// does elsewhere — a non-manager calling this just sees their own row,
-// since the underlying activity query is still rep-scoped for them.
-reportsRouter.get('/team-activity', async (req, res) => {
-  const days = Number(req.query.days) || 7;
-  const since = new Date(Date.now() - days * 86400000);
-  const isManager = req.rep!.role === 'manager';
-
-  const activities = await prisma.activity.findMany({
-    where: {
-      occurredAt: { gte: since },
-      ...(isManager ? {} : { repId: req.rep!.id }),
-    },
-    select: { repId: true, type: true, rep: { select: { name: true } } },
-  });
-
-  const byRep = new Map<string, { repName: string; calls: number; emails: number; visits: number }>();
-  for (const a of activities) {
-    const key = a.repId;
-    if (!byRep.has(key)) byRep.set(key, { repName: a.rep?.name ?? 'Unknown', calls: 0, emails: 0, visits: 0 });
-    const row = byRep.get(key)!;
-    if (a.type === 'call') row.calls++;
-    else if (a.type === 'email') row.emails++;
-    else if (a.type === 'visit') row.visits++;
-  }
-
-  const rows = [...byRep.entries()]
-    .map(([repId, r]) => ({ repId, ...r, total: r.calls + r.emails + r.visits }))
-    .sort((a, b) => b.total - a.total);
-
-  res.json({ days, rows });
-});
-
-// Company-wide (or rep-scoped) monthly invoiced trend, real data from
-// synced DEAR orders — powers the Sales Data page. Optional ?region=
-// filters to accounts in that region (or region group, e.g. multiple
-// comma-separated values for "NSW/ACT").
-reportsRouter.get('/monthly-trend', async (req, res) => {
-  const isManager = req.rep!.role === 'manager';
-  const regionParam = req.query.region as string | undefined;
-  const regions = regionParam ? regionParam.split(',') : undefined;
-
-  const accountWhere: any = {
-    ...(isManager ? {} : { repId: req.rep!.id }),
-    ...(regions ? { region: { in: regions } } : {}),
-  };
-  const accountIds = (await prisma.account.findMany({ where: accountWhere, select: { id: true } })).map(a => a.id);
-
-  const quotes = await prisma.quote.findMany({
-    where: { paid: true, accountId: { in: accountIds } },
-    select: { sentAt: true, amount: true },
-    orderBy: { sentAt: 'asc' },
-  });
-
-  const byMonth = new Map<string, number>();
-  for (const q of quotes) {
-    const key = `${q.sentAt.getFullYear()}-${String(q.sentAt.getMonth() + 1).padStart(2, '0')}`;
-    byMonth.set(key, (byMonth.get(key) ?? 0) + q.amount);
-  }
-
-  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const trend = [...byMonth.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([key, total]) => {
-      const [year, month] = key.split('-');
-      return { label: `${monthNames[Number(month) - 1]} ${year.slice(2)}`, total: Math.round(total * 100) / 100 };
-    });
-
-  const totalValue = quotes.reduce((s, q) => s + q.amount, 0);
-
-  res.json({ trend, totalValue: Math.round(totalValue * 100) / 100, totalOrders: quotes.length });
-});
-
-// Every rep, for filter dropdowns (settings page, ledger rep filter).
-reportsRouter.get('/reps', async (req, res) => {
-  const reps = await prisma.rep.findMany({ select: { id: true, name: true, role: true }, orderBy: { name: 'asc' } });
-  res.json(reps);
-});
-
-// The single comprehensive payload behind the Sales Ledger page —
-// covers everything the three source sheets did (Summary_Rhonda's
-// quarterly budget tracker + unpaid quotes, Sales Overview's top
-// accounts + mix, Marie's invoice-level trend + recent invoices),
-// built from real synced DEAR data plus human-entered budget targets.
-reportsRouter.get('/ledger', async (req, res) => {
-  const isManager = req.rep!.role === 'manager';
-  const regionParam = req.query.region as string | undefined;
-  const regions = regionParam ? regionParam.split(',') : undefined;
-  const requestedRepId = req.query.repId as string | undefined;
-  const year = Number(req.query.year) || new Date().getFullYear();
-  const period = (['calendar', 'alltime'].includes(req.query.period as string) ? req.query.period : 'fiscal') as 'calendar' | 'fiscal' | 'alltime';
-  const window = getPeriodWindow(year, period);
-
-  // Managers see every state and can filter to one rep; reps see their
-  // assigned states (see salesScope).
-  const scope = await salesScope(req, regions);
-  const effectiveRepId = scope.repId ?? (isManager ? requestedRepId || undefined : undefined);
-
-  const baseWhere: any = {
-    ...(effectiveRepId ? { repId: effectiveRepId } : {}),
-    ...(scope.regions ? { region: { in: scope.regions } } : {}),
-    ...(scope.hidden.length ? { id: { notIn: scope.hidden } } : {}),
-    misc: false, // marketing/warranty accounts don't count toward performance
-  };
-  // ?category=Pharmacy|Toy narrows the whole page to those customer
-  // categories ("Uncategorized" = accounts with none set).
-  const picked = typeof req.query.category === 'string' && req.query.category
-    ? req.query.category.split('|').map(c => c.trim()).filter(Boolean)
-    : [];
-  const named = picked.filter(c => c !== 'Uncategorized');
-  const withNone = picked.includes('Uncategorized');
-  const accountWhere: any = {
-    ...baseWhere,
-    ...(picked.length
-      ? { OR: [
-          ...(named.length ? [{ category: { in: named } }] : []),
-          ...(withNone ? [{ category: null }, { category: '' }] : []),
-        ] }
-      : {}),
-  };
-  const categoryParam = picked.length ? picked : null;
-  // Every category in this rep/state scope, for the filter list.
-  const categoryRows = await prisma.account.findMany({ where: baseWhere, select: { category: true }, distinct: ['category'] });
-  const categories = [...new Set(categoryRows.map(r => (r.category && r.category.trim()) || 'Uncategorized'))]
-    .sort((a, b) => (a === 'Uncategorized' ? 1 : b === 'Uncategorized' ? -1 : a.localeCompare(b)));
-  const accounts = await prisma.account.findMany({
-    where: accountWhere,
-    select: { id: true, name: true, region: true, type: true, spend365: true, stage: true, category: true },
-  });
-  const accountIds = accounts.map(a => a.id);
-  const accountById = new Map(accounts.map(a => [a.id, a]));
-
-  const allQuotes = await prisma.quote.findMany({
-    where: { accountId: { in: accountIds }, miscType: null }, // marketing/warranty orders never count toward performance
-    orderBy: { sentAt: 'desc' },
-  });
-  // Sales by the team's definition: each tax invoice, on its own date, goods ex GST.
-  const paidQuotes = salesOf(allQuotes);
-
-  // ---- Monthly trend — bounded to the selected year/period window,
-  // not all-time, so the chart actually changes when you change year. ----
-  const byMonth = new Map<string, number>();
-  for (const q of paidQuotes.filter(q => q.sentAt >= window.start && q.sentAt < window.end)) {
-    const key = `${q.sentAt.getFullYear()}-${String(q.sentAt.getMonth() + 1).padStart(2, '0')}`;
-    byMonth.set(key, (byMonth.get(key) ?? 0) + q.amount);
-  }
-  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const monthlyTrend = [...byMonth.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([key, total]) => {
-      const [y, m] = key.split('-');
-      return { label: `${monthNames[Number(m) - 1]} ${y.slice(2)}`, total: Math.round(total * 100) / 100 };
-    });
-
-  // ---- Quarterly budget vs actual (fiscal quarters, this FY vs last) ----
-  // A budget target's `year` is the FY start year: 2026 = FY 2026/27.
-  const targets = effectiveRepId
-    ? await prisma.budgetTarget.findMany({ where: { repId: effectiveRepId, year: { in: [year, year - 1] } } })
-    : await prisma.budgetTarget.findMany({ where: { year: { in: [year, year - 1] } } });
-  const budgetByQuarter = (y: number, q: number) =>
-    targets.filter(t => t.year === y && t.quarter === q).reduce((s, t) => s + t.amount, 0);
-
-  // First-ever order per account, by ORDER date, for "new business" detection.
-  // Any real order counts (not drafts, quotes, voided or credited), whether or
-  // not it has been invoiced or paid yet.
-  const firstOrderByAccount = new Map<string, Date>();
-  const realOrders = allQuotes.filter(q => isHistoryOrder(q) || !NOT_A_SALE.includes((q.fulfillmentStatus ?? '').toUpperCase()));
-  for (const q of [...realOrders].sort((a, b) => a.sentAt.getTime() - b.sentAt.getTime())) {
-    if (!firstOrderByAccount.has(q.accountId)) firstOrderByAccount.set(q.accountId, q.sentAt);
-  }
-
-  const quarterMonths = [['Jul','Aug','Sep'],['Oct','Nov','Dec'],['Jan','Feb','Mar'],['Apr','May','Jun']];
-  const quarters = [1, 2, 3, 4].map(qn => {
-    // FY starts July of `year`. JS Date rolls month 12+ into the next year.
-    const qStart = new Date(year, 6 + (qn - 1) * 3, 1);
-    const qEnd = new Date(year, 6 + qn * 3, 1);
-    const priorStart = new Date(year - 1, 6 + (qn - 1) * 3, 1);
-    const priorEnd = new Date(year - 1, 6 + qn * 3, 1);
-
-    const inQuarter = paidQuotes.filter(q => q.sentAt >= qStart && q.sentAt < qEnd);
-    const inPriorQuarter = paidQuotes.filter(q => q.sentAt >= priorStart && q.sentAt < priorEnd);
-    const invoicedCurrent = inQuarter.reduce((s, q) => s + q.amount, 0);
-    const invoicedPrior = inPriorQuarter.reduce((s, q) => s + q.amount, 0);
-    const budget = budgetByQuarter(year, qn);
-
-    const newAccountIds = new Set(
-      [...firstOrderByAccount.entries()].filter(([, d]) => d >= qStart && d < qEnd).map(([id]) => id)
-    );
-    const newBusinessValue = inQuarter.filter(q => newAccountIds.has(q.accountId)).reduce((s, q) => s + q.amount, 0);
-
-    return {
-      quarter: `Q${qn}`,
-      months: quarterMonths[qn - 1],
-      budget: Math.round(budget * 100) / 100,
-      pctToBudget: budget > 0 ? invoicedCurrent / budget : null,
-      invoicedCurrent: Math.round(invoicedCurrent * 100) / 100,
-      invoicedPrior: Math.round(invoicedPrior * 100) / 100,
-      varianceDollar: Math.round((invoicedCurrent - invoicedPrior) * 100) / 100,
-      variancePct: invoicedPrior > 0 ? (invoicedCurrent - invoicedPrior) / invoicedPrior : null,
-      newBusinessCount: newAccountIds.size,
-      newBusinessValue: Math.round(newBusinessValue * 100) / 100,
-    };
-  });
-
-  // ---- Unpaid quotes to chase ----
-  // Live DEAR orders only: spreadsheet history keeps its old unpaid flag
-  // but isn't something anyone can chase.
-  const unpaidQuotes = allQuotes
-    .filter(q => isOwing(q))
-    .map(q => ({
-      id: q.id,               // links to the order page
-      accountId: q.accountId, // links to the account page
-      order: q.number,
-      date: q.sentAt.toISOString().slice(0, 10),
-      stockist: accountById.get(q.accountId)?.name ?? 'Unknown',
-      amount: q.amount,
-      due: q.amountDue ?? q.amount, // DEAR balance once synced: invoiced - paid - credited
-      status: q.fulfillmentStatus ?? 'Awaiting payment',
-    }));
-
-  // ---- Top accounts, selected period vs prior period ----
-  const topAccounts = accounts
-    .map(a => {
-      const acctQuotes = paidQuotes.filter(q => q.accountId === a.id);
-      const fyCurrent = acctQuotes.filter(q => q.sentAt >= window.start && q.sentAt < window.end).reduce((s, q) => s + q.amount, 0);
-      const fyPrior = acctQuotes.filter(q => q.sentAt >= window.priorStart && q.sentAt < window.priorEnd).reduce((s, q) => s + q.amount, 0);
-      return { accountId: a.id, customer: a.name, region: a.region, type: a.type, fyPrior: Math.round(fyPrior*100)/100, fyCurrent: Math.round(fyCurrent*100)/100 };
-    })
-    .filter(a => a.fyCurrent > 0 || a.fyPrior > 0)
-    .sort((a, b) => b.fyCurrent - a.fyCurrent)
-    .slice(0, 50);
-
-  // ---- Mix: new vs existing in the selected period, and region mix
-  // (stands in for the spreadsheet's business-category mix in one
-  // remaining place; category itself is now tracked properly below) ----
-  let newCount = 0, newValue = 0, existingCount = 0, existingValue = 0;
-  for (const a of accounts) {
-    const acctQuotesThisPeriod = paidQuotes.filter(q => q.accountId === a.id && q.sentAt >= window.start && q.sentAt < window.end);
-    if (acctQuotesThisPeriod.length === 0) continue;
-    const value = acctQuotesThisPeriod.reduce((s, q) => s + q.amount, 0);
-    const firstOrder = firstOrderByAccount.get(a.id);
-    if (firstOrder && firstOrder >= window.start) { newCount++; newValue += value; }
-    else { existingCount++; existingValue += value; }
-  }
-  const typeBreakdown = [
-    { type: `New in ${window.label}`, count: newCount, total: Math.round(newValue*100)/100 },
-    { type: 'Existing', count: existingCount, total: Math.round(existingValue*100)/100 },
-  ];
-
-  const regionTotals = new Map<string, number>();
-  for (const q of paidQuotes.filter(q => q.sentAt >= window.start && q.sentAt < window.end)) {
-    const region = accountById.get(q.accountId)?.region ?? 'Unknown';
-    regionTotals.set(region, (regionTotals.get(region) ?? 0) + q.amount);
-  }
-  const regionBreakdown = [...regionTotals.entries()]
-    .map(([region, total]) => ({ region, total: Math.round(total*100)/100 }))
-    .sort((a, b) => b.total - a.total);
-
-  // ---- Category breakdown — real data from DEAR's AdditionalAttribute1
-  // field (e.g. "Gift and concept stores", "Toy", "Pharmacy"). Accounts
-  // synced before this field was found show as "Uncategorized" until
-  // backfill-region-and-category.ts has run for them. ----
-  const categoryTotals = new Map<string, number>();
-  for (const q of paidQuotes.filter(q => q.sentAt >= window.start && q.sentAt < window.end)) {
-    const category = (accountById.get(q.accountId) as any)?.category || 'Uncategorized';
-    categoryTotals.set(category, (categoryTotals.get(category) ?? 0) + q.amount);
-  }
-  const categoryBreakdown = [...categoryTotals.entries()]
-    .map(([category, total]) => ({ category, total: Math.round(total*100)/100 }))
-    .sort((a, b) => b.total - a.total);
-
-  // ---- SKU and brand breakdown — this FY, real line-item data ----
-  const thisFyQuoteIds = [...new Set(paidQuotes.filter(q => !q.isCredit && q.sentAt >= window.start && q.sentAt < window.end).map(q => q.id))];
-  const lines = thisFyQuoteIds.length
-    ? await prisma.quoteLine.findMany({ where: { quoteId: { in: thisFyQuoteIds } } })
-    : [];
-
-  const skuTotals = new Map<string, { productName: string; quantity: number; total: number }>();
-  const brandTotals = new Map<string, number>();
-  for (const l of lines) {
-    if (isChargeLine(l)) continue; // freight and card surcharge aren't goods
-    const existing = skuTotals.get(l.sku) ?? { productName: l.productName, quantity: 0, total: 0 };
-    existing.quantity += l.quantity;
-    existing.total += l.lineTotal;
-    skuTotals.set(l.sku, existing);
-    const brand = l.brand || 'Unbranded';
-    brandTotals.set(brand, (brandTotals.get(brand) ?? 0) + l.lineTotal);
-  }
-  const skuBreakdown = [...skuTotals.entries()]
-    .map(([sku, v]) => ({ sku, productName: v.productName, quantity: v.quantity, total: Math.round(v.total*100)/100 }))
-    .sort((a, b) => b.total - a.total)
-    .slice(0, 50);
-  const brandBreakdown = [...brandTotals.entries()]
-    .map(([brand, total]) => ({ brand, total: Math.round(total*100)/100 }))
-    .sort((a, b) => b.total - a.total);
-
-  // ---- Recent invoices (most recent 100): the tax invoices behind the sales
-  // figures, each with its goods value ex GST. ----
-  const recentInvoices = [...paidQuotes]
-    .sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())
-    .slice(0, 100)
-    .map(q => ({
-      id: q.id,                                  // links to the order page
-      key: `${q.id}:${q.invoiceNumber ?? ''}`,   // one order can have several invoices
-      accountId: q.accountId,
-      invoice: q.invoiceNumber ?? q.number,
-      date: q.sentAt.toISOString().slice(0, 10),
-      customer: accountById.get(q.accountId)?.name ?? 'Unknown',
-      region: accountById.get(q.accountId)?.region ?? 'Unknown',
-      amount: Math.round(q.amount * 100) / 100,
-      paid: q.invoicePaid ?? q.paid,
-      history: isHistory(q),
-    }));
-
-  // Stat cards now respect the same selected window as everything
-  // else on the page — a real "Total invoiced" for whatever
-  // region/rep/period is picked, not an unconditional all-time sum
-  // regardless of filters. Pick period=alltime to genuinely see
-  // everything to date.
-  const windowedQuotes = paidQuotes.filter(q => q.sentAt >= window.start && q.sentAt < window.end);
-  const accountsWithActivity = new Set(windowedQuotes.filter(q => !q.isCredit).map(q => q.accountId)).size;
-
-  res.json({
-    totalValue: Math.round(windowedQuotes.reduce((s, q) => s + q.amount, 0) * 100) / 100,
-    totalOrders: new Set(windowedQuotes.filter(q => !q.isCredit).map(q => q.number)).size,
-    accountsWithActivity,
-    newCustomerCount: newCount,
-    myRegions: scope.myRegions,
-    newCustomerValue: Math.round(newValue * 100) / 100,
-    period,
-    periodLabel: window.label,
-    priorPeriodLabel: window.priorLabel,
-    monthlyTrend,
-    quarters,
-    unpaidQuotes,
-    topAccounts,
-    typeBreakdown,
-    regionBreakdown,
-    categoryBreakdown,
-    categories,
-    category: categoryParam,
-    skuBreakdown,
-    brandBreakdown,
-    recentInvoices,
-    accountsTracked: accounts.length,
-  });
-});

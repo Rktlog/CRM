@@ -63,7 +63,7 @@ export default function Reports() {
       if (key === 'rep-activity' || key === 'conversion' || key === 'marketing') params.set('days', String(days));
       await apiDownload(`/exports/${key}?${params.toString()}`, `${key}.xlsx`);
     } catch (e) {
-      alert('Download failed — check the API is running.');
+      alert(`Download failed: ${(e as Error).message}`);
     } finally {
       setDownloading(null);
     }
@@ -79,7 +79,7 @@ export default function Reports() {
       if (isManager && repId) params.set('repId', repId);
       await apiDownload(`/exports/brand-search?${params.toString()}`, `search-${searchTerm.trim()}.xlsx`);
     } catch (e) {
-      alert('Download failed — check the API is running.');
+      alert(`Download failed: ${(e as Error).message}`);
     } finally {
       setSearching(false);
     }

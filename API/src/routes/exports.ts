@@ -6,6 +6,8 @@ import { LIVE_ORDER, isHistory, isOwing } from '../lib/orderSource';
 import { wholesalePrice, retailPrice } from '../lib/pricing';
 import { buildPriceList, priceListWorkbook, PriceListAvailability, PriceListStatus } from '../lib/priceList';
 import { computeConversion, parsePeriod, regionsOf } from './conversion';
+import { buildEolReport, allocateInvoices, EOL_BRANDS, DEFAULT_START, DEFAULT_CHECKPOINTS, EolOrder, Sheet as EolSheet } from '../lib/eolReport';
+import { melDay } from '../lib/receivables';
 import { overview, campaignReport } from '../lib/marketing/overview';
 import { loadCreditNotes, loadMovements, loadReservations, loadHeld, regionsParam } from './credit';
 
@@ -55,6 +57,27 @@ function sendWorkbook(res: any, filename: string, sheets: { name: string; rows: 
   const wb = XLSX.utils.book_new();
   for (const s of sheets) {
     const ws = XLSX.utils.json_to_sheet(s.rows);
+    XLSX.utils.book_append_sheet(wb, ws, s.name.slice(0, 31));
+  }
+  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(buffer);
+}
+
+// For reports laid out by hand (merged headers, widths, money columns): each sheet is a grid of cells.
+function sendSheets(res: any, filename: string, sheets: EolSheet[]) {
+  const wb = XLSX.utils.book_new();
+  for (const s of sheets) {
+    const ws = XLSX.utils.aoa_to_sheet(s.aoa);
+    if (s.merges) ws['!merges'] = s.merges;
+    if (s.widths) ws['!cols'] = s.widths.map(wch => ({ wch }));
+    if (s.moneyCols) {
+      for (const addr of Object.keys(ws)) {
+        if (addr[0] === '!') continue;
+        if (s.moneyCols.includes(XLSX.utils.decode_cell(addr).c) && ws[addr].t === 'n') ws[addr].z = '#,##0.00';
+      }
+    }
     XLSX.utils.book_append_sheet(wb, ws, s.name.slice(0, 31));
   }
   const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
@@ -739,6 +762,62 @@ exportsRouter.get('/:type', async (req, res) => {
           { name: 'Inactive stockists', rows: detail('inactive_stockist') },
         ].map(sh => (sh.rows.length ? sh : { ...sh, rows: [{ Note: 'None in this period' }] }));
         return sendWorkbook(res, 'conversion.xlsx', sheets);
+      }
+
+      case 'eol': {
+        // EOL sell-through report: sales since the start date and stock left for the clearance brands, one sheet each.
+        // GET /exports/eol  (?from=2026-05-22  &checkpoints=2026-06-16,2026-07-01,...). Managers only.
+        if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Only a manager can download this report' });
+        const isDay = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v));
+        const from = isDay(req.query.from) ? req.query.from : DEFAULT_START;
+        const today = melDay();
+        const checkpoints = typeof req.query.checkpoints === 'string' && req.query.checkpoints
+          ? req.query.checkpoints.split(',').map(x => x.trim()).filter(isDay)
+          : [...DEFAULT_CHECKPOINTS, today];
+
+        // Live orders placed since the day before the start, or invoiced since it (an older order can ship later).
+        const ids = (await prisma.$queryRaw<{ id: string }[]>`
+          select q.id from crm.quotes q
+          where q.source <> 'rhino-history' and q.number not like 'Q%'
+            and upper(coalesce(q.fulfillment_status, '')) not in ('VOIDED', 'CREDITED')
+            and (q.sent_at >= ${from}::date - 1
+              or case when jsonb_typeof(q.invoices) = 'array' then exists (
+                   select 1 from jsonb_array_elements(q.invoices) i
+                   where left(coalesce(i->>'date', ''), 10) >= ${from}
+                     and upper(coalesce(i->>'status', '')) <> 'VOIDED') else false end)`).map(r => r.id);
+        const quotes = await prisma.quote.findMany({
+          where: { id: { in: ids } },
+          select: {
+            sentAt: true, fulfillmentStatus: true, invoices: true, fulfilments: true,
+            account: { select: { name: true, region: true, category: true, contactName: true, email: true, phone: true } },
+            lines: { select: { sku: true, productName: true, brand: true, quantity: true, unitPrice: true, discount: true, lineTotal: true } },
+          },
+        });
+        const words = (s: string | null) => (s ? s.charAt(0) + s.slice(1).toLowerCase() : '');
+        const orders: EolOrder[] = quotes.map(q => ({
+          orderDate: melDay(q.sentAt),
+          status: words(q.fulfillmentStatus),
+          completed: (q.fulfillmentStatus ?? '').toUpperCase() === 'COMPLETED',
+          account: {
+            name: q.account.name, state: q.account.region, category: q.account.category ?? '',
+            contact: q.account.contactName ?? '', email: q.account.email ?? '', phone: q.account.phone ?? '',
+          },
+          invoices: (Array.isArray(q.invoices) ? (q.invoices as any[]) : []).map(i => ({ number: i?.number ? String(i.number) : null, date: i?.date ? melDay(String(i.date)) : null, status: i?.status ?? null })),
+          fulfilments: (Array.isArray(q.fulfilments) ? (q.fulfilments as any[]) : []).map(f => ({ shippedAt: f?.shippedAt ? String(f.shippedAt) : null, lines: Array.isArray(f?.lines) ? f.lines : [] })),
+          lines: q.lines.map(l => ({ sku: l.sku, product: l.productName, brand: l.brand, qty: l.quantity, unitPrice: l.unitPrice, discount: l.discount, lineTotal: l.lineTotal })),
+        }));
+
+        const products = await prisma.product.findMany({
+          where: { brand: { in: EOL_BRANDS }, available: { gt: 0 } },
+          select: { sku: true, name: true, brand: true, available: true, prices: true },
+        });
+        const stock = products.map(p => ({
+          sku: p.sku, name: p.name, brand: p.brand ?? '', available: p.available,
+          rrp: retailPrice(p.prices as any), wholesale: wholesalePrice(p.prices as any),
+        }));
+
+        const sheets = buildEolReport({ lines: orders.flatMap(allocateInvoices), stock, from, checkpoints, asOf: today });
+        return sendSheets(res, `eol-report-${from}.xlsx`, sheets);
       }
 
       case 'marketing': {
