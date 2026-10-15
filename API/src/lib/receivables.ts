@@ -16,6 +16,7 @@ type Rep = { id: string; role: string };
 const DAY = 86400000;
 const QUOTE_STATUSES = ['DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING'];
 const CLOSED_STATUSES = ['VOIDED', 'CREDITED', 'COMPLETED'];
+const CONFIRMED = ['ORDERED', 'BACKORDERED'];   // confirmed in DEAR; can still be waiting on payment
 const cents = (n: number) => Math.round(n * 100) / 100;
 const daysSince = (d: Date) => Math.floor((Date.now() - d.getTime()) / DAY);
 
@@ -31,10 +32,13 @@ async function scope(rep: Rep, regions?: string[]) {
 const LIVE = { source: { not: 'rhino-history' }, NOT: { number: { startsWith: 'Q' } } };
 
 // ---------- Open quotes: not yet confirmed, oldest first ----------
+// A day as YYYY-MM-DD on the Melbourne calendar (the team's day, whatever the server's clock says).
 export const melDay = (d: Date | string = new Date()) =>
   new Date(d).toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' });
 const plusDays = (day: string, n: number) => new Date(Date.parse(day) + n * DAY).toISOString().slice(0, 10);
 
+// Follow-ups on an open quote: the 1st is 7 days after the order date, the 2nd is 14 days after the 1st was done.
+// A date someone sets by hand (manualOn) comes first until it is done or cleared.
 export type FollowUp = {
   fu1Due: string; fu1DoneOn: string | null; fu2Due: string | null; fu2DoneOn: string | null; manualOn: string | null;
   next: { kind: 'fu1' | 'fu2' | 'manual'; date: string } | null;
@@ -50,11 +54,25 @@ export function followUpState(orderDay: string, f: { manualOn: string | null; fu
   return { fu1Due, fu1DoneOn: f.fu1DoneOn, fu2Due, fu2DoneOn: f.fu2DoneOn, manualOn: f.manualOn, next };
 }
 
+// Amounts are what the customer pays (inc GST, DEAR's order total). Deposit is the prepayment
+// DEAR holds against the order; remaining is the total less that deposit.
 export async function openQuotes(rep: Rep, regions?: string[]) {
   const accounts = await scope(rep, regions);
-  const quotes = await prisma.quote.findMany({
-    where: { ...LIVE, accountId: { in: [...accounts.keys()] }, fulfillmentStatus: { in: QUOTE_STATUSES } },
+  const quotes = (await prisma.quote.findMany({
+    where: {
+      ...LIVE, accountId: { in: [...accounts.keys()] },
+      OR: [
+        { fulfillmentStatus: { in: QUOTE_STATUSES } },
+        { fulfillmentStatus: { in: CONFIRMED }, miscType: null },
+      ],
+    },
     orderBy: { sentAt: 'asc' },
+  })).filter(q => {
+    if (QUOTE_STATUSES.includes(q.fulfillmentStatus ?? '')) return true;
+    // A confirmed order stays here only while a pay-first customer (no payment terms) still owes money on it.
+    const payFirst = !accounts.get(q.accountId)?.paymentTerms;
+    const paid = Math.max(q.unappliedCredit ?? 0, q.amountPaid ?? 0);
+    return payFirst && (q.total ?? q.amount) - paid > 0.005;
   });
   const ids = quotes.map(q => q.id);
   const [fuRows, notes] = await Promise.all([
@@ -64,7 +82,7 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
       : Promise.resolve([] as { id: string; follow_up_at: Date | null; fu1_done_on: Date | null; fu2_done_on: Date | null }[]),
     orderNoteSummary(ids),
   ]);
-  const day = (d: Date | null) => (d ? new Date(d).toISOString().slice(0, 10) : null);
+  const day = (d: Date | null) => (d ? new Date(d).toISOString().slice(0, 10) : null);   // date columns come back as midnight UTC
   const fuById = new Map(fuRows.map(r => [r.id, { manualOn: day(r.follow_up_at), fu1DoneOn: day(r.fu1_done_on), fu2DoneOn: day(r.fu2_done_on) }]));
 
   const rows = quotes.map(q => {
@@ -72,15 +90,19 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
     const deposit = cents(Math.max(q.unappliedCredit ?? 0, q.amountPaid ?? 0));
     const n = notes.get(q.id);
     return {
-      id: q.id, number: q.number, accountId: q.accountId,
+      id: q.id,
+      number: q.number,
+      accountId: q.accountId,
       customer: accounts.get(q.accountId)?.name ?? 'Unknown',
       region: accounts.get(q.accountId)?.region ?? '',
       repName: accounts.get(q.accountId)?.rep?.name ?? null,
-      date: q.sentAt, ageDays: daysSince(q.sentAt),
-      stage: q.fulfillmentStatus === 'ORDERING' ? 'Draft order' : 'Quote',
+      date: q.sentAt,
+      ageDays: daysSince(q.sentAt),
+      stage: q.fulfillmentStatus === 'ORDERING' ? 'Draft order' : CONFIRMED.includes(q.fulfillmentStatus ?? '') ? 'Confirmed, awaiting payment' : 'Quote',
       reference: q.reference,
-      amount: total, deposit,
-      remaining: cents(Math.max(total - deposit, 0)),
+      amount: total,                                   // total, inc GST
+      deposit,                                         // deposit / prepaid so far
+      remaining: cents(Math.max(total - deposit, 0)),  // still to pay
       followUp: followUpState(melDay(q.sentAt), fuById.get(q.id) ?? { manualOn: null, fu1DoneOn: null, fu2DoneOn: null }),
       noteCount: n?.noteCount ?? 0,
       lastNote: n?.lastNote ?? null,
