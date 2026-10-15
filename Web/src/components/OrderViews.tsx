@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import StateFilter from './StateFilter';
 import { Link, useNavigate } from 'react-router-dom';
 import OrderNoteChip from './OrderNoteChip'
+import OpenQuotesTable from './OpenQuotesTable';
 import { apiGet, apiDownload } from '../lib/api';
 import { fmtMoney, fmtDateWithYear, fmtDuration, fmtPayDate } from '../lib/types';
 import { useMe, stateOptionsFor } from '../lib/useMe';
@@ -78,7 +79,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
   }
 
   const summary = !data ? null
-    : view === 'quotes' ? `${data.count} open ${data.count === 1 ? 'quote' : 'quotes'}, ${fmtMoney(data.total)}`
+    : view === 'quotes' ? `${data.count} open ${data.count === 1 ? 'quote' : 'quotes'}, ${fmtMoney(data.total)} total, ${fmtMoney(data.remaining)} still to pay`
     : view === 'to-ship' ? `${data.count} ${data.count === 1 ? 'order' : 'orders'} to ship, ${fmtMoney(data.total)}`
     : view === 'unpaid' ? `${data.count} unpaid ${data.count === 1 ? 'invoice' : 'invoices'}, ${fmtMoney(data.total)} due, ${fmtMoney(data.overdue)} overdue`
     : `${data.count} ${data.count === 1 ? 'customer' : 'customers'}, ${fmtMoney(data.totals.balance)} net balance, ${fmtMoney(data.totals.over60)} more than 2 months overdue`;
@@ -213,13 +214,17 @@ export default function OrderViews({ view }: { view: ViewKey }) {
         </div>
       )}
 
-      {data && rows.length > 0 && (view === 'quotes' || view === 'to-ship') && (
+      {data && rows.length > 0 && view === 'quotes' && (
+        <OpenQuotesTable rows={rows.slice(0, shown)} showRep={me?.role === 'manager'} />
+      )}
+
+      {data && rows.length > 0 && view === 'to-ship' && (
         <div className="ledger-table-scroll tall">
           <table className="ov-table">
             <thead>
               <tr>
                 <th>Order</th><th>Customer</th><th>Date</th><th className="num-col">Age</th>
-                <th>{view === 'quotes' ? 'Stage' : 'Status'}</th><th className="num-col">Amount</th>
+                <th>Status</th><th className="num-col">Amount</th>
               </tr>
             </thead>
             <tbody>
@@ -238,7 +243,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
                   <td>{fmtDateWithYear(r.date)}</td>
                   <td className={`num-col num${r.ageDays > 60 ? ' ov-late-d90' : r.ageDays > 30 ? ' ov-late-d60' : ''}`}>{fmtDuration(r.ageDays)}</td>
                   <td>
-                    <span className={`pill ${r.backordered ? 'rust' : view === 'quotes' ? 'neutral' : 'amber'}`}>{r.stage}</span>
+                    <span className={`pill ${r.backordered ? 'rust' : 'amber'}`}>{r.stage}</span>
                   </td>
                   <td className="num-col num">{fmtMoney(r.amount)}</td>
                 </tr>

@@ -1,6 +1,7 @@
 import { prisma } from './prisma';
 import { territoryWhere } from './territory';
 import { isOwing } from './orderSource';
+import { orderNoteSummary } from './orderNotes';
 
 // The order-tracking views on the Orders page: open quotes, orders still to
 // ship, unpaid invoices, and balances per customer with ageing. Scoped like
@@ -36,20 +37,41 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
     where: { ...LIVE, accountId: { in: [...accounts.keys()] }, fulfillmentStatus: { in: QUOTE_STATUSES } },
     orderBy: { sentAt: 'asc' },
   });
-  const rows = quotes.map(q => ({
-    id: q.id,
-    number: q.number,
-    accountId: q.accountId,
-    customer: accounts.get(q.accountId)?.name ?? 'Unknown',
-    region: accounts.get(q.accountId)?.region ?? '',
-    repName: accounts.get(q.accountId)?.rep?.name ?? null,
-    date: q.sentAt,
-    ageDays: daysSince(q.sentAt),
-    stage: q.fulfillmentStatus === 'ORDERING' ? 'Draft order' : 'Quote',
-    reference: q.reference,
-    amount: cents(q.total ?? q.amount),
-  }));
-  return { rows, count: rows.length, total: cents(rows.reduce((s, r) => s + r.amount, 0)) };
+  const ids = quotes.map(q => q.id);
+  const [followRows, notes] = await Promise.all([
+    ids.length
+      ? prisma.$queryRaw<{ id: string; follow_up_at: Date }[]>`
+          select id, follow_up_at from crm.quotes where id = any(${ids}::uuid[]) and follow_up_at is not null`
+      : Promise.resolve([] as { id: string; follow_up_at: Date }[]),
+    orderNoteSummary(ids),
+  ]);
+  const followUp = new Map(followRows.map(r => [r.id, new Date(r.follow_up_at).toISOString().slice(0, 10)]));
+
+  const rows = quotes.map(q => {
+    const total = cents(q.total ?? q.amount);
+    const deposit = cents(Math.max(q.unappliedCredit ?? 0, q.amountPaid ?? 0));
+    const n = notes.get(q.id);
+    return {
+      id: q.id, number: q.number, accountId: q.accountId,
+      customer: accounts.get(q.accountId)?.name ?? 'Unknown',
+      region: accounts.get(q.accountId)?.region ?? '',
+      repName: accounts.get(q.accountId)?.rep?.name ?? null,
+      date: q.sentAt, ageDays: daysSince(q.sentAt),
+      stage: q.fulfillmentStatus === 'ORDERING' ? 'Draft order' : 'Quote',
+      reference: q.reference,
+      amount: total,                                   // total, inc GST
+      deposit,                                         // deposit / prepaid so far
+      remaining: cents(Math.max(total - deposit, 0)),  // still to pay
+      followUpAt: followUp.get(q.id) ?? null,
+      noteCount: n?.noteCount ?? 0,
+      lastNote: n?.lastNote ?? null,
+    };
+  });
+  return {
+    rows, count: rows.length,
+    total: cents(rows.reduce((s, r) => s + r.amount, 0)),
+    remaining: cents(rows.reduce((s, r) => s + r.remaining, 0)),
+  };
 }
 
 // ---------- To ship: confirmed but not fully shipped, oldest first ----------
