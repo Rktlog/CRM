@@ -7,7 +7,6 @@ import * as XLSX from 'xlsx';
 import { openQuotes, toShip, unpaidInvoices, balances, AGE_BUCKETS, followUpState, melDay } from '../lib/receivables';
 import { orderNoteSummary } from '../lib/orderNotes';
 
-
 export const ordersRouter = Router();
 
 // Order lookup from our own synced tables, so reps don't need to open
@@ -164,27 +163,11 @@ ordersRouter.get('/search', async (req, res) => {
 
 // GET /orders/:id   full detail for one order
 // ---------- Order tracking views (tabs on the Orders page) ----------
-// GET /orders/views/quotes | to-ship | unpaid | balances
-//   ?region=VIC,NSW  &format=xlsx (download exactly what's on screen)
-// Scoped by territory: reps see their states.
-const xlDate = (d: Date | null | undefined) => (d ? new Date(d).toISOString().slice(0, 10) : '');
-
-ordersRouter.patch('/:id/follow-up', async (req, res) => {
-  if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) return res.status(400).json({ error: 'Bad order' });
-  const date = req.body?.date;
-  const valid = date === null || (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(Date.parse(date)));
-  if (!valid) return res.status(400).json({ error: 'Use a date like 2026-10-20, or null to clear it' });
-  const [o] = await prisma.$queryRaw<any[]>`
-    select q.id, a.id as "accountId", a.region, a.rep_id as "repId"
-    from crm.quotes q join crm.accounts a on a.id = q.account_id where q.id = ${req.params.id}::uuid`;
-  if (!o) return res.status(404).json({ error: 'Order not found' });
-  if (!(await canSeeAccount(req.rep!, { id: o.accountId, repId: o.repId, region: o.region } as any))) {
-    return res.status(403).json({ error: 'This order is outside your states' });
-  }
-  await prisma.$executeRaw`update crm.quotes set follow_up_at = ${date}::date where id = ${req.params.id}::uuid`;
-  res.json({ ok: true, date });
-});
-
+// ---------- Follow-ups on an open quote ----------
+// PATCH /orders/:id/follow-up        { date: '2026-10-20' }  your own next date ({ date: null } clears it)
+// POST  /orders/:id/follow-up/done   completes whatever is next: your date, else the 1st, else the 2nd
+// POST  /orders/:id/follow-up/undo   takes back the latest "done"
+// Each returns the order's follow-up as it now stands.
 async function followUpOrder(req: any, res: any) {
   if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) { res.status(400).json({ error: 'Bad order' }); return null; }
   const [o] = await prisma.$queryRaw<any[]>`
@@ -234,6 +217,11 @@ ordersRouter.post('/:id/follow-up/undo', async (req, res) => {
   res.json({ followUp: await followUpNow(o) });
 });
 
+// GET /orders/views/quotes | to-ship | unpaid | balances
+//   ?region=VIC,NSW  &format=xlsx (download exactly what's on screen)
+// Scoped by territory: reps see their states.
+const xlDate = (d: Date | null | undefined) => (d ? new Date(d).toISOString().slice(0, 10) : '');
+
 ordersRouter.get('/views/:view', async (req, res) => {
   const regions = typeof req.query.region === 'string' && req.query.region ? req.query.region.split(',') : undefined;
   const rep = req.rep!;
@@ -245,11 +233,12 @@ ordersRouter.get('/views/:view', async (req, res) => {
     case 'quotes': {
       data = await openQuotes(rep, regions);
       name = 'open-quotes';
-            sheet = data.rows.map((r: any) => ({
+      sheet = data.rows.map((r: any) => ({
         Order: r.number, Customer: r.customer, State: r.region, 'Order date': xlDate(r.date), 'Age (days)': r.ageDays,
         'Total (inc GST)': r.amount, 'Deposit / prepaid': r.deposit, Remaining: r.remaining,
-        'Follow-up date': r.followUpAt ?? '', 'Last note': r.lastNote?.text ?? '',
-        Rep: r.repName ?? '', Stage: r.stage, Reference: r.reference ?? '',
+        'Next follow-up': r.followUp.next?.date ?? 'Done',
+        'Follow-up type': r.followUp.next ? { fu1: '1st', fu2: '2nd', manual: 'Set' }[r.followUp.next.kind as 'fu1' | 'fu2' | 'manual'] : '',
+        'Last note': r.lastNote?.text ?? '', Rep: r.repName ?? '', Stage: r.stage, Reference: r.reference ?? '',
       }));
       break;
     }
