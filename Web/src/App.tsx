@@ -11,6 +11,7 @@ import Settings from './pages/Settings';
 import ActivityLog from './pages/ActivityLog';
 import Planner from './pages/Planner';
 import Reports from './pages/Reports';
+import ReportBuilder from './pages/ReportBuilder';
 import Misc from './pages/Misc';
 import ProductSearch from './pages/ProductSearch';
 import Orders from './pages/Orders';
@@ -57,6 +58,7 @@ function Routed() {
         <Route path="accounts/:id" element={<AccountDetail />} />
         <Route path="sales-data" element={<SalesData />} />
         <Route path="reports" element={<Reports />} />
+        <Route path="reports/builder" element={<ReportBuilder />} />
         <Route path="misc" element={<Misc />} />
         <Route path="products" element={<ProductSearch />} />
         <Route path="catalogue" element={<Catalogue />} />

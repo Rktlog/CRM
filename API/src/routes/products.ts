@@ -1,7 +1,12 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { HISTORY_SOURCE, LIVE_ORDER, isHistory } from '../lib/orderSource';
 import { pickPrice, WHOLESALE, RETAIL } from '../lib/pricing';
+import { isStatusKey, parseDay, parseFile, planImport, productTemplate, PRODUCT_STATUSES, MAX_IMPORT_CHANGES } from '../lib/productImport';
+import { chooseEta, incomingFor } from '../lib/eta';
+import { melDay } from '../lib/receivables';
+
+const dayOf = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
 
 export const productsRouter = Router();
 
@@ -55,6 +60,92 @@ function rank(sku: string, name: string, q: string, words: string[]): number {
   return 4;
 }
 
+// ---------- Product status (EOL, Discontinued, Pre-order, New) and photo links ----------
+// Set one product by hand, or many from a spreadsheet. Managers only. Everything else about a product comes from DEAR.
+const managersOnly = (req: any, res: any) => {
+  if (req.rep!.role === 'manager') return true;
+  res.status(403).json({ error: 'Only a manager can change product statuses and photos' });
+  return false;
+};
+
+// GET /products/template            every product with its current photo link and status, to edit and import back
+// GET /products/template?blank=1    just the headings and one example row
+productsRouter.get('/template', async (req, res) => {
+  if (!managersOnly(req, res)) return;
+  const blank = req.query.blank === '1';
+  const products = blank ? [] : await prisma.product.findMany({
+    where: { OR: [{ status: null }, { status: { not: 'Deprecated' } }] },
+    select: { sku: true, name: true, brand: true, imageUrl: true, lifecycle: true, eta: true },
+    orderBy: [{ brand: 'asc' }, { sku: 'asc' }],
+  });
+  const buffer = await productTemplate(products.map(p => ({ ...p, eta: dayOf(p.eta) })), blank);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="product-import-${blank ? 'blank-' : ''}template.xlsx"`);
+  res.send(buffer);
+});
+
+// POST /products/import   body: the file as base64 text (.xlsx or .csv)
+//   no query  -> shows what would change, changes nothing
+//   ?apply=1&expect=N  -> makes the N changes the preview showed (refuses if the file or products have moved on)
+productsRouter.post('/import', express.text({ type: '*/*', limit: '20mb' }), async (req, res) => {
+  if (!managersOnly(req, res)) return;
+  try {
+    const file = parseFile(String(req.body ?? ''));
+    const products = (await prisma.product.findMany({ select: { sku: true, name: true, imageUrl: true, lifecycle: true, eta: true } })).map(p => ({ ...p, eta: dayOf(p.eta) }));
+    const plan = planImport(file, products);
+    if (req.query.apply !== '1') return res.json({ applied: false, ...plan });
+
+    if (plan.changes.length > MAX_IMPORT_CHANGES) return res.status(400).json({ error: `That would change ${plan.changes.length} products. The most in one import is ${MAX_IMPORT_CHANGES}.` });
+    if (Number(req.query.expect) !== plan.changes.length) return res.status(409).json({ error: 'The file or the products changed since the preview. Check the file again, then apply.' });
+
+    const withImage = plan.changes.filter(c => c.image);
+    const withStatus = plan.changes.filter(c => c.status);
+    const withEta = plan.changes.filter(c => c.eta);
+    await prisma.$transaction([
+      prisma.$executeRaw`update crm.products p set image_url = v.url
+        from unnest(${withImage.map(c => c.sku)}::text[], ${withImage.map(c => c.image!.to)}::text[]) as v(sku, url)
+        where p.sku = v.sku`,
+      prisma.$executeRaw`update crm.products p set lifecycle = nullif(v.status, '')
+        from unnest(${withStatus.map(c => c.sku)}::text[], ${withStatus.map(c => c.status!.to ?? '')}::text[]) as v(sku, status)
+        where p.sku = v.sku`,
+      prisma.$executeRaw`update crm.products p set eta = nullif(v.eta, '')::date
+        from unnest(${withEta.map(c => c.sku)}::text[], ${withEta.map(c => c.eta!.to ?? '')}::text[]) as v(sku, eta)
+        where p.sku = v.sku`,
+    ]);
+    res.json({ applied: true, ...plan });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+// PATCH /products/:sku   { lifecycle: 'eol' | 'discontinued' | 'preorder' | 'new' | null, imageUrl: 'https://...' | null, eta: '2026-12-01' | null }
+productsRouter.patch('/:sku', async (req, res) => {
+  if (!managersOnly(req, res)) return;
+  const data: { lifecycle?: string | null; imageUrl?: string | null; eta?: Date | null } = {};
+  if ('lifecycle' in (req.body ?? {})) {
+    const v = req.body.lifecycle;
+    if (v === null || v === '') data.lifecycle = null;
+    else if (isStatusKey(v)) data.lifecycle = v;
+    else return res.status(400).json({ error: 'Status must be eol, discontinued, preorder, new, or empty' });
+  }
+  if ('imageUrl' in (req.body ?? {})) {
+    const v = typeof req.body.imageUrl === 'string' ? req.body.imageUrl.trim() : '';
+    if (!v) data.imageUrl = null;
+    else if (/^https?:\/\//i.test(v)) data.imageUrl = v;
+    else return res.status(400).json({ error: 'The photo link must start with http:// or https://' });
+  }
+  if ('eta' in (req.body ?? {})) {
+    const d = typeof req.body.eta === 'string' ? parseDay(req.body.eta) : null;
+    if (d === 'invalid') return res.status(400).json({ error: 'The ETA must be a date like 2026-12-01, or empty' });
+    data.eta = d ? new Date(`${d}T00:00:00Z`) : null;
+  }
+  if (!Object.keys(data).length) return res.status(400).json({ error: 'Nothing to change' });
+  const p = await prisma.product.update({ where: { sku: req.params.sku }, data, select: { sku: true, imageUrl: true, lifecycle: true, eta: true, onOrder: true } }).catch(() => null);
+  if (!p) return res.status(404).json({ error: 'Product not found' });
+  const incoming = await incomingFor([p.sku]);
+  res.json({ sku: p.sku, imageUrl: p.imageUrl, lifecycle: p.lifecycle, etaManual: dayOf(p.eta), eta: chooseEta(p.eta, p.onOrder, incoming.get(p.sku) ?? [], melDay()) });
+});
+
 // ---------- GET /products/catalogue ----------
 // The photo catalogue: products by brand with stock and price, a page at a time.
 //   ?q= words (any order)  &brand=A,B  &category=  &inStock=1  &withPhoto=1  &limit=48  &offset=0
@@ -65,6 +156,7 @@ productsRouter.get('/catalogue', async (req, res) => {
     const q = String(req.query.q ?? '').trim().toLowerCase();
     const brands = String(req.query.brand ?? '').split(',').map(b => b.trim()).filter(Boolean);
     const category = String(req.query.category ?? '').trim();
+    const statuses = String(req.query.status ?? '').split(',').map(x => x.trim()).filter(Boolean);   // eol, discontinued, preorder, new, none
     const limit = Math.min(Math.max(Number(req.query.limit) || 48, 1), 96);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
 
@@ -80,18 +172,23 @@ productsRouter.get('/catalogue', async (req, res) => {
     if (req.query.withPhoto === '1') common.push({ AND: [{ imageUrl: { not: null } }, { imageUrl: { not: '' } }] });
     const byBrand = brands.length ? [{ brand: { in: brands } }] : [];
     const byCategory = category ? [{ category }] : [];
+    const keys = statuses.filter(isStatusKey);
+    const byStatus = statuses.length ? [{ OR: [...(keys.length ? [{ lifecycle: { in: keys } }] : []), ...(statuses.includes('none') ? [{ lifecycle: null }] : [])] }] : [];
 
-    const [total, rows, brandRows, categoryRows] = await Promise.all([
-      prisma.product.count({ where: { AND: [...common, ...byBrand, ...byCategory] } }),
+    const [total, rows, brandRows, categoryRows, statusRows] = await Promise.all([
+      prisma.product.count({ where: { AND: [...common, ...byBrand, ...byCategory, ...byStatus] } }),
       prisma.product.findMany({
-        where: { AND: [...common, ...byBrand, ...byCategory] },
+        where: { AND: [...common, ...byBrand, ...byCategory, ...byStatus] },
         orderBy: [{ brand: 'asc' }, { name: 'asc' }],
         skip: offset, take: limit,
-        select: { sku: true, name: true, brand: true, category: true, uom: true, imageUrl: true, available: true, onHand: true, onOrder: true, prices: true },
+        select: { sku: true, name: true, brand: true, category: true, uom: true, imageUrl: true, lifecycle: true, eta: true, available: true, onHand: true, onOrder: true, prices: true },
       }),
-      prisma.product.groupBy({ by: ['brand'], where: { AND: [...common, ...byCategory] }, _count: { _all: true } }),
-      prisma.product.groupBy({ by: ['category'], where: { AND: [...common, ...byBrand] }, _count: { _all: true } }),
+      prisma.product.groupBy({ by: ['brand'], where: { AND: [...common, ...byCategory, ...byStatus] }, _count: { _all: true } }),
+      prisma.product.groupBy({ by: ['category'], where: { AND: [...common, ...byBrand, ...byStatus] }, _count: { _all: true } }),
+      prisma.product.groupBy({ by: ['lifecycle'], where: { AND: [...common, ...byBrand, ...byCategory] }, _count: { _all: true } }),
     ]);
+    const incoming = await incomingFor(rows.map(r => r.sku));
+    const today = melDay();
 
     const facet = (rows: { _count: { _all: number } }[], key: 'brand' | 'category') =>
       (rows as any[]).filter(r => r[key]).map(r => ({ name: r[key] as string, count: r._count._all }))
@@ -102,7 +199,8 @@ productsRouter.get('/catalogue', async (req, res) => {
       items: rows.map(p => {
         const prices = (p.prices as Record<string, number>) ?? {};
         return {
-          sku: p.sku, name: p.name, brand: p.brand, category: p.category, uom: p.uom, imageUrl: p.imageUrl,
+          sku: p.sku, name: p.name, brand: p.brand, category: p.category, uom: p.uom, imageUrl: p.imageUrl, lifecycle: p.lifecycle,
+          eta: chooseEta(p.eta, p.onOrder, incoming.get(p.sku) ?? [], today), etaManual: dayOf(p.eta),
           available: p.available, onHand: p.onHand, onOrder: p.onOrder,
           wholesale: pickPrice(prices, WHOLESALE)?.price ?? null,
           retail: pickPrice(prices, RETAIL)?.price ?? null,
@@ -110,6 +208,11 @@ productsRouter.get('/catalogue', async (req, res) => {
       }),
       brands: facet(brandRows, 'brand'),
       categories: facet(categoryRows, 'category'),
+      // how many products have each status (brand and category filters applied), for the status filter
+      statuses: [
+        ...PRODUCT_STATUSES.map(st => ({ key: st.key as string, label: st.label, count: (statusRows as any[]).find(r => r.lifecycle === st.key)?._count._all ?? 0 })),
+        { key: 'none', label: 'No status', count: (statusRows as any[]).find(r => r.lifecycle == null)?._count._all ?? 0 },
+      ],
     });
   } catch (e) {
     console.error('catalogue failed', e);
@@ -362,7 +465,10 @@ productsRouter.get('/search', async (req, res) => {
       name: p.name,
       brand: p.brand,
       category: p.category,
-      imageUrl: p.imageUrl,   // the photo link from the team's sheet (shown small, large on click)
+      imageUrl: p.imageUrl,   // the photo link (shown small, large on click)
+      lifecycle: p.lifecycle, // EOL, discontinued, pre-order or new; null = none
+      eta: chooseEta(p.eta, p.onOrder, purchaseOrders, melDay()),   // when the next delivery should arrive
+      etaManual: dayOf(p.eta),                                       // the date set by hand, if any
       uom: p.uom,
       onHand: p.onHand,
       allocated: p.allocated,

@@ -1,7 +1,12 @@
 import { FormEvent, useEffect, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { apiGet } from '../lib/api';
+import { apiGet, apiPatch } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 import ProductPhoto from '../components/ProductPhoto';
+import ProductStatusPill from '../components/ProductStatusPill';
+import EtaText, { Eta } from '../components/EtaText';
+import ProductImportModal from '../components/ProductImportModal';
+import { PRODUCT_STATUSES } from '../lib/productStatus';
 
 type Location = { location: string; onHand: number; allocated: number; available: number; onOrder: number };
 type OrderRef = {
@@ -21,7 +26,10 @@ type Product = {
   name: string;
   brand: string | null;
   category: string | null;
-  imageUrl?: string | null; // photo link from the team's sheet
+  imageUrl?: string | null; // photo link
+  lifecycle?: string | null; // EOL, discontinued, pre-order, new; none if empty
+  eta?: Eta;                 // when the next delivery should arrive
+  etaManual?: string | null; // the ETA set by hand, if any
   uom: string | null;
   onHand: number;
   allocated: number;
@@ -60,6 +68,13 @@ export default function ProductSearch() {
   const [error, setError] = useState<string | null>(null);
   const [openSku, setOpenSku] = useState<string | null>(null);
   const [stockAsOf, setStockAsOf] = useState<string | null>(null);
+  const { role } = useAuth();
+  const isManager = role === 'manager';
+  const [showImport, setShowImport] = useState(false);
+
+  // After a status or photo link is saved on one product, show it without searching again.
+  const saved = (sku: string, patch: { lifecycle?: string | null; imageUrl?: string | null }) =>
+    setResults(rs => rs && rs.map(r => (r.sku === sku ? { ...r, ...patch } : r)));
 
   async function search(e: FormEvent) {
     e.preventDefault();
@@ -98,7 +113,10 @@ export default function ProductSearch() {
 
   return (
     <>
-      <h1>Products</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }}>
+        <h1>Products</h1>
+        {isManager && <button className="btn secondary" onClick={() => setShowImport(true)}>⬆ Import products</button>}
+      </div>
 
       <form className="product-search-form" onSubmit={search}>
         <input
@@ -153,7 +171,7 @@ export default function ProductSearch() {
                   <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                     <ProductPhoto url={p.imageUrl} name={p.name} sku={p.sku} size={44} />
                     <div>
-                      <div className="acct-name">{p.name}</div>
+                      <div className="acct-name">{p.name} <ProductStatusPill status={p.lifecycle} /></div>
                       {p.category && <div className="acct-region">{p.category}</div>}
                     </div>
                   </div>
@@ -161,10 +179,10 @@ export default function ProductSearch() {
                   <div className="num">{qty(p.onHand)}</div>
                   <div className="num hide-sm">{qty(p.allocated)}</div>
                   <div className="num">{availabilityPill(p.available)}</div>
-                  <div className="num hide-sm">{qty(p.onOrder)}</div>
+                  <div className="num hide-sm">{qty(p.onOrder)}<EtaText eta={p.eta} block /></div>
                 </div>
 
-                {open && <ProductDetail product={p} />}
+                {open && <ProductDetail product={p} canEdit={isManager} onSaved={saved} />}
               </div>
             );
           })}
@@ -176,6 +194,8 @@ export default function ProductSearch() {
           Showing the top 25 matches. Add another word to narrow it down.
         </div>
       )}
+
+      {showImport && <ProductImportModal onClose={() => setShowImport(false)} onDone={() => { if (searched) runSearch(searched); }} />}
     </>
   );
 }
@@ -187,7 +207,67 @@ function Empty({ children }: { children: ReactNode }) {
 const shortDate = (d: string | null) =>
   d ? new Date(d).toLocaleDateString('en-AU', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
 
-function ProductDetail({ product: p }: { product: Product }) {
+type Patch = { lifecycle?: string | null; imageUrl?: string | null; eta?: Eta; etaManual?: string | null };
+
+// Set this product's status and photo link by hand. Managers only.
+function ProductEdit({ product: p, onSaved }: { product: Product; onSaved: (sku: string, patch: Patch) => void }) {
+  const [status, setStatus] = useState(p.lifecycle ?? '');
+  const [image, setImage] = useState(p.imageUrl ?? '');
+  const [eta, setEta] = useState(p.etaManual ?? '');
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const statusChanged = status !== (p.lifecycle ?? '');
+  const imageChanged = image.trim() !== (p.imageUrl ?? '');
+  const etaChanged = eta !== (p.etaManual ?? '');
+
+  async function save() {
+    setSaving(true); setMsg(null);
+    try {
+      const body: Record<string, unknown> = {};
+      if (statusChanged) body.lifecycle = status || null;
+      if (imageChanged) body.imageUrl = image.trim() || null;
+      if (etaChanged) body.eta = eta || null;
+      const r = await apiPatch(`/products/${encodeURIComponent(p.sku)}`, body);
+      onSaved(p.sku, { lifecycle: r.lifecycle, imageUrl: r.imageUrl, eta: r.eta, etaManual: r.etaManual });
+      setMsg({ text: 'Saved', ok: true });
+    } catch (e) {
+      setMsg({ text: (e as Error).message, ok: false });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="pd-box" style={{ marginBottom: 12 }}>
+      <div className="pd-box-title">Status, ETA and photo</div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <label className="modal-field" style={{ minWidth: 150 }}>
+          Status
+          <select value={status} onChange={e => setStatus(e.target.value)}>
+            <option value="">None</option>
+            {PRODUCT_STATUSES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+          </select>
+        </label>
+        <label className="modal-field" style={{ minWidth: 150 }}>
+          ETA (next delivery)
+          <input type="date" value={eta} onChange={e => setEta(e.target.value)} />
+        </label>
+        <label className="modal-field" style={{ flex: 1, minWidth: 260 }}>
+          Photo link
+          <input value={image} onChange={e => setImage(e.target.value)} placeholder="https://www.dropbox.com/..." />
+        </label>
+        <button type="button" className="btn" disabled={saving || (!statusChanged && !imageChanged && !etaChanged)} onClick={save}>{saving ? 'Saving…' : 'Save'}</button>
+      </div>
+      <div className="acct-region" style={{ marginTop: 6 }}>
+        {p.eta ? <>Reps see: <EtaText eta={p.eta} /> . </> : 'No ETA to show yet. '}
+        Leave the ETA empty to use the date on the incoming order in DEAR.
+      </div>
+      {msg && <div className={'save-msg ' + (msg.ok ? 'ok' : 'err')} style={{ marginTop: 8 }}>{msg.text}</div>}
+    </div>
+  );
+}
+
+function ProductDetail({ product: p, canEdit, onSaved }: { product: Product; canEdit?: boolean; onSaved?: (sku: string, patch: Patch) => void }) {
   const unit = p.uom ? ` ${p.uom}` : '';
   const otherPrices = Object.entries(p.prices).filter(
     ([tier]) => tier !== p.wholesale?.tier && tier !== p.retail?.tier,
@@ -201,6 +281,8 @@ function ProductDetail({ product: p }: { product: Product }) {
           <ProductPhoto url={p.imageUrl} name={p.name} sku={p.sku} size={150} />
         </div>
       )}
+
+      {canEdit && onSaved && <ProductEdit key={p.sku} product={p} onSaved={onSaved} />}
 
       {/* ---- Stock tiles ---- */}
       <div className="pd-tiles">
@@ -219,6 +301,7 @@ function ProductDetail({ product: p }: { product: Product }) {
         <div className="pd-tile">
           <div className="pd-tile-label">On order</div>
           <div className="pd-tile-value num">{qty(p.onOrder)}{unit}</div>
+          <EtaText eta={p.eta} block />
           {p.incomingRefs.length > 0 && (
             <>
               <div className="pd-tile-sub">PO ref</div>

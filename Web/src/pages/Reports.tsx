@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { apiGet, apiDownload } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
+import { SavedReport, downloadUrl, fileName } from '../lib/reportDefinition';
 
 type Rep = { id: string; name: string };
 
@@ -19,6 +21,7 @@ const REPORTS: { key: string; label: string; blurb: string; group: string }[] = 
   { key: 'conversion', label: 'Conversion report', blurb: 'Abandoned carts, new prospects, new leads and inactive stockists, each followed to an order and a sales quote. Every customer listed.', group: 'Account & team' },
   { key: 'marketing', label: 'Marketing report', blurb: 'Emails sent, opened and clicked, each campaign, the automatic emails, and the orders that followed an email click. Managers only.', group: 'Account & team' },
   { key: 'credit-movements', label: 'Credit report', blurb: 'Every credit note on account and every credit movement: issued, applied, refunded, reserved, used.', group: 'Account & team' },
+  { key: 'eol', label: 'EOL sell-through report', blurb: 'Sales since the start date and stock left for the clearance brands, one sheet each: summary by brand and customer, sales by SKU, purchases, staff purchases, remaining stock. Managers only.', group: 'Products & stock' },
 ];
 
 const ALL_STATES = ['NSW', 'ACT', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'NT', 'NZ'];
@@ -34,6 +37,17 @@ export default function Reports() {
   const [downloading, setDownloading] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [searching, setSearching] = useState(false);
+  const [custom, setCustom] = useState<SavedReport[]>([]);
+  const [customBusy, setCustomBusy] = useState<string | null>(null);
+
+  useEffect(() => { apiGet('/custom-reports').then(setCustom).catch(() => {}); }, []);
+
+  async function downloadCustom(r: SavedReport) {
+    setCustomBusy(r.id);
+    try { await apiDownload(downloadUrl(r.definition, r.name), fileName(r.name)); }
+    catch (e) { alert((e as Error).message); }
+    finally { setCustomBusy(null); }
+  }
 
   useEffect(() => {
     if (isManager) apiGet('/reports/reps').then(setReps).catch(() => {});
@@ -105,6 +119,34 @@ export default function Reports() {
       </div>
 
       <div className="section">
+        <div className="panel-title" style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <span>Custom reports</span>
+          <Link to="/reports/builder" className="btn" style={{ marginLeft: 'auto', padding: '5px 12px', fontSize: 12, textDecoration: 'none' }}>+ Build a report</Link>
+        </div>
+        {custom.length === 0 ? (
+          <div style={{ fontSize: 12.5, color: 'var(--muted)', maxWidth: 620 }}>
+            Make your own report: pick what it is about (order lines, products and stock, or customers), the columns and filters, and download it as Excel. Save it to run again.
+          </div>
+        ) : (
+          <div className="manifest">
+            {custom.map(r => (
+              <div className="m-row" key={r.id} style={{ gridTemplateColumns: '1.4fr 2fr 0.9fr', cursor: 'default' }}>
+                <div className="acct-name">{r.name} {r.shared && <span className="pill neutral">Shared</span>}</div>
+                <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>
+                  {r.definition.dataset === 'sales' ? 'Order lines' : r.definition.dataset === 'products' ? 'Products and stock' : 'Customers and accounts'}
+                  {!r.mine && r.ownerName ? `, by ${r.ownerName}` : ''}
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button className="btn secondary" style={{ padding: '5px 12px', fontSize: 12 }} disabled={customBusy === r.id} onClick={() => downloadCustom(r)}>{customBusy === r.id ? '…' : '⬇ Excel'}</button>
+                  <Link to={`/reports/builder?id=${r.id}`} className="btn secondary" style={{ padding: '5px 12px', fontSize: 12, textDecoration: 'none' }}>{r.mine ? 'Edit' : 'Open'}</Link>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="section">
         <div className="panel-title">Search by brand or product</div>
         <div style={{ fontSize: 12.5, color: 'var(--muted)', marginBottom: 12, maxWidth: 560 }}>
           Type a brand or product keyword — e.g. "Meri Meri" or "Miffy" — to get every customer who's
@@ -129,7 +171,7 @@ export default function Reports() {
         <div className="section" key={group}>
           <div className="panel-title">{group}</div>
           <div className="manifest">
-            {REPORTS.filter(r => r.group === group && (isManager || r.key !== 'marketing')).map(r => (
+            {REPORTS.filter(r => r.group === group && (isManager || !['marketing', 'eol'].includes(r.key))).map(r => (
               <div className="m-row" key={r.key} style={{ gridTemplateColumns: '1.4fr 2fr 0.8fr', cursor: 'default' }}>
                 <div className="acct-name">{r.label}</div>
                 <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>{r.blurb}</div>

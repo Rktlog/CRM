@@ -21,7 +21,8 @@ import { marketingRouter } from './routes/marketing';
 import { marketingPublicRouter } from './routes/marketingPublic';
 import { gmailRouter, gmailCallbackRouter, gmailCronRouter } from './routes/gmail';
 import { calendarRouter, calendarCronRouter, calendarCallbackRouter } from './routes/calendar';
- 
+ import { customReportsRouter } from './routes/customReports';
+
 const app = express();
 // Restricts which origins can call this API — wide-open cors() would
 // let any website make authenticated requests using a stolen/leaked
@@ -45,6 +46,7 @@ app.use('/rep-regions', requireAuth, repRegionsRouter);
 app.use('/exports', requireAuth, exportsRouter);
 app.use('/misc-orders', requireAuth, miscRouter);
 app.use('/products', requireAuth, productsRouter);
+app.use('/custom-reports', requireAuth, customReportsRouter);
 app.use('/orders', requireAuth, ordersRouter);
 app.use('/abandoned-carts', requireAuth, abandonedCartsRouter);
 app.use('/credit', requireAuth, creditRouter);

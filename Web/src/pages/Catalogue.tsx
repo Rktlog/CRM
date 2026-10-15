@@ -2,16 +2,19 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet } from '../lib/api';
 import ProductPhoto from '../components/ProductPhoto';
+import ProductStatusPill from '../components/ProductStatusPill';
+import EtaText, { Eta } from '../components/EtaText';
 
 // Catalogue: product photos by brand, with stock and price. Built for scrolling on a
 // phone during a visit. Tap a photo to see it large; tap the SKU for the full stock
 // detail on the Products page. Photos come from the team's Google Sheet.
 
 type Item = {
-  sku: string; name: string; brand: string | null; category: string | null; uom: string | null; imageUrl: string | null;
+  sku: string; name: string; brand: string | null; category: string | null; uom: string | null; imageUrl: string | null; lifecycle?: string | null; eta?: Eta;
   available: number; onHand: number; onOrder: number; wholesale: number | null; retail: number | null;
 };
 type Facet = { name: string; count: number };
+type StatusFacet = { key: string; label: string; count: number };
 const PAGE = 48;
 const money = (n: number) => '$' + n.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const qty = (n: number) => n.toLocaleString('en-AU', { maximumFractionDigits: 2 });
@@ -22,6 +25,9 @@ export default function Catalogue() {
   const [category, setCategory] = useState('');
   const [inStock, setInStock] = useState(false);
   const [withPhoto, setWithPhoto] = useState(true);
+  const [status, setStatus] = useState<Set<string>>(new Set());   // none ticked = every status
+  const [statuses, setStatuses] = useState<StatusFacet[]>([]);
+  const toggleStatus = (k: string) => setStatus(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
 
   const [items, setItems] = useState<Item[]>([]);
   const [total, setTotal] = useState(0);
@@ -38,6 +44,7 @@ export default function Catalogue() {
     if (category) p.set('category', category);
     if (inStock) p.set('inStock', '1');
     if (withPhoto) p.set('withPhoto', '1');
+    if (status.size) p.set('status', [...status].join(','));
     return p.toString();
   }
 
@@ -52,6 +59,7 @@ export default function Catalogue() {
       setTotal(d.total);
       setBrands(d.brands);
       setCategories(d.categories);
+      setStatuses(d.statuses ?? []);
     } catch (e: any) {
       if (id === latest.current) setError(e.message);
     } finally {
@@ -63,7 +71,7 @@ export default function Catalogue() {
   useEffect(() => {
     const t = setTimeout(() => load(0, false), search ? 300 : 0);
     return () => clearTimeout(t);
-  }, [search, brand, category, inStock, withPhoto]);
+  }, [search, brand, category, inStock, withPhoto, status]);
 
   const control: React.CSSProperties = { padding: '7px 10px', border: '1px solid var(--line)', borderRadius: 6, font: 'inherit', fontSize: 13, background: 'var(--panel)' };
 
@@ -84,6 +92,22 @@ export default function Catalogue() {
           <option value="">All categories</option>
           {categories.map(c => <option key={c.name} value={c.name}>{c.name} ({c.count})</option>)}
         </select>
+        {statuses.some(s => s.count > 0) && (
+          <details className="terms-filter">
+            <summary>{status.size === 0 ? 'All statuses' : status.size === 1 ? statuses.find(s => status.has(s.key))?.label ?? '1 status' : `${status.size} statuses`}</summary>
+            <div className="terms-menu">
+              <div className="terms-menu-tools">
+                <button type="button" className="link-btn" onClick={() => setStatus(new Set())}>All statuses</button>
+              </div>
+              {statuses.map(s => (
+                <label key={s.key} className="pl-check">
+                  <input type="checkbox" checked={status.has(s.key)} onChange={() => toggleStatus(s.key)} />
+                  <span>{s.label} ({s.count.toLocaleString('en-AU')})</span>
+                </label>
+              ))}
+            </div>
+          </details>
+        )}
         <label className="acct-region" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <input type="checkbox" checked={withPhoto} onChange={e => setWithPhoto(e.target.checked)} /> With photo only
         </label>
@@ -137,10 +161,12 @@ function Fragment({ item: it, showBrand }: { item: Item; showBrand: boolean }) {
         <div>
           <Link to={`/products?q=${encodeURIComponent(it.sku)}`} className="order-link" style={{ fontSize: 11.5 }}>{it.sku}</Link>
           {it.category && <div className="acct-region">{it.category}</div>}
+          {it.lifecycle && <div style={{ marginTop: 3 }}><ProductStatusPill status={it.lifecycle} /></div>}
         </div>
         <div>
           <span className={`pill ${tone} num`}>{qty(it.available)} available</span>
-          {it.available <= 0 && it.onOrder > 0 && <div className="acct-region" style={{ marginTop: 3 }}>{qty(it.onOrder)} on order</div>}
+          {it.onOrder > 0 && it.available <= 0 && <div className="acct-region" style={{ marginTop: 3 }}>{qty(it.onOrder)} on order</div>}
+          {it.eta && (it.available <= 0 || it.onOrder > 0) && <div style={{ marginTop: 2 }}><EtaText eta={it.eta} /></div>}
         </div>
         {(it.wholesale != null || it.retail != null) && (
           <div className="acct-region" style={{ lineHeight: 1.5 }}>
