@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma';
 import { isHistory } from '../lib/orderSource';
 import { searchWords } from './products';
 import * as XLSX from 'xlsx';
-import { openQuotes, toShip, unpaidInvoices, balances, AGE_BUCKETS } from '../lib/receivables';
+import { openQuotes, toShip, unpaidInvoices, balances, AGE_BUCKETS, followUpState, melDay } from '../lib/receivables';
 import { orderNoteSummary } from '../lib/orderNotes';
 
 
@@ -183,6 +183,55 @@ ordersRouter.patch('/:id/follow-up', async (req, res) => {
   }
   await prisma.$executeRaw`update crm.quotes set follow_up_at = ${date}::date where id = ${req.params.id}::uuid`;
   res.json({ ok: true, date });
+});
+
+async function followUpOrder(req: any, res: any) {
+  if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) { res.status(400).json({ error: 'Bad order' }); return null; }
+  const [o] = await prisma.$queryRaw<any[]>`
+    select q.id, q.sent_at as "sentAt", a.id as "accountId", a.region, a.rep_id as "repId"
+    from crm.quotes q join crm.accounts a on a.id = q.account_id where q.id = ${req.params.id}::uuid`;
+  if (!o) { res.status(404).json({ error: 'Order not found' }); return null; }
+  if (!(await canSeeAccount(req.rep!, { id: o.accountId, repId: o.repId, region: o.region } as any))) {
+    res.status(403).json({ error: 'This order is outside your states' }); return null;
+  }
+  return o;
+}
+async function followUpNow(o: { id: string; sentAt: Date }) {
+  const [f] = await prisma.$queryRaw<any[]>`
+    select follow_up_at::text as "manualOn", fu1_done_on::text as "fu1DoneOn", fu2_done_on::text as "fu2DoneOn"
+    from crm.quotes where id = ${o.id}::uuid`;
+  return followUpState(melDay(o.sentAt), f);
+}
+
+ordersRouter.patch('/:id/follow-up', async (req, res) => {
+  const date = req.body?.date;
+  const valid = date === null || (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(Date.parse(date)));
+  if (!valid) return res.status(400).json({ error: 'Use a date like 2026-10-20, or null to clear it' });
+  const o = await followUpOrder(req, res); if (!o) return;
+  await prisma.$executeRaw`update crm.quotes set follow_up_at = ${date}::date where id = ${o.id}::uuid`;
+  res.json({ followUp: await followUpNow(o) });
+});
+
+ordersRouter.post('/:id/follow-up/done', async (req, res) => {
+  const o = await followUpOrder(req, res); if (!o) return;
+  const today = melDay();
+  await prisma.$executeRaw`
+    update crm.quotes set
+      follow_up_at = null,
+      fu1_done_on = case when follow_up_at is null and fu1_done_on is null then ${today}::date else fu1_done_on end,
+      fu2_done_on = case when follow_up_at is null and fu1_done_on is not null and fu2_done_on is null then ${today}::date else fu2_done_on end
+    where id = ${o.id}::uuid`;
+  res.json({ followUp: await followUpNow(o) });
+});
+
+ordersRouter.post('/:id/follow-up/undo', async (req, res) => {
+  const o = await followUpOrder(req, res); if (!o) return;
+  await prisma.$executeRaw`
+    update crm.quotes set
+      fu2_done_on = null,
+      fu1_done_on = case when fu2_done_on is null then null else fu1_done_on end
+    where id = ${o.id}::uuid`;
+  res.json({ followUp: await followUpNow(o) });
 });
 
 ordersRouter.get('/views/:view', async (req, res) => {

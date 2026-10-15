@@ -31,6 +31,25 @@ async function scope(rep: Rep, regions?: string[]) {
 const LIVE = { source: { not: 'rhino-history' }, NOT: { number: { startsWith: 'Q' } } };
 
 // ---------- Open quotes: not yet confirmed, oldest first ----------
+export const melDay = (d: Date | string = new Date()) =>
+  new Date(d).toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' });
+const plusDays = (day: string, n: number) => new Date(Date.parse(day) + n * DAY).toISOString().slice(0, 10);
+
+export type FollowUp = {
+  fu1Due: string; fu1DoneOn: string | null; fu2Due: string | null; fu2DoneOn: string | null; manualOn: string | null;
+  next: { kind: 'fu1' | 'fu2' | 'manual'; date: string } | null;
+};
+export function followUpState(orderDay: string, f: { manualOn: string | null; fu1DoneOn: string | null; fu2DoneOn: string | null }): FollowUp {
+  const fu1Due = plusDays(orderDay, 7);
+  const fu2Due = f.fu1DoneOn ? plusDays(f.fu1DoneOn, 14) : null;
+  const next: FollowUp['next'] =
+    f.manualOn ? { kind: 'manual', date: f.manualOn }
+    : !f.fu1DoneOn ? { kind: 'fu1', date: fu1Due }
+    : !f.fu2DoneOn && fu2Due ? { kind: 'fu2', date: fu2Due }
+    : null;
+  return { fu1Due, fu1DoneOn: f.fu1DoneOn, fu2Due, fu2DoneOn: f.fu2DoneOn, manualOn: f.manualOn, next };
+}
+
 export async function openQuotes(rep: Rep, regions?: string[]) {
   const accounts = await scope(rep, regions);
   const quotes = await prisma.quote.findMany({
@@ -38,14 +57,15 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
     orderBy: { sentAt: 'asc' },
   });
   const ids = quotes.map(q => q.id);
-  const [followRows, notes] = await Promise.all([
+  const [fuRows, notes] = await Promise.all([
     ids.length
-      ? prisma.$queryRaw<{ id: string; follow_up_at: Date }[]>`
-          select id, follow_up_at from crm.quotes where id = any(${ids}::uuid[]) and follow_up_at is not null`
-      : Promise.resolve([] as { id: string; follow_up_at: Date }[]),
+      ? prisma.$queryRaw<{ id: string; follow_up_at: Date | null; fu1_done_on: Date | null; fu2_done_on: Date | null }[]>`
+          select id, follow_up_at, fu1_done_on, fu2_done_on from crm.quotes where id = any(${ids}::uuid[])`
+      : Promise.resolve([] as { id: string; follow_up_at: Date | null; fu1_done_on: Date | null; fu2_done_on: Date | null }[]),
     orderNoteSummary(ids),
   ]);
-  const followUp = new Map(followRows.map(r => [r.id, new Date(r.follow_up_at).toISOString().slice(0, 10)]));
+  const day = (d: Date | null) => (d ? new Date(d).toISOString().slice(0, 10) : null);
+  const fuById = new Map(fuRows.map(r => [r.id, { manualOn: day(r.follow_up_at), fu1DoneOn: day(r.fu1_done_on), fu2DoneOn: day(r.fu2_done_on) }]));
 
   const rows = quotes.map(q => {
     const total = cents(q.total ?? q.amount);
@@ -59,10 +79,9 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
       date: q.sentAt, ageDays: daysSince(q.sentAt),
       stage: q.fulfillmentStatus === 'ORDERING' ? 'Draft order' : 'Quote',
       reference: q.reference,
-      amount: total,                                   // total, inc GST
-      deposit,                                         // deposit / prepaid so far
-      remaining: cents(Math.max(total - deposit, 0)),  // still to pay
-      followUpAt: followUp.get(q.id) ?? null,
+      amount: total, deposit,
+      remaining: cents(Math.max(total - deposit, 0)),
+      followUp: followUpState(melDay(q.sentAt), fuById.get(q.id) ?? { manualOn: null, fu1DoneOn: null, fu2DoneOn: null }),
       noteCount: n?.noteCount ?? 0,
       lastNote: n?.lastNote ?? null,
     };
