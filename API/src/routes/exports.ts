@@ -6,7 +6,7 @@ import { LIVE_ORDER, isHistory, isOwing } from '../lib/orderSource';
 import { wholesalePrice, retailPrice } from '../lib/pricing';
 import { buildPriceList, priceListWorkbook, PriceListAvailability, PriceListStatus } from '../lib/priceList';
 import { computeConversion, parsePeriod, regionsOf } from './conversion';
-import { buildEolReport, allocateInvoices, EOL_BRANDS, DEFAULT_START, DEFAULT_CHECKPOINTS, EolOrder, Sheet as EolSheet } from '../lib/eolReport';
+import { buildEolReport, makeSnapshot, allocateInvoices, EOL_BRANDS, DEFAULT_START, DEFAULT_CHECKPOINTS, EolOrder, Snapshot, Sheet as EolSheet } from '../lib/eolReport';
 import { melDay } from '../lib/receivables';
 import { overview, campaignReport } from '../lib/marketing/overview';
 import { loadCreditNotes, loadMovements, loadReservations, loadHeld, regionsParam } from './credit';
@@ -771,9 +771,10 @@ exportsRouter.get('/:type', async (req, res) => {
         const isDay = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v));
         const from = isDay(req.query.from) ? req.query.from : DEFAULT_START;
         const today = melDay();
+        // The old fortnightly dates (sales only) belong to the 22 May campaign. Saved days are added by themselves.
         const checkpoints = typeof req.query.checkpoints === 'string' && req.query.checkpoints
           ? req.query.checkpoints.split(',').map(x => x.trim()).filter(isDay)
-          : [...DEFAULT_CHECKPOINTS, today];
+          : from === DEFAULT_START ? DEFAULT_CHECKPOINTS : [];
 
         // Live orders placed since the day before the start, or invoiced since it (an older order can ship later).
         const ids = (await prisma.$queryRaw<{ id: string }[]>`
@@ -816,7 +817,28 @@ exportsRouter.get('/:type', async (req, res) => {
           rrp: retailPrice(p.prices as any), wholesale: wholesalePrice(p.prices as any),
         }));
 
-        const sheets = buildEolReport({ lines: orders.flatMap(allocateInvoices), stock, from, checkpoints, asOf: today });
+        // Each download saves that day's figures (a second download the same day replaces it) and shows every saved
+        // day side by side. ?save=0 downloads without saving. A problem with the history never blocks the download:
+        // it is written on the Notes sheet instead.
+        const input = { lines: orders.flatMap(allocateInvoices), stock, from };
+        const key = `eol:${from}`;
+        const warnings: string[] = [];
+        let snapshots: Snapshot[] = [];
+        try {
+          const rows = await prisma.$queryRaw<{ day: string; data: any }[]>`
+            select taken_on::text as day, data from crm.eol_snapshots where report_key = ${key} order by taken_on`;
+          snapshots = rows.map(r => ({ ...(r.data as Omit<Snapshot, 'date'>), date: r.day }));
+        } catch (e) { console.error('eol history load failed', e); warnings.push(`Earlier days could not be loaded: ${(e as Error).message}`); }
+        if (req.query.save !== '0') {
+          try {
+            const { date: _day, ...data } = makeSnapshot({ ...input, asOf: today });
+            await prisma.$executeRaw`
+              insert into crm.eol_snapshots (report_key, taken_on, taken_by, data)
+              values (${key}, ${today}::date, ${req.rep!.id}::uuid, ${JSON.stringify(data)}::jsonb)
+              on conflict (report_key, taken_on) do update set data = excluded.data, taken_by = excluded.taken_by, taken_at = now()`;
+          } catch (e) { console.error('eol snapshot save failed', e); warnings.push(`Today's figures could not be saved: ${(e as Error).message}`); }
+        }
+        const sheets = buildEolReport({ ...input, checkpoints, asOf: today, snapshots, warnings });
         return sendSheets(res, `eol-report-${from}.xlsx`, sheets);
       }
 
