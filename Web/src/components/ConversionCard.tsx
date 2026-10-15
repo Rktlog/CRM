@@ -4,19 +4,20 @@ import { apiGet, apiDownload } from '../lib/api';
 import { Period, DEFAULT_PERIOD, encodePeriod, periodLabel, conversionQuery } from '../lib/period';
 import ConversionFilters from './ConversionFilters';
 
-// Dashboard: how much activity turns into business. Four starting points, each followed to an
+// Dashboard: how much activity turns into business. Five starting points, each followed to an
 // Order and a Sales Quote, over a period (last N days, a month, a fiscal quarter) and for some
 // or all states. Click a box or a number to open the customers behind it.
 
 type Funnel = { key: string; title: string; description: string; started: number; orders: number; quotes: number };
 const COLOURS: Record<string, string> = {
-  abandoned_cart: 'var(--amber)', prospect: 'var(--teal)', new_lead: '#445064', inactive_stockist: 'var(--rust)',
+  abandoned_cart: 'var(--amber)', prospect: 'var(--teal)', new_lead: '#445064', inactive_p1: '#8a7a5c', inactive_p2: 'var(--rust)',
 };
 const HOW: Record<string, string> = {
   abandoned_cart: 'Carts left in the portal in this period. Counted when that customer places an order or raises a sales quote after the cart.',
-  prospect: 'New customer records set up in DEAR in this period that had never ordered before. Counted when they order or get a sales quote after being set up.',
-  new_lead: 'Set up in DEAR before this period, worked by the team, and never ordered before it. Counted when they order or get a sales quote in the period.',
-  inactive_stockist: 'Ordered before, but not in the 12 months before this period. Counted when they order or get a sales quote in the period.',
+  prospect: 'Prospects set up in DEAR in this period that had never ordered before. Counted when they place an order, or have a sales quote still open, after being set up.',
+  new_lead: 'Set up in DEAR before this period, worked by the team, and never ordered. Counted when they place an order, or have a sales quote still open, in the period.',
+  inactive_p1: 'Set up in DEAR before this period and never ordered (includes the New Leads). Counted when they place an order, or have a sales quote still open, in the period.',
+  inactive_p2: 'Ordered before, but not in the 12 months before this period. Counted when they place an order, or have a sales quote still open, in the period.',
 };
 const pct = (n: number, d: number) => (d ? `${Math.round((n / d) * 1000) / 10}%` : '0%');
 
@@ -82,7 +83,7 @@ export default function ConversionCard() {
       )}
       <div className="acct-region" style={{ marginTop: 8 }}>
         {periodLabel(period)}{region ? `, ${region.split(',').length} ${region.split(',').length === 1 ? 'state' : 'states'}` : ''}. Counts what happened inside that period.
-        Order is a confirmed order. Sales Quote is a quote that was raised, open or turned into an order. Click a number to open the customers behind it.
+        Order is a finalised order. Sales Quote is a quote still open, where the order has not been finalised yet. Click a number to open the customers behind it.
       </div>
     </div>
   );

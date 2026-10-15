@@ -3,14 +3,17 @@ import { prisma } from '../lib/prisma';
 import { territoryWhere } from '../lib/territory';
 import { loadCarts } from './Abandonedcarts';
 
-// Conversion: how much of the team's activity turns into business.
-// Four starting points, each followed to an Order and to a Sales Quote:
-//   Abandoned cart   a B2B portal cart left behind
-//   Prospect         a new customer record set up in DEAR in the period
-//   New lead         set up in DEAR earlier, worked by the team, no order yet
-//   Inactive stockist  has ordered before, but not in the 12 months before the period
-// "Order" = a confirmed order (not a draft or quote, voided or fully credited).
-// "Sales Quote" = a sales quote was raised (open, or since turned into an order).
+// Conversion: how much of the team's activity turns into business, in the Master Sales
+// Terminology (Prospect, New Lead, Inactive Stockist P1 and P2). Five starting points, each
+// followed to an Order and to a Sales Quote:
+//   Abandoned cart        a B2B portal cart left behind
+//   Prospect              a Prospect set up in DEAR in the period (now a New Lead)
+//   New Lead              set up in DEAR earlier, worked by the team, never ordered
+//   Inactive Stockist P1  set up in DEAR earlier, never ordered (includes the New Leads)
+//   Inactive Stockist P2  has ordered before, but not in the 12 months before the period
+// "Order" = a finalised order (not a draft or quote, voided or fully credited). Shows the order no.
+// "Sales Quote" = a sales quote that is still open: the order has NOT been finalised yet.
+//   A quote that has become an order shows under Order only, never under Sales Quote.
 // Only things dated on or after the starting point count, and up to the end of the chosen
 // period (a day count ending now, a calendar month, or a fiscal quarter). DEAR's SQ number is
 // the same record from quote to order, so every order was first a sales quote.
@@ -21,18 +24,22 @@ import { loadCarts } from './Abandonedcarts';
 export const conversionRouter = Router();
 
 const NOT_AN_ORDER = ['DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING', 'VOIDED', 'CREDITED'];
-const NO_QUOTE = ['DRAFT', 'VOIDED', 'CREDITED'];
+// Quote stages that are still open: issued, but the order is not finalised. (A DRAFT has not
+// been issued yet, so it is not a Sales Quote here.)
+const OPEN_QUOTE = ['ESTIMATING', 'ESTIMATED', 'ORDERING'];
 const DAY = 86400000;
 
 export const FUNNELS = [
   { key: 'abandoned_cart', title: 'Abandoned Cart → Order → Sales Quote',
     description: 'Track the conversions of activity to securing business' },
-  { key: 'prospect', title: 'Prospect added to DEAR → Order → Sales Quote',
-    description: 'Identified potential customer — enquiry, referral or outbound opportunity. Not yet set up in DEAR; no order placed.' },
+  { key: 'prospect', title: 'Prospect set up in DEAR → Order → Sales Quote',
+    description: 'A Prospect set up in DEAR during the period (now a New Lead), with no order before that.' },
   { key: 'new_lead', title: 'New Lead → Order → Sales Quote',
-    description: 'Engaged prospect, set up in DEAR, being actively worked toward a first order.' },
-  { key: 'inactive_stockist', title: 'Inactive Stockist → Order → Sales Quote',
-    description: 'Has ordered before but not within the past 12 months.' },
+    description: 'Set up in DEAR before the period, being worked toward a first order, and never ordered.' },
+  { key: 'inactive_p1', title: 'Inactive Stockist P1 (Never Ordered) → Order → Sales Quote',
+    description: 'Set up in DEAR before the period and never ordered. Includes the New Leads.' },
+  { key: 'inactive_p2', title: 'Inactive Stockist P2 (Inactive 12+ Months) → Order → Sales Quote',
+    description: 'Has ordered before, but not within the 12 months before the period.' },
 ] as const;
 
 export type ConvAccount = { id: string; name: string; region: string; repName: string | null; inDear: boolean; createdAt: Date; hasActivity: boolean };
@@ -45,7 +52,7 @@ export type ConvRow = {
 export type Funnel = { key: string; title: string; description: string; started: number; orders: number; quotes: number; rows: ConvRow[] };
 
 const isOrder = (q: ConvQuote) => q.history || !NOT_AN_ORDER.includes(q.status.toUpperCase());
-const isQuote = (q: ConvQuote) => !q.history && !NO_QUOTE.includes(q.status.toUpperCase());
+const isOpenQuote = (q: ConvQuote) => !q.history && OPEN_QUOTE.includes(q.status.toUpperCase());
 
 // The pure calculation, kept apart from the database so it can be tested.
 export function buildFunnels(input: { accounts: ConvAccount[]; quotes: ConvQuote[]; carts: ConvCart[]; from: Date; to: Date; regions?: string[] }): Funnel[] {
@@ -65,7 +72,7 @@ export function buildFunnels(input: { accounts: ConvAccount[]; quotes: ConvQuote
 
   const row = (who: string, state: string, rep: string | null, started: Date, accountId: string | null, extra: Partial<ConvRow> = {}): ConvRow => {
     const o = firstFrom(accountId, started, isOrder);
-    const s = firstFrom(accountId, started, isQuote);
+    const s = firstFrom(accountId, started, isOpenQuote);
     return {
       who, state, rep, started, accountId,
       orderId: o?.id ?? null, orderNo: o?.number ?? null, orderDate: o?.sentAt ?? null,
@@ -74,7 +81,7 @@ export function buildFunnels(input: { accounts: ConvAccount[]; quotes: ConvQuote
   };
 
   const inactiveBefore = new Date(from.getTime() - 365 * DAY);
-  const rows: Record<string, ConvRow[]> = { abandoned_cart: [], prospect: [], new_lead: [], inactive_stockist: [] };
+  const rows: Record<string, ConvRow[]> = { abandoned_cart: [], prospect: [], new_lead: [], inactive_p1: [], inactive_p2: [] };
 
   for (const c of carts) {
     rows.abandoned_cart.push(row(c.accountName ?? c.contact ?? c.email, '', c.repName, c.abandonedAt, c.accountId, { email: c.email, cartValue: c.value }));
@@ -87,11 +94,13 @@ export function buildFunnels(input: { accounts: ConvAccount[]; quotes: ConvQuote
     const orderedBeforeSetup = mine(a.id).some(q => isOrder(q) && q.sentAt < a.createdAt);
     if (a.createdAt >= from && a.createdAt <= to) {
       if (!orderedBeforeSetup) rows.prospect.push(row(a.name, a.region, a.repName, a.createdAt, a.id));
-    } else if (a.createdAt < from && a.hasActivity && past.length === 0) {
-      rows.new_lead.push(row(a.name, a.region, a.repName, from, a.id));
+    } else if (a.createdAt < from && past.length === 0) {
+      // In DEAR before the period and never ordered: P1. The ones the team has worked are New Leads.
+      rows.inactive_p1.push(row(a.name, a.region, a.repName, from, a.id));
+      if (a.hasActivity) rows.new_lead.push(row(a.name, a.region, a.repName, from, a.id));
     }
     if (past.length > 0 && !past.some(q => q.sentAt >= inactiveBefore)) {
-      rows.inactive_stockist.push(row(a.name, a.region, a.repName, from, a.id));
+      rows.inactive_p2.push(row(a.name, a.region, a.repName, from, a.id));
     }
   }
   // States for the cart rows come from the customers list.
@@ -180,7 +189,8 @@ conversionRouter.get('/', async (req, res) => {
     const r = await computeConversion(req.rep!, { from, to, regions: regionsOf(req.query.region) });
     const base = { days, from: r.from, to: r.to };
     if (req.query.detail === '1') {
-      const f = r.funnels.find(x => x.key === req.query.funnel);
+      const key = req.query.funnel === 'inactive_stockist' ? 'inactive_p2' : req.query.funnel;   // old links
+      const f = r.funnels.find(x => x.key === key);
       if (!f) return res.status(400).json({ error: 'Unknown funnel' });
       return res.json({ ...base, funnel: f });
     }

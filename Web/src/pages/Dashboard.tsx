@@ -162,6 +162,7 @@ export default function Dashboard() {
       {dueFollowUps.length > 0 && (
         <div className="section" id="follow-ups">
           <div className="panel-title">Follow-ups due</div>
+          <div className="scroll-capped-10">
           <div className="manifest">
             <div className="m-row head" style={{ gridTemplateColumns: '2fr 1fr 1fr' }}>
               <div>Account</div><div>Due</div><div></div>
@@ -183,6 +184,7 @@ export default function Dashboard() {
                 </div>
               </div>
             ))}
+          </div>
           </div>
         </div>
       )}

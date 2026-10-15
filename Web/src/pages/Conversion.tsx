@@ -17,7 +17,7 @@ type Funnel = { key: string; title: string; description: string; started: number
 type Outcome = 'started' | 'order' | 'quote' | 'none';
 type SortKey = 'who' | 'state' | 'started';
 const COLS = '1.7fr 0.5fr 0.8fr 0.8fr 1.1fr 1.1fr';
-const SHORT: Record<string, string> = { abandoned_cart: 'Abandoned Cart', prospect: 'Prospect added to DEAR', new_lead: 'New Lead', inactive_stockist: 'Inactive Stockist' };
+const SHORT: Record<string, string> = { abandoned_cart: 'Abandoned Cart', prospect: 'Prospect set up in DEAR', new_lead: 'New Lead', inactive_p1: 'Inactive P1 (Never Ordered)', inactive_p2: 'Inactive P2 (12+ Months)' };
 const pct = (n: number, d: number) => (d ? `${Math.round((n / d) * 1000) / 10}%` : '0%');
 
 export default function Conversion() {
@@ -139,7 +139,7 @@ export default function Conversion() {
             <div className="sortable-head" onClick={() => toggleSort('state')}>State{arrow('state')}</div>
             <div>Rep</div>
             <div className="sortable-head" onClick={() => toggleSort('started')}>{isCart ? 'Cart left' : 'Started'}{arrow('started')}</div>
-            <div>Order</div><div>Sales Quote</div>
+            <div>Order</div><div title="A quote that is still open: the order has not been finalised yet">Sales Quote</div>
           </div>
           {shown.map((r, i) => (
             <div className="m-row" key={`${r.accountId ?? r.email}-${r.started}-${i}`} style={{ gridTemplateColumns: COLS, cursor: 'default' }}>
@@ -155,10 +155,10 @@ export default function Conversion() {
               <div>{r.rep ?? <span className="acct-region">—</span>}</div>
               <div>{fmtDate(r.started)}</div>
               <div>
-                {r.orderNo && r.orderId ? <><Link to={`/orders/${r.orderId}`} className="order-link">{r.orderNo}</Link><div className="acct-region">{r.orderDate ? fmtDate(r.orderDate) : ''}</div></> : <span className="acct-region">—</span>}
+                {r.orderNo && r.orderId ? <Link to={`/orders/${r.orderId}`} className="order-link">{r.orderNo}</Link> : <span className="acct-region">—</span>}
               </div>
               <div>
-                {r.quoteNo && r.quoteId ? <><Link to={`/orders/${r.quoteId}`} className="order-link">{r.quoteNo}</Link><div className="acct-region">{r.quoteDate ? fmtDate(r.quoteDate) : ''}</div></> : <span className="acct-region">—</span>}
+                {r.quoteNo && r.quoteId ? <Link to={`/orders/${r.quoteId}`} className="order-link">{r.quoteNo}</Link> : <span className="acct-region">—</span>}
               </div>
             </div>
           ))}
