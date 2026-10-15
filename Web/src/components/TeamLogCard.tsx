@@ -25,6 +25,7 @@ const PERIODS = [
 ];
 const TYPE_LABEL = { call: 'Phone', email: 'Email', visit: 'F2F visit' } as const;
 const REFRESH_MS = 60_000;
+const PREVIEW = 3; // entries shown until "Show all" is clicked
 
 function when(iso: string): string {
   const d = new Date(iso);
@@ -49,6 +50,7 @@ export default function TeamLogCard() {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [loadingMore, setLoadingMore] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const pagedRef = useRef(false); // stop auto-refresh replacing pages already loaded
 
   const query = (before?: string) => {
@@ -129,7 +131,7 @@ export default function TeamLogCard() {
 
       {rows && rows.length > 0 && (
         <div className="team-log-list">
-          {rows.map(r => {
+          {(showAll ? rows : rows.slice(0, PREVIEW)).map(r => {
             const long = r.note.length > 220 || r.note.split('\n').length > 3;
             const expanded = open.has(r.id);
             return (
@@ -165,11 +167,16 @@ export default function TeamLogCard() {
         </div>
       )}
 
-      {rows && hasMore && (
-        <button className="btn secondary" style={{ marginTop: 10 }} onClick={loadMore} disabled={loadingMore}>
-          {loadingMore ? 'Loading…' : 'Load more'}
-        </button>
-      )}
+      {rows && rows.length > PREVIEW && (
+  <button className="btn secondary" style={{ marginTop: 10, marginRight: 8 }} onClick={() => setShowAll(v => !v)}>
+    {showAll ? 'Show fewer' : `Show all ${rows.length}${hasMore ? '+' : ''}`}
+  </button>
+)}
+{rows && showAll && hasMore && (
+  <button className="btn secondary" style={{ marginTop: 10 }} onClick={loadMore} disabled={loadingMore}>
+    {loadingMore ? 'Loading…' : 'Load more'}
+  </button>
+)}
     </div>
   );
 }

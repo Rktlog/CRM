@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { Account, STAGE_LABELS, fmtMoney, fmtDate, daysBetween, flagFor } from '../lib/types';
+import { Account, STAGE_LABELS, fmtMoney, fmtDate, daysBetween } from '../lib/types';
 
 export type SortKey = 'name' | 'stage' | 'spend90' | 'lastOrder';
 
@@ -35,7 +35,6 @@ export default function AccountTable({ accounts, sortKey, sortDir, onSort }: Pro
         <div>Status</div>
       </div>
       {accounts.map(a => {
-        const flag = flagFor(a);
         return (
           <div className="m-row" key={a.id} onClick={() => navigate(`/accounts/${a.id}`)}>
             <div>
@@ -54,9 +53,10 @@ export default function AccountTable({ accounts, sortKey, sortDir, onSort }: Pro
             <div className="num">{fmtMoney(a.spend90)}</div>
             <div>{a.lastOrderAt ? `${fmtDate(a.lastOrderAt)} (${daysBetween(a.lastOrderAt)}d)` : '—'}</div>
             <div>
-              {flag === 'rust' && <span className="pill rust">Inactive</span>}
-              {!flag && a.type === 'prospect' && <span className="pill neutral">Prospect</span>}
-              {!flag && a.type === 'customer' && <span className="pill teal">Active</span>}
+              {a.status === 'Active' && <span className="pill teal">Active</span>}
+              {a.status === 'Inactive' && <span className="pill rust">Inactive</span>}
+              {a.status === 'New Lead' && <span className="pill amber">New Lead</span>}
+              {a.status === 'Prospect' && <span className="pill neutral">Prospect</span>}
             </div>
           </div>
         );

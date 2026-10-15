@@ -7,7 +7,7 @@ import AccountTable, { SortKey } from '../components/AccountTable';
 import NewLeadModal from '../components/NewLeadModal';
 import { useMe, stateOptionsFor, territoryLabel } from '../lib/useMe';
 
-type Tab = 'customer' | 'prospect' | 'all' | 'archived';
+type Tab = 'Active' | 'Inactive' | 'New Lead' | 'Prospect' | 'all' | 'archived';
 
 
 export default function Accounts() {
@@ -17,9 +17,9 @@ export default function Accounts() {
   const [showNewLead, setShowNewLead] = useState(false);
   const { session } = useAuth();
 
-  // Defaults to Customers — the smaller, actively-managed list —
-  // rather than dumping everything on screen at once.
-  const [tab, setTab] = useState<Tab>('customer');
+  // Defaults to Active stockists, rather than dumping everything on
+  // screen at once.
+  const [tab, setTab] = useState<Tab>('Active');
   const [search, setSearch] = useState('');
   const [stageFilter, setStageFilter] = useState<string>('all');
   const [regionFilter, setRegionFilter] = useState<string>('');
@@ -48,12 +48,10 @@ export default function Accounts() {
   }
 
   const counts = useMemo(() => {
-    if (!accounts) return { customer: 0, prospect: 0, all: 0, archived: 0 };
+    const n = (s: string) => accounts?.filter(a => a.status === s).length ?? 0;
     return {
-      customer: accounts.filter(a => a.type === 'customer').length,
-      prospect: accounts.filter(a => a.type === 'prospect').length,
-      all: accounts.length,
-      archived: archived?.length ?? 0,
+      Active: n('Active'), Inactive: n('Inactive'), 'New Lead': n('New Lead'), Prospect: n('Prospect'),
+      all: accounts?.length ?? 0, archived: archived?.length ?? 0,
     };
   }, [accounts, archived]);
 
@@ -63,7 +61,7 @@ export default function Accounts() {
     const q = search.trim().toLowerCase();
 
     let list = source.filter(a => {
-      if (tab !== 'all' && tab !== 'archived' && a.type !== tab) return false;
+      if (tab !== 'all' && tab !== 'archived' && a.status !== tab) return false;
       if (stageFilter !== 'all' && a.stage !== stageFilter) return false;
       if (!inStates(regionFilter, a.region)) return false;
       if (q) {
@@ -101,15 +99,11 @@ export default function Accounts() {
       </div>
 
       <div className="tab-bar">
-        <button className={'tab' + (tab === 'customer' ? ' active' : '')} onClick={() => setTab('customer')}>
-          Customers <span className="tab-count">{counts.customer}</span>
-        </button>
-        <button className={'tab' + (tab === 'prospect' ? ' active' : '')} onClick={() => setTab('prospect')}>
-          Prospects <span className="tab-count">{counts.prospect}</span>
-        </button>
-        <button className={'tab' + (tab === 'all' ? ' active' : '')} onClick={() => setTab('all')}>
-          All <span className="tab-count">{counts.all}</span>
-        </button>
+        {(['Active', 'Inactive', 'New Lead', 'Prospect', 'all'] as const).map(t => (
+          <button key={t} className={'tab' + (tab === t ? ' active' : '')} onClick={() => setTab(t)}>
+            {t === 'all' ? 'All' : t} <span className="tab-count">{counts[t]}</span>
+          </button>
+        ))}
         <button className={'tab' + (tab === 'archived' ? ' active' : '')} onClick={() => setTab('archived')} style={{ marginLeft: 'auto', opacity: 0.7 }}>
           Archived <span className="tab-count">{counts.archived}</span>
         </button>

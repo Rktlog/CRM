@@ -16,6 +16,15 @@ accountsRouter.param('id', (_req, res, next, id) => {
   next();
 });
 
+// Status from the crm.account_status view: Prospect, New Lead, Active or Inactive.
+async function statusFor(ids: string[]) {
+  if (!ids.length) return new Map<string, string>();
+  const rows = await prisma.$queryRaw<{ account_id: string; status: string }[]>`
+    select account_id, status from crm.account_status
+    where account_id = any(${ids}::uuid[])`;
+  return new Map(rows.map(r => [r.account_id, r.status]));
+}
+
 // Registered before '/:id' — otherwise Express would treat
 // "backorders" as an :id value and this route would never match.
 accountsRouter.get('/backorders', async (req, res) => {
@@ -74,7 +83,13 @@ accountsRouter.get('/', async (req, res) => {
   });
 
   // Flatten rep.name onto repName, matching the rest of the API's flat shape.
-  const flattened = accounts.map(({ rep, quotes, ...a }) => ({ ...a, repName: rep?.name ?? null, hasHistoricalOrders: quotes.length > 0 }));
+  const statuses = await statusFor(accounts.map(a => a.id));
+  const flattened = accounts.map(({ rep, quotes, ...a }) => ({
+    ...a,
+    repName: rep?.name ?? null,
+    hasHistoricalOrders: quotes.length > 0,
+    status: statuses.get(a.id) ?? 'Prospect',
+  }));
   res.json(flattened);
 });
 
@@ -242,6 +257,7 @@ accountsRouter.get('/:id', async (req, res) => {
     repName: rep?.name ?? null,
     activity: activity.map(({ rep: activityRep, quote, ...a }) => ({ ...a, repName: activityRep?.name ?? null, orderId: quote?.id ?? null, orderNumber: quote?.number ?? null })),
     productBreakdown,
+    status: (await statusFor([rest.id])).get(rest.id) ?? 'Prospect',
   };
 
   res.json(flattened);

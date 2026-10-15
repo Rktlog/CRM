@@ -34,14 +34,17 @@ export default function Dashboard() {
   if (error) return <div className="empty-state">Couldn't load accounts: {error}</div>;
   if (!accounts) return <div className="empty-state">Loading…</div>;
 
-  // Open deals: accounts someone is actually working, from first contact
-  // until payment clears. Untouched new leads are counted separately, and
-  // dispatched means the deal's done (the account is a customer now).
-  const approached = accounts.filter(a => a.stage === 'approached').length;
-  const quoteSent = accounts.filter(a => a.stage === 'quote_sent').length;
-  const paymentCleared = accounts.filter(a => a.stage === 'payment_cleared').length;
+  // New Lead: set up in DEAR, no order yet, being worked toward a first order
+  // (approached, quote sent, or awaiting dispatch). Status comes from the
+  // crm.account_status view, so old stages on accounts that have ordered
+  // are ignored.
+  const isLead = (a: Account) => a.status === 'New Lead';
+  const approached = accounts.filter(a => isLead(a) && a.stage === 'approached').length;
+  const quoteSent = accounts.filter(a => isLead(a) && a.stage === 'quote_sent').length;
+  const paymentCleared = accounts.filter(a => isLead(a) && a.stage === 'payment_cleared').length;
   const openDeals = approached + quoteSent + paymentCleared;
-  const newLeads = accounts.filter(a => a.stage === 'new_lead').length;
+  // Prospect: identified, not set up in DEAR yet.
+  const prospects = accounts.filter(a => a.status === 'Prospect').length;
 
   // Inactive: customers overdue against their own usual reorder gap.
   // Most overdue first, so the top of "Needs attention" is who to call.
@@ -64,22 +67,30 @@ export default function Dashboard() {
           <div
             className="stat flag-rust clickable"
             onClick={() => navigate('/inactive-stockists')}
-            title="Stores set up in DEAR that have never placed an order, or haven't ordered for 12 months or more. Click to see the list."
+            title="P1: set up in DEAR but never ordered. P2: ordered before, but not in the last 12 months. Click to see the list."
           >
-            <div className="stat-label">Inactive stockists</div>
-            <div className="stat-value num">{(stockists.never + stockists.lapsed).toLocaleString('en-AU')}</div>
-            <div className="stat-sub">{stockists.never.toLocaleString('en-AU')} never ordered, {stockists.lapsed.toLocaleString('en-AU')} not for 12+ months</div>
+            <div className="stat-label">Inactive stockist</div>
+            <div style={{ display: 'flex', gap: 28 }}>
+              <div>
+                <div className="stat-value num">{stockists.never.toLocaleString('en-AU')}</div>
+                <div className="stat-sub">P1 Never ordered</div>
+              </div>
+              <div>
+                <div className="stat-value num">{stockists.lapsed.toLocaleString('en-AU')}</div>
+                <div className="stat-sub">P2 Inactive 12+ months</div>
+              </div>
+            </div>
           </div>
         )}
         <div className="stat flag-teal clickable" onClick={() => navigate('/pipeline')} title="Open the Pipeline">
-          <div className="stat-label">New Business</div>
+          <div className="stat-label">New Lead</div>
           <div className="stat-value num">{openDeals}</div>
-          <div className="stat-sub">{approached} approached, {quoteSent} quote sent, {paymentCleared} awaiting dispatch</div>
+          <div className="stat-sub">working toward first order: {approached} approached, {quoteSent} quote sent, {paymentCleared} awaiting dispatch</div>
         </div>
         <div className="stat clickable" onClick={() => navigate('/pipeline')} title="Open the Pipeline">
-          <div className="stat-label">New leads</div>
-          <div className="stat-value num">{newLeads}</div>
-          <div className="stat-sub">not contacted yet</div>
+          <div className="stat-label">Prospect</div>
+          <div className="stat-value num">{prospects}</div>
+          <div className="stat-sub">not set up in DEAR yet</div>
         </div>
         <a className="stat flag-amber clickable" href="#follow-ups">
           <div className="stat-label">Follow-ups due</div>
