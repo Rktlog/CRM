@@ -22,6 +22,7 @@ import { marketingPublicRouter } from './routes/marketingPublic';
 import { gmailRouter, gmailCallbackRouter, gmailCronRouter } from './routes/gmail';
 import { calendarRouter, calendarCronRouter, calendarCallbackRouter } from './routes/calendar';
  import { customReportsRouter } from './routes/customReports';
+import { aiRouter } from './routes/ai';
 
 const app = express();
 // Restricts which origins can call this API — wide-open cors() would
@@ -57,6 +58,7 @@ app.use('/gmail-cron', gmailCronRouter);           // secret header, no login (e
 app.use('/gmail', requireAuth, gmailRouter);
 app.use('/calendar/callback', calendarCallbackRouter);   // Google sends the rep back here: no login
 app.use('/calendar-cron', calendarCronRouter)
+app.use('/ai', requireAuth, aiRouter);
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => console.log(`API listening on :${port}`));

@@ -15,6 +15,7 @@ const NAV = [
   { to: '/abandoned-carts', label: 'Abandoned carts' },
   { to: '/marketing', label: 'Marketing', managerOnly: true },
   { to: '/sales-data', label: 'Sales Data' },
+  { to: '/assistant', label: 'Assistant' },
   { to: '/reports', label: 'Reports' },
   { to: '/activity', label: 'Activity log' },
   { to: '/misc', label: 'Misc' },

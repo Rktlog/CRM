@@ -16,7 +16,6 @@ type Rep = { id: string; role: string };
 const DAY = 86400000;
 const QUOTE_STATUSES = ['DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING'];
 const CLOSED_STATUSES = ['VOIDED', 'CREDITED', 'COMPLETED'];
-const CONFIRMED = ['ORDERED', 'BACKORDERED'];   // confirmed in DEAR; can still be waiting on payment
 const cents = (n: number) => Math.round(n * 100) / 100;
 const daysSince = (d: Date) => Math.floor((Date.now() - d.getTime()) / DAY);
 
@@ -54,25 +53,63 @@ export function followUpState(orderDay: string, f: { manualOn: string | null; fu
   return { fu1Due, fu1DoneOn: f.fu1DoneOn, fu2Due, fu2DoneOn: f.fu2DoneOn, manualOn: f.manualOn, next };
 }
 
-// Amounts are what the customer pays (inc GST, DEAR's order total). Deposit is the prepayment
-// DEAR holds against the order; remaining is the total less that deposit.
+// ---------- Open quotes and unpaid orders ----------
+// Everything still waiting on the customer, oldest first:
+//   - every quote or draft order, paid or not, until it is confirmed in DEAR; and
+//   - every confirmed order (ordered, backordered, picking, shipped...) of a pay-first customer (no payment terms)
+//     until its money is in.
+// An order leaves only when it is BOTH paid and confirmed. Marketing and warranty orders never come in.
+// Amounts are what the customer pays (inc GST, DEAR's order total).
+const nice = (s: string | null) => (s ? s.charAt(0) + s.slice(1).toLowerCase() : '');
+
+// Paid = cash applied to invoices + any prepayment DEAR still holds against the order (what the Credit page calls
+// "held"). An order that is fully invoiced with nothing due is settled, even if part of it was a credit note.
+export function paymentState(q: { total: number | null; amount: number; amountPaid: number | null; unappliedCredit: number | null; amountDue: number | null; invoicedTotal: number | null; creditNotes: unknown }) {
+  const total = q.total ?? q.amount;
+  const onAccount = Array.isArray(q.creditNotes) ? (q.creditNotes as any[]).reduce((s, c) => s + (Number(c?.onAccount) || 0), 0) : 0;
+  const prepayment = Math.max((q.unappliedCredit ?? 0) - onAccount, 0);
+  let paid = (q.amountPaid ?? 0) + prepayment;
+  if (q.amountDue != null && q.amountDue <= 0.005 && (q.invoicedTotal ?? 0) >= total - 0.005) paid = Math.max(paid, total);
+  const remaining = cents(Math.max(total - paid, 0));
+  return { total: cents(total), paid: cents(paid), remaining, payment: (remaining <= 0.005 ? 'paid' : paid > 0.005 ? 'part' : 'unpaid') as 'paid' | 'part' | 'unpaid' };
+}
+
+// Keep only rows whose next follow-up is the 1st, the 2nd, a date someone set, or none left ("done"), and/or overdue.
+export function filterFollowUp<T extends { followUp: { next: { kind: string; date: string } | null } }>(rows: T[], fu: string | undefined, overdue: boolean, today: string): T[] {
+  return rows.filter(r => {
+    const kind = r.followUp.next?.kind ?? 'done';
+    if (fu && ['fu1', 'fu2', 'manual', 'done'].includes(fu) && kind !== fu) return false;
+    if (overdue && !(r.followUp.next && r.followUp.next.date < today)) return false;
+    return true;
+  });
+}
+
 export async function openQuotes(rep: Rep, regions?: string[]) {
   const accounts = await scope(rep, regions);
-  const quotes = (await prisma.quote.findMany({
+  const accountIds = [...accounts.keys()];
+
+  // Confirmed orders still owed money by a pay-first customer. Picked in the database so only those are read.
+  const owing = accountIds.length
+    ? await prisma.$queryRaw<{ id: string }[]>`
+        select q.id from crm.quotes q join crm.accounts a on a.id = q.account_id
+        where q.account_id = any(${accountIds}::uuid[])
+          and q.source <> 'rhino-history' and q.number not like 'Q%' and q.misc_type is null
+          and upper(coalesce(q.fulfillment_status, '')) not in ('VOIDED', 'CREDITED', 'DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING')
+          and nullif(trim(coalesce(a.payment_terms, '')), '') is null
+          and coalesce(q.total, q.amount) - (coalesce(q.amount_paid, 0) + greatest(coalesce(q.unapplied_credit, 0)
+                - coalesce(case when jsonb_typeof(q.credit_notes) = 'array'
+                                then (select sum(nullif(c->>'onAccount', '')::numeric) from jsonb_array_elements(q.credit_notes) c) end, 0), 0)) > 0.005
+          and not (q.amount_due is not null and q.amount_due <= 0.005 and coalesce(q.invoiced_total, 0) >= coalesce(q.total, q.amount) - 0.005)`
+    : [];
+  const quotes = await prisma.quote.findMany({
     where: {
-      ...LIVE, accountId: { in: [...accounts.keys()] },
       OR: [
-        { fulfillmentStatus: { in: QUOTE_STATUSES } },
-        { fulfillmentStatus: { in: CONFIRMED }, miscType: null },
+        { id: { in: owing.map(r => r.id) } },
+        { ...LIVE, accountId: { in: accountIds }, fulfillmentStatus: { in: QUOTE_STATUSES } },
       ],
     },
     orderBy: { sentAt: 'asc' },
-  })).filter(q => {
-    if (QUOTE_STATUSES.includes(q.fulfillmentStatus ?? '')) return true;
-    // A confirmed order stays here only while a pay-first customer (no payment terms) still owes money on it.
-    const payFirst = !accounts.get(q.accountId)?.paymentTerms;
-    const paid = Math.max(q.unappliedCredit ?? 0, q.amountPaid ?? 0);
-    return payFirst && (q.total ?? q.amount) - paid > 0.005;
+    select: { id: true, number: true, accountId: true, sentAt: true, fulfillmentStatus: true, reference: true, total: true, amount: true, amountPaid: true, unappliedCredit: true, amountDue: true, invoicedTotal: true, creditNotes: true },
   });
   const ids = quotes.map(q => q.id);
   const [fuRows, notes] = await Promise.all([
@@ -87,8 +124,9 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
   const fuById = new Map<string, FuState>(fuRows.map((r): [string, FuState] => [r.id, { manualOn: day(r.follow_up_at), fu1DoneOn: day(r.fu1_done_on), fu2DoneOn: day(r.fu2_done_on) }]));
 
   const rows = quotes.map(q => {
-    const total = cents(q.total ?? q.amount);
-    const deposit = cents(Math.max(q.unappliedCredit ?? 0, q.amountPaid ?? 0));
+    const status = (q.fulfillmentStatus ?? '').toUpperCase();
+    const confirmed = !QUOTE_STATUSES.includes(status);
+    const pay = paymentState(q);
     const n = notes.get(q.id);
     return {
       id: q.id,
@@ -99,16 +137,21 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
       repName: accounts.get(q.accountId)?.rep?.name ?? null,
       date: q.sentAt,
       ageDays: daysSince(q.sentAt),
-      stage: q.fulfillmentStatus === 'ORDERING' ? 'Draft order' : CONFIRMED.includes(q.fulfillmentStatus ?? '') ? 'Confirmed, awaiting payment' : 'Quote',
+      status,                                                       // DEAR's status
+      confirmed,                                                    // false while it is still a quote or draft order
+      stage: status === 'ORDERING' ? 'Draft order' : confirmed ? nice(status) : 'Quote',
       reference: q.reference,
-      amount: total,                                   // total, inc GST
-      deposit,                                         // deposit / prepaid so far
-      remaining: cents(Math.max(total - deposit, 0)),  // still to pay
+      amount: pay.total,                                            // total, inc GST
+      paid: pay.paid,                                               // paid so far, deposit and prepayments included
+      remaining: pay.remaining,                                     // still to pay
+      payment: pay.payment,                                         // unpaid, part (part paid) or paid
       followUp: followUpState(melDay(q.sentAt), fuById.get(q.id) ?? { manualOn: null, fu1DoneOn: null, fu2DoneOn: null }),
       noteCount: n?.noteCount ?? 0,
       lastNote: n?.lastNote ?? null,
     };
-  });
+  })
+  // It leaves only when it is both paid and confirmed.
+  .filter(r => !(r.confirmed && r.payment === 'paid'));
   return {
     rows, count: rows.length,
     total: cents(rows.reduce((s, r) => s + r.amount, 0)),

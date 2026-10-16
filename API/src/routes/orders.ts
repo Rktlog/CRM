@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma';
 import { isHistory } from '../lib/orderSource';
 import { searchWords } from './products';
 import * as XLSX from 'xlsx';
-import { openQuotes, toShip, unpaidInvoices, balances, AGE_BUCKETS, followUpState, melDay } from '../lib/receivables';
+import { openQuotes, toShip, unpaidInvoices, balances, AGE_BUCKETS, followUpState, filterFollowUp, melDay } from '../lib/receivables';
 import { orderNoteSummary } from '../lib/orderNotes';
 
 export const ordersRouter = Router();
@@ -235,7 +235,8 @@ ordersRouter.get('/views/:view', async (req, res) => {
       name = 'open-quotes';
       sheet = data.rows.map((r: any) => ({
         Order: r.number, Customer: r.customer, State: r.region, 'Order date': xlDate(r.date), 'Age (days)': r.ageDays,
-        'Total (inc GST)': r.amount, 'Deposit / prepaid': r.deposit, Remaining: r.remaining,
+        'Total (inc GST)': r.amount, 'Paid so far': r.paid, Remaining: r.remaining,
+        Payment: { unpaid: 'Unpaid', part: 'Part paid', paid: 'Paid, not confirmed yet' }[r.payment as 'unpaid' | 'part' | 'paid'],
         'Next follow-up': r.followUp.next?.date ?? 'Done',
         'Follow-up type': r.followUp.next ? { fu1: '1st', fu2: '2nd', manual: 'Set' }[r.followUp.next.kind as 'fu1' | 'fu2' | 'manual'] : '',
         'Last note': r.lastNote?.text ?? '', Rep: r.repName ?? '', Stage: r.stage, Reference: r.reference ?? '',
@@ -297,6 +298,16 @@ ordersRouter.get('/views/:view', async (req, res) => {
       data.total = Math.round(data.rows.reduce((s: number, r: any) => s + r.due, 0) * 100) / 100;
       data.overdue = Math.round(data.rows.filter((r: any) => r.daysOverdue > 0).reduce((s: number, r: any) => s + r.due, 0) * 100) / 100;
     }
+  }
+
+  // ?fu=fu1|fu2|manual|done and ?overdue=1: open quotes only, by the next follow-up (the same filter as on screen)
+  if (req.params.view === 'quotes' && (typeof req.query.fu === 'string' || req.query.overdue === '1')) {
+    const keep = new Set(filterFollowUp(data.rows, typeof req.query.fu === 'string' ? req.query.fu : undefined, req.query.overdue === '1', melDay()));
+    const keptIdx = data.rows.map((r: any, i: number) => (keep.has(r) ? i : -1)).filter((i: number) => i >= 0);
+    sheet = keptIdx.map((i: number) => sheet[i]);
+    const rows = keptIdx.map((i: number) => data.rows[i]);
+    const sum = (k: string) => Math.round(rows.reduce((s: number, r: any) => s + (r[k] ?? 0), 0) * 100) / 100;
+    data = { ...data, rows, count: rows.length, total: sum('amount'), remaining: sum('remaining') };
   }
 
   if (req.query.format === 'xlsx') {

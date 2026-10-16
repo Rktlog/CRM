@@ -5,9 +5,10 @@ import { fmtMoney, fmtDate, fmtDateWithYear, fmtDuration } from '../lib/types';
 import { todayLocal } from '../lib/logDate';
 import OrderLog from './OrderLog';
 
-// Orders > Open quotes. One row per open quote: order no, customer, state, order date, age, total, what is still to
-// pay, and the next follow-up. Click a row to expand it: deposit / prepaid, the follow-up schedule (mark done, or set
-// your own next date) and the team's notes on the order. Amounts are inc GST, as DEAR holds them.
+// Orders > Open quotes. One row per quote or unpaid order: order no, customer, state, order date, age, total, what is
+// still to pay, and the next follow-up. An order stays here until it is both paid and confirmed. Click a row to expand
+// it: what has been paid, the follow-up schedule (mark done, or set your own next date) and the team's notes on the
+// order. Amounts are inc GST, as DEAR holds them.
 //
 // Follow-ups: 1st = 7 days after the order date. 2nd = 14 days after the 1st was done. A date you set yourself
 // replaces the automatic one until it is done or cleared. Colours: 1st amber, 2nd rust, your own date teal, all done grey.
@@ -19,7 +20,7 @@ type FollowUp = {
 export type OpenQuoteRow = {
   id: string; number: string; accountId: string; customer: string; region: string; repName: string | null;
   date: string; ageDays: number; stage: string; reference: string | null;
-  amount: number; deposit: number; remaining: number; followUp: FollowUp;
+  amount: number; paid: number; remaining: number; payment: 'unpaid' | 'part' | 'paid'; confirmed: boolean; status: string; followUp: FollowUp;
 };
 
 const KIND = {
@@ -97,7 +98,7 @@ export default function OpenQuotesTable({ rows, showRep }: { rows: OpenQuoteRow[
                   <td>{fmtDateWithYear(r.date)}</td>
                   <td className={`num-col num${r.ageDays > 60 ? ' ov-late-d90' : r.ageDays > 30 ? ' ov-late-d60' : ''}`}>{fmtDuration(r.ageDays)}</td>
                   <td className="num-col num">{fmtMoney(r.amount)}</td>
-                  <td className="num-col num"><b>{fmtMoney(r.remaining)}</b></td>
+                  <td className="num-col num"><b>{fmtMoney(r.remaining)}</b>{r.payment === 'paid' && <div><span className="pill teal">Paid</span></div>}</td>
                   <td>
                     {fu.next ? (
                       <>
@@ -114,7 +115,15 @@ export default function OpenQuotesTable({ rows, showRep }: { rows: OpenQuoteRow[
                     <td colSpan={8} style={{ background: 'var(--paper)', padding: '12px 14px' }}>
                       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 320px) 1fr', gap: 24, alignItems: 'start' }}>
                         <div>
-                          <Detail label="Deposit / prepaid">{r.deposit > 0.005 ? <b className="num">{fmtMoney(r.deposit)}</b> : <span className="acct-region">None</span>}</Detail>
+                          <Detail label="Payment">
+                            <b className="num">{fmtMoney(r.paid)}</b> <span className="acct-region">of {fmtMoney(r.amount)}</span>{' '}
+                            <span className={`pill ${r.payment === 'paid' ? 'teal' : r.payment === 'part' ? 'amber' : 'rust'}`}>{r.payment === 'paid' ? 'Paid' : r.payment === 'part' ? 'Part paid' : 'Unpaid'}</span>
+                            <div className="acct-region">
+                              {r.payment === 'paid' ? 'Paid. Waiting for the order to be confirmed in DEAR.'
+                                : r.confirmed ? `${fmtMoney(r.remaining)} still to pay on a confirmed order.`
+                                : `Not confirmed yet. ${fmtMoney(r.remaining)} still to pay.`}
+                            </div>
+                          </Detail>
 
                           <Detail label="Follow-ups">
                             <Step kind="fu1" date={fu.fu1Due} doneOn={fu.fu1DoneOn} today={today} />

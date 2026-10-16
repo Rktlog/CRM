@@ -15,6 +15,7 @@
     "sync:once": "tsx src/sync/index.ts --once"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
     "@prisma/client": "^6.19.3",
     "@supabase/supabase-js": "^2.45.0",
     "cors": "^2.8.5",

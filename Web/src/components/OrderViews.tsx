@@ -6,6 +6,7 @@ import OpenQuotesTable from './OpenQuotesTable';
 import { apiGet, apiDownload } from '../lib/api';
 import { fmtMoney, fmtDateWithYear, fmtDuration, fmtPayDate } from '../lib/types';
 import { useMe, stateOptionsFor } from '../lib/useMe';
+import { todayLocal } from '../lib/logDate';
 
 // Order tracking views on the Orders page. Each loads from
 // /orders/views/<view>, can be narrowed to a state, and downloads exactly
@@ -37,6 +38,9 @@ export default function OrderViews({ view }: { view: ViewKey }) {
     : '';
   const [search, setSearch] = useState('');
   const [shown, setShown] = useState(PAGE);
+  // Open quotes: which follow-up to show (the 1st, the 2nd, a date someone set, or none left), and overdue only.
+  const [fu, setFu] = useState<'all' | 'fu1' | 'fu2' | 'manual' | 'done'>('all');
+  const [overdueOnly, setOverdueOnly] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const me = useMe();
   const stateOptions = stateOptionsFor(me);
@@ -58,7 +62,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
       .catch(e => setError(e.message));
   }, [view, region, termsParam]);
 
-  const rows: any[] = useMemo(() => {
+  const base: any[] = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!data) return [];
     return q
@@ -66,12 +70,26 @@ export default function OrderViews({ view }: { view: ViewKey }) {
       : data.rows;
   }, [data, search]);
 
+  const today = todayLocal();
+  const fuKind = (r: any): string => r.followUp?.next?.kind ?? 'done';
+  const isLate = (r: any) => !!r.followUp?.next && r.followUp.next.date < today;
+  const fuCounts = useMemo(() => view !== 'quotes' ? null : {
+    all: base.length, fu1: base.filter(r => fuKind(r) === 'fu1').length, fu2: base.filter(r => fuKind(r) === 'fu2').length,
+    manual: base.filter(r => fuKind(r) === 'manual').length, done: base.filter(r => fuKind(r) === 'done').length, late: base.filter(isLate).length,
+  }, [base, view, today]);
+  const rows: any[] = useMemo(
+    () => view !== 'quotes' ? base : base.filter(r => (fu === 'all' || fuKind(r) === fu) && (!overdueOnly || isLate(r))),
+    [base, view, fu, overdueOnly, today],
+  );
+  useEffect(() => { setShown(PAGE); }, [fu, overdueOnly, search]);
+
   async function download() {
     setDownloading(true);
     try {
       const params = new URLSearchParams({ format: 'xlsx' });
       if (region) params.set('region', region);
       if (termsParam) params.set('terms', termsParam);
+      if (view === 'quotes') { if (fu !== 'all') params.set('fu', fu); if (overdueOnly) params.set('overdue', '1'); }
       await apiDownload(`/orders/views/${view}?${params.toString()}`, `${view}-${new Date().toISOString().slice(0, 10)}.xlsx`);
     } finally {
       setDownloading(false);
@@ -79,7 +97,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
   }
 
   const summary = !data ? null
-    : view === 'quotes' ? `${data.count} open ${data.count === 1 ? 'quote' : 'quotes'}, ${fmtMoney(data.total)} total, ${fmtMoney(data.remaining)} still to pay`
+    : view === 'quotes' ? `${rows.length} ${rows.length === 1 ? 'quote or unpaid order' : 'quotes and unpaid orders'}, ${fmtMoney(rows.reduce((t: number, r: any) => t + r.amount, 0))} total, ${fmtMoney(rows.reduce((t: number, r: any) => t + r.remaining, 0))} still to pay`
     : view === 'to-ship' ? `${data.count} ${data.count === 1 ? 'order' : 'orders'} to ship, ${fmtMoney(data.total)}`
     : view === 'unpaid' ? `${data.count} unpaid ${data.count === 1 ? 'invoice' : 'invoices'}, ${fmtMoney(data.total)} due, ${fmtMoney(data.overdue)} overdue`
     : `${data.count} ${data.count === 1 ? 'customer' : 'customers'}, ${fmtMoney(data.totals.balance)} net balance, ${fmtMoney(data.totals.over60)} more than 2 months overdue`;
@@ -126,6 +144,20 @@ export default function OrderViews({ view }: { view: ViewKey }) {
           {downloading ? 'Downloading…' : '⬇ Excel'}
         </button>
       </div>
+      {view === 'quotes' && fuCounts && data && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '4px 0 8px' }}>
+          <span className="stat-label">Follow-up</span>
+          {([['all', 'All', 'neutral', fuCounts.all], ['fu1', '1st', 'amber', fuCounts.fu1], ['fu2', '2nd', 'rust', fuCounts.fu2], ['manual', 'Set', 'teal', fuCounts.manual], ['done', 'Done', 'neutral', fuCounts.done]] as const).map(([k, label, tone, count]) => (
+            <button key={k} type="button" className={`pill ${tone}`} onClick={() => setFu(k)} aria-pressed={fu === k}
+              style={{ cursor: 'pointer', border: 'none', fontSize: 12.5, padding: '4px 11px', fontWeight: fu === k ? 700 : 500, outline: fu === k ? '2px solid currentColor' : 'none' }}>
+              {label} {count}
+            </button>
+          ))}
+          <label className="acct-region" style={{ display: 'flex', gap: 5, alignItems: 'center', marginLeft: 6 }}>
+            <input type="checkbox" checked={overdueOnly} onChange={e => setOverdueOnly(e.target.checked)} /> Overdue only ({fuCounts.late})
+          </label>
+        </div>
+      )}
       {summary && <div className="ov-summary">{summary}</div>}
 
       {error && <div className="empty-state">Couldn't load: {error}</div>}
