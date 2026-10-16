@@ -83,7 +83,8 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
     orderNoteSummary(ids),
   ]);
   const day = (d: Date | null) => (d ? new Date(d).toISOString().slice(0, 10) : null);   // date columns come back as midnight UTC
-  const fuById = new Map(fuRows.map(r => [r.id, { manualOn: day(r.follow_up_at), fu1DoneOn: day(r.fu1_done_on), fu2DoneOn: day(r.fu2_done_on) }]));
+  type FuState = { manualOn: string | null; fu1DoneOn: string | null; fu2DoneOn: string | null };
+  const fuById = new Map<string, FuState>(fuRows.map((r): [string, FuState] => [r.id, { manualOn: day(r.follow_up_at), fu1DoneOn: day(r.fu1_done_on), fu2DoneOn: day(r.fu2_done_on) }]));
 
   const rows = quotes.map(q => {
     const total = cents(q.total ?? q.amount);
