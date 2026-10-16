@@ -20,6 +20,7 @@ const REPORTS: { key: string; label: string; blurb: string; group: string }[] = 
   { key: 'rep-activity', label: 'Rep activity log', blurb: 'Phone calls, emails and F2F visits logged over a date range.', group: 'Account & team' },
   { key: 'conversion', label: 'Conversion report', blurb: 'Abandoned carts, new prospects, new leads and inactive stockists, each followed to an order and a sales quote. Every customer listed.', group: 'Account & team' },
   { key: 'marketing', label: 'Marketing report', blurb: 'Emails sent, opened and clicked, each campaign, the automatic emails, and the orders that followed an email click. Managers only.', group: 'Account & team' },
+  { key: 'hidden-accounts', label: 'Archived and hidden accounts', blurb: 'Every account that is not on the Accounts list and why: archived (locked or coming back on a real order), only marketing or warranty orders, or hidden from some reps. Managers only.', group: 'Account & team' },
   { key: 'credit-movements', label: 'Credit report', blurb: 'Every credit note on account and every credit movement: issued, applied, refunded, reserved, used.', group: 'Account & team' },
   { key: 'eol', label: 'EOL sell-through report', blurb: 'Sales since the start date and stock left for the clearance brands, one sheet each: summary by brand and customer, sales by SKU, purchases, staff purchases, remaining stock. Managers only.', group: 'Products & stock' },
 ];
@@ -171,7 +172,7 @@ export default function Reports() {
         <div className="section" key={group}>
           <div className="panel-title">{group}</div>
           <div className="manifest">
-            {REPORTS.filter(r => r.group === group && (isManager || !['marketing', 'eol'].includes(r.key))).map(r => (
+            {REPORTS.filter(r => r.group === group && (isManager || !['marketing', 'eol', 'hidden-accounts'].includes(r.key))).map(r => (
               <div className="m-row" key={r.key} style={{ gridTemplateColumns: '1.4fr 2fr 0.8fr', cursor: 'default' }}>
                 <div className="acct-name">{r.label}</div>
                 <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>{r.blurb}</div>

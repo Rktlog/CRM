@@ -886,6 +886,39 @@ exportsRouter.get('/:type', async (req, res) => {
         ]);
       }
 
+      case 'hidden-accounts': {
+        // Every account that is not on the Accounts list, and why. Managers only.
+        if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Only a manager can download this report' });
+        const rows = await prisma.$queryRaw<any[]>`
+          select a.name, a.region as state, coalesce(nullif(a.category, ''), 'Uncategorized') as category, r.name as rep,
+            case
+              when a.archived and a.keep_archived then 'Archived, locked (stays hidden)'
+              when a.archived then 'Archived, comes back on a real order'
+              when a.misc then 'Marked misc (marketing or warranty)'
+              when exists (select 1 from crm.quotes q where q.account_id = a.id) and not exists (select 1 from crm.quotes q where q.account_id = a.id and q.misc_type is null) then 'Only marketing or warranty orders'
+              else 'Hidden from some reps by a manager'
+            end as why_hidden,
+            s.status as crm_status, a.dear_customer_id is not null as in_dear, a.created_at::date::text as created,
+            (s.last_order at time zone 'Australia/Melbourne')::date::text as last_order, a.spend_365::float8 as spend_365,
+            (select count(*)::int from crm.rep_account_exclusions e where e.account_id = a.id) as hidden_from_reps
+          from crm.accounts a
+          left join crm.reps r on r.id = a.rep_id
+          left join crm.account_status s on s.account_id = a.id
+          where (a.archived or a.misc
+                 or (exists (select 1 from crm.quotes q where q.account_id = a.id) and not exists (select 1 from crm.quotes q where q.account_id = a.id and q.misc_type is null))
+                 or exists (select 1 from crm.rep_account_exclusions e where e.account_id = a.id))
+          order by 5, a.name`;
+        const why = new Map<string, number>();
+        for (const r of rows) why.set(r.why_hidden, (why.get(r.why_hidden) ?? 0) + 1);
+        return sendWorkbook(res, 'archived-and-hidden-accounts.xlsx', [
+          { name: 'Summary', rows: [...why.entries()].sort((a, b) => b[1] - a[1]).map(([Why, Accounts]) => ({ Why, Accounts })) },
+          { name: 'Hidden accounts', rows: rows.map(r => ({
+            Account: r.name, State: r.state, Category: r.category, Rep: r.rep ?? '', 'Why hidden': r.why_hidden, Status: r.crm_status ?? '',
+            'In DEAR': r.in_dear ? 'Yes' : 'No', Created: r.created ?? '', 'Last order': r.last_order ?? '', 'Spend 365 days': r.spend_365, 'Hidden from reps': r.hidden_from_reps,
+          })) },
+        ]);
+      }
+
       case 'credit-movements': {
         // Every credit note on account, and every credit movement.
         const regions = regionsParam(req.query.region);
