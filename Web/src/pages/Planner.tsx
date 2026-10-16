@@ -5,6 +5,7 @@ import { ACTIVITY_LABEL } from '../lib/activityLabels';
 import AddTaskModal from '../components/AddTaskModal';
 import { addDays, fromISO, localISO, startOfWeek } from '../lib/dates';
 import { STAGE_LABELS, fmtMoney, fmtDateWithYear } from '../lib/types';
+import DictationTextarea from '../components/DictationTextarea';
 
 type TaskAccount = { id: string; name: string; region: string; phone: string | null };
 type PlanAccount = TaskAccount & {
@@ -219,9 +220,9 @@ function PlanRow({ task: t, open, onToggle, onDone }: {
                   </button>
                 ))}
               </div>
-              <textarea
+              <DictationTextarea
                 value={note}
-                onChange={e => setNote(e.target.value)}
+                onChange={setNote}
                 rows={2}
                 placeholder="What happened? (optional, e.g. 'Interested, follow up in 2 weeks')"
               />

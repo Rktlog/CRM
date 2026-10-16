@@ -12,6 +12,7 @@ import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fm
 import { pickCurrentOrder } from '../lib/currentOrder';
 import { todayLocal, dateInputValue, isoForDay } from '../lib/logDate';
 import AccountGmail from '../components/AccountGmail';
+import DictationTextarea from '../components/DictationTextarea';
 
 export default function AccountDetail() {
   const { id } = useParams<{ id: string }>();
@@ -308,12 +309,12 @@ export default function AccountDetail() {
                   {account.quotes.slice(0, 15).map(q => <option key={q.id} value={q.id}>About order {q.number}, {fmtDateWithYear(q.sentAt)}</option>)}
                 </select>
               )}
-              <textarea
+              <DictationTextarea
                 value={note}
-                onChange={e => setNote(e.target.value)}
+                onChange={setNote}
                 placeholder="What happened?"
                 rows={3}
-                style={{ width: '100%', marginBottom: 8 }}
+                style={{ marginBottom: 8 }}
               />
               <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
                 <button className="btn" type="submit" disabled={saving || logDay > todayLocal()}>
@@ -353,11 +354,11 @@ export default function AccountDetail() {
                         Date
                         <input type="date" value={editDay} max={todayLocal()} onChange={e => setEditDay(e.target.value)} />
                       </label>
-                      <textarea
+                      <DictationTextarea
                         value={editNote}
-                        onChange={e => setEditNote(e.target.value)}
+                        onChange={setEditNote}
                         rows={2}
-                        style={{ width: '100%', marginBottom: 6 }}
+                        style={{ marginBottom: 6 }}
                       />
                       <div style={{ display: 'flex', gap: 8 }}>
                         <button className="btn secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => setEditingActivityId(null)}>

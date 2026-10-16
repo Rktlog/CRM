@@ -4,6 +4,7 @@ import { ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
 import { todayLocal, dateInputValue, isoForDay } from '../lib/logDate';
 import { fmtDate } from '../lib/types';
 import EditActivityModal from './EditActivityModal';
+import DictationTextarea from './DictationTextarea';
 
 // The team's log for ONE order: a call, email or visit about it (chasing payment, a follow-up). Everyone who can see the
 // account sees it, and every entry also shows in the account's own activity log (it is the same record, linked to the order).
@@ -58,7 +59,7 @@ export default function OrderLog({ orderId, accountId, accountName, onChange }: 
         <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
           {PHRASES.map(p => <button key={p} type="button" className="pill neutral" style={{ cursor: 'pointer', border: 'none' }} onClick={() => phrase(p)}>{p.replace(/:$/, '')}</button>)}
         </div>
-        <textarea value={text} onChange={e => setText(e.target.value)} placeholder={PLACEHOLDER[type]} rows={3} style={{ width: '100%', marginBottom: 8 }} aria-label="What happened" />
+        <DictationTextarea value={text} onChange={setText} placeholder={PLACEHOLDER[type]} rows={3} style={{ marginBottom: 8 }} aria-label="What happened" />
         <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
           <button className="btn" type="submit" disabled={saving || !text.trim() || day > todayLocal()}>{saving ? 'Saving…' : 'Add to order log'}</button>
           <label className="acct-region" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>

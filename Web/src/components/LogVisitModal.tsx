@@ -6,6 +6,7 @@ import { useMe } from '../lib/useMe';
 import AccountPicker, { AccountSelection, resolveSelection } from './AccountPicker';
 import { ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
 import { todayLocal, isoForDay } from '../lib/logDate';
+import DictationTextarea from './DictationTextarea';
 
 type Props = {
   onCreated: () => void;
@@ -202,9 +203,9 @@ export default function LogVisitModal({ onCreated, onClose, defaultType }: Props
 
         <label className="modal-field">
           Notes
-          <textarea
+          <DictationTextarea
             value={note}
-            onChange={e => setNote(e.target.value)}
+            onChange={setNote}
             placeholder={PROMPT[type]}
             rows={3}
           />

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { apiPatch } from '../lib/api';
 import { ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
 import { todayLocal, dateInputValue, isoForDay } from '../lib/logDate';
+import DictationTextarea from './DictationTextarea';
 
 // Edit a log that was already saved: its kind, its date and its note. Only what was changed is
 // sent. (The rep who logged it, or a manager, can edit it; the API enforces that.)
@@ -66,7 +67,7 @@ export default function EditActivityModal({ activity, onSaved, onClose }: Props)
 
         <label className="modal-field">
           Notes
-          <textarea value={note} onChange={e => setNote(e.target.value)} rows={4} />
+          <DictationTextarea value={note} onChange={setNote} rows={4} />
         </label>
 
         {error && <div className="login-error" style={{ marginBottom: 10 }}>{error}</div>}
