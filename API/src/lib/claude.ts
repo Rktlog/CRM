@@ -27,8 +27,21 @@ export async function ask(o: { system: string; user: string; fast?: boolean; max
 }
 
 // One turn of a conversation that may use tools. The caller runs the tools and calls again until Claude is done.
-export async function chatTurn(o: { system: string; messages: Anthropic.MessageParam[]; tools: Anthropic.Tool[]; maxTokens: number }): Promise<Anthropic.Message> {
-  return getClient().messages.create({ model: SMART(), max_tokens: o.maxTokens, system: o.system, tools: o.tools, messages: o.messages });
+// With onText the words arrive as they are written (streaming); without it the whole turn comes back at once.
+// The system prompt is marked cacheable, so it is read cheaply from the second turn on.
+export async function chatTurn(o: {
+  system: string; messages: Anthropic.MessageParam[]; tools: Anthropic.Tool[]; maxTokens: number;
+  onText?: (delta: string) => void; signal?: AbortSignal;
+}): Promise<Anthropic.Message> {
+  const params = {
+    model: SMART(), max_tokens: o.maxTokens, tools: o.tools, messages: o.messages,
+    system: [{ type: 'text' as const, text: o.system, cache_control: { type: 'ephemeral' as const } }],
+  };
+  const opts = o.signal ? { signal: o.signal } : undefined;
+  if (!o.onText) return getClient().messages.create(params, opts);
+  const stream = getClient().messages.stream(params, opts);
+  stream.on('text', (delta: string) => o.onText!(delta));
+  return stream.finalMessage();
 }
 export const smartModel = SMART;
 

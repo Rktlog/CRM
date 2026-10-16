@@ -13,7 +13,7 @@ export type AiSettings = {
   usdPerMInput: number;      // dollars per million input tokens. Use the dearest model's price, so the limit errs on the safe side
   usdPerMOutput: number;
 };
-export const DEFAULTS: AiSettings = { enabled: true, maxReplyTokens: 1000, perRequestTokens: 40_000, userDailyTokens: 150_000, monthlyTokens: 3_000_000, monthlyUsd: 0, usdPerMInput: 0, usdPerMOutput: 0 };
+export const DEFAULTS: AiSettings = { enabled: true, maxReplyTokens: 2000, perRequestTokens: 120_000, userDailyTokens: 300_000, monthlyTokens: 3_000_000, monthlyUsd: 0, usdPerMInput: 0, usdPerMOutput: 0 };
 
 const FIELDS: { key: Exclude<keyof AiSettings, 'enabled'>; label: string; lo: number; hi: number }[] = [
   { key: 'maxReplyTokens', label: 'Longest reply', lo: 100, hi: 4000 },
@@ -47,6 +47,12 @@ export function validateSettings(raw: unknown): AiSettings {
     out[f.key] = v;
   }
   return out;
+}
+
+// What a call counts as against the limits. Cached reading (an attached file read again on a follow-up) is cheap,
+// so it counts a tenth; writing the cache costs a quarter more. Everything else counts once.
+export function billableInput(u: { input_tokens: number; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null }): number {
+  return Math.round(u.input_tokens + (u.cache_creation_input_tokens ?? 0) * 1.25 + (u.cache_read_input_tokens ?? 0) * 0.1);
 }
 
 export type Usage = { userDayTokens: number; monthInput: number; monthOutput: number };

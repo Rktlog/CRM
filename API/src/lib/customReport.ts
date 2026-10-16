@@ -86,6 +86,9 @@ export const DATASETS: Record<DatasetKey, { label: string; blurb: string; filter
 export const CUSTOMER_STATUSES = ['Active', 'Inactive', 'New Lead', 'Prospect'];
 export const MAX_ROWS = 50000;
 
+// A mistake in what was asked for, with a message that is safe to show (unlike a database error).
+export class ReportInputError extends Error {}
+
 // ---- Checking what the browser sent ----
 const isDay = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v));
 const strings = (v: unknown, max = 200) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length <= 200).slice(0, max) : []);
@@ -93,16 +96,16 @@ const strings = (v: unknown, max = 200) => (Array.isArray(v) ? v.filter((x): x i
 export function parseDefinition(raw: unknown): Definition {
   const o = (raw ?? {}) as any;
   const ds = DATASETS[o.dataset as DatasetKey];
-  if (!ds) throw new Error('Pick what the report is about');
+  if (!ds) throw new ReportInputError('Pick what the report is about');
   const keys = ds.columns.map(c => c.key);
   const columns = strings(o.columns).filter(k => keys.includes(k));
-  if (!columns.length) throw new Error('Tick at least one column');
+  if (!columns.length) throw new ReportInputError('Tick at least one column');
   const groupBy = strings(o.groupBy).filter(k => ds.columns.find(c => c.key === k)?.dim);
   const f = (o.filters ?? {}) as any;
   const filters: Filters = {};
   if (ds.filters.includes('from') && isDay(f.from)) filters.from = f.from;
   if (ds.filters.includes('to') && isDay(f.to)) filters.to = f.to;
-  if (filters.from && filters.to && filters.from > filters.to) throw new Error('The "from" date is after the "to" date');
+  if (filters.from && filters.to && filters.from > filters.to) throw new ReportInputError('The "from" date is after the "to" date');
   for (const k of ['brands', 'states', 'categories', 'reps'] as const) if (ds.filters.includes(k) && strings(f[k]).length) filters[k] = strings(f[k]);
   if (ds.filters.includes('statuses') && strings(f.statuses).length) {
     const ok = o.dataset === 'products' ? [...PRODUCT_STATUSES.map(s => s.key as string), 'none'] : CUSTOMER_STATUSES;
@@ -245,7 +248,7 @@ export async function runReport(def: Definition, rep: Rep, today: string): Promi
   const rows = def.dataset === 'sales' ? await loadSales(def.filters, rep)
     : def.dataset === 'products' ? await loadProducts(def.filters, today)
     : await loadCustomers(def.filters, rep);
-  if (rows.length > MAX_ROWS) throw new Error(`That is more than ${MAX_ROWS.toLocaleString('en-AU')} rows. Add a filter, or add it up by group.`);
+  if (rows.length > MAX_ROWS) throw new ReportInputError(`That is more than ${MAX_ROWS.toLocaleString('en-AU')} rows. Add a filter, or add it up by group.`);
   const s = shape(def, rows);
   return { ...s, total: s.rows.length };
 }
