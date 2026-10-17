@@ -1,11 +1,12 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { decrypt } from './crypto';
-import { accessTokenFrom, getMessageMeta, listMessageIds, GoogleApiError, GmailMeta } from './google';
+import { accessTokenFrom, getMessageMeta, listMessageIds, listPrivateMessages, privateExclusion, GoogleApiError, GmailMeta } from './google';
 
 // Looks through a rep's mailbox and keeps ONLY the emails that are to or from a customer already in the CRM.
 // What is kept: who it was between, the subject, the date, and (if the rep allows) a ~160 character preview.
 // Never the body. Newsletters, auto-replies, spam, trash and drafts are skipped. Everything else is ignored.
+// An email, or a whole conversation, the rep has labelled Private in Gmail is never kept. If it was kept before it is removed.
 
 const EMAIL_RE = /[A-Z0-9._%+'-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 export function parseAddresses(header: string | undefined | null): string[] {
@@ -21,7 +22,8 @@ export type LogRow = {
 };
 
 // Is this email one to keep, and against which account(s)? `known` maps a customer address to its account ids.
-export function classify(meta: GmailMeta, me: string, known: Map<string, string[]>, savePreview: boolean): { rows: LogRow[] } | { skip: string } {
+export function classify(meta: GmailMeta, me: string, known: Map<string, string[]>, savePreview: boolean, privateThreads: ReadonlySet<string> = new Set()): { rows: LogRow[] } | { skip: string } {
+  if (privateThreads.has(meta.threadId)) return { skip: 'private' };   // the rep marked this conversation Private
   const labels = meta.labelIds ?? [];
   if (labels.some(l => l === 'SPAM' || l === 'TRASH' || l === 'DRAFT')) return { skip: 'spam, trash or draft' };
   const h = meta.headers, mine = me.toLowerCase();
@@ -65,7 +67,7 @@ export async function loadKnownAddresses(): Promise<Map<string, string[]>> {
 }
 
 export type SyncResult = {
-  rep: string; listed: number; newMessages: number; saved: number; skipped: number; remaining: number;
+  rep: string; listed: number; newMessages: number; saved: number; skipped: number; remaining: number; removed: number;
   status: 'ok' | 'needs_reconnect' | 'error' | 'paused' | 'skipped'; error?: string;
 };
 
@@ -91,7 +93,7 @@ export async function syncRep(repId: string, opts: { now?: Date; maxNew?: number
   const [c] = await prisma.$queryRaw<any[]>`
     select c.email, c.refresh_token_enc, c.logging_enabled, c.save_preview, c.last_sync_at, r.name
     from crm.gmail_connections c join crm.reps r on r.id = c.rep_id where c.rep_id = ${repId}::uuid`;
-  const res: SyncResult = { rep: c?.name ?? '', listed: 0, newMessages: 0, saved: 0, skipped: 0, remaining: 0, status: 'skipped' };
+  const res: SyncResult = { rep: c?.name ?? '', listed: 0, newMessages: 0, saved: 0, skipped: 0, remaining: 0, removed: 0, status: 'skipped' };
   if (!c) return res;
   if (!c.logging_enabled) { await prisma.$queryRaw`update crm.gmail_connections set last_run_at = ${now} where rep_id = ${repId}::uuid`; return { ...res, status: 'paused' }; }
 
@@ -101,10 +103,19 @@ export async function syncRep(repId: string, opts: { now?: Date; maxNew?: number
 
   // Look back to just before the last full pass (a 2 day overlap so nothing slips through), or 30 days the first time.
   const since = c.last_sync_at ? new Date(new Date(c.last_sync_at).getTime() - 2 * 86400000) : new Date(now.getTime() - backfill * 86400000);
-  const query = `after:${Math.floor(since.getTime() / 1000)} -in:spam -in:trash -in:drafts -category:promotions -category:social`;
+  const query = `after:${Math.floor(since.getTime() / 1000)} -in:spam -in:trash -in:drafts -category:promotions -category:social ${privateExclusion()}`;
   let problem: unknown = null;
   const rows: LogRow[] = []; const processed: string[] = [];
+  let privateThreads = new Set<string>();
   try {
+    // Private comes first. If Google can't say what is private, nothing is logged this time.
+    const priv = await listPrivateMessages(token);
+    privateThreads = new Set(priv.map(m => m.threadId));
+    if (priv.length) {
+      const gone = await prisma.$queryRaw<{ id: string }[]>`
+        delete from crm.email_log where rep_id = ${repId}::uuid and (gmail_message_id = any(${priv.map(m => m.id)}::text[]) or thread_id = any(${[...privateThreads]}::text[])) returning id`;
+      res.removed = gone.length;
+    }
     const ids = await listMessageIds(token, query);
     res.listed = ids.length;
     const seenRows = ids.length ? await prisma.$queryRaw<{ message_id: string }[]>`select message_id from crm.gmail_seen where rep_id = ${repId}::uuid and message_id = any(${ids}::text[])` : [];
@@ -119,7 +130,7 @@ export async function syncRep(repId: string, opts: { now?: Date; maxNew?: number
           const meta = await getMessageMeta(token, id);
           processed.push(id);
           if (!meta) { res.skipped++; continue; }                       // deleted since it was listed
-          const r = classify(meta, c.email, known, !!c.save_preview);
+          const r = classify(meta, c.email, known, !!c.save_preview, privateThreads);
           if ('skip' in r) res.skipped++; else rows.push(...r.rows);
         } catch (e) { problem = e; }
       }
@@ -152,7 +163,7 @@ export async function syncAll(budgetMs = 50_000): Promise<SyncResult[]> {
   const reps = await prisma.$queryRaw<{ rep_id: string }[]>`select rep_id from crm.gmail_connections where logging_enabled and status <> 'needs_reconnect' order by last_run_at asc nulls first`;
   for (const r of reps) {
     if (Date.now() - start > budgetMs) break;
-    try { results.push(await syncRep(r.rep_id)); } catch (e) { results.push({ rep: r.rep_id, listed: 0, newMessages: 0, saved: 0, skipped: 0, remaining: 0, status: 'error', error: String((e as Error).message) }); }
+    try { results.push(await syncRep(r.rep_id)); } catch (e) { results.push({ rep: r.rep_id, listed: 0, newMessages: 0, saved: 0, skipped: 0, remaining: 0, removed: 0, status: 'error', error: String((e as Error).message) }); }
   }
   await prisma.$queryRaw`delete from crm.gmail_seen where seen_at < now() - interval '90 days'`;
   return results;

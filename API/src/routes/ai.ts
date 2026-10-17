@@ -4,18 +4,24 @@ import { ask, aiConfigured, aiProblem, smartModel } from '../lib/claude';
 import { loadSettings, loadUsage, saveSettings, validateSettings, checkCaps, costUsd, AiSettings } from '../lib/aiLimits';
 import { runChat, Turn } from '../lib/aiChat';
 import { checkAttachments, saveFile, takeFile, Attachment, MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from '../lib/aiFiles';
+import { listChats, getChat, renameChat, deleteChat, deleteAllChats, saveTurn, purgeOld, getPrefs, setPrefs, isChatId } from '../lib/aiChats';
 import { melDay } from '../lib/receivables';
 
-// Claude features. Every call: signed in, key set, inside the limits (switch, per person per day, team per month,
+// Claude inside the CRM. Every call: signed in, key set, inside the limits (switch, per person per day, team per month,
 // hourly rate), input size capped, and logged (who, which feature, tokens) so the cost is visible.
-// What is asked and answered is not stored: the chat lives in the page, and files the assistant makes are kept in memory
-// for 30 minutes for the person who asked.
-//   GET  /ai/status        what is configured and how much has been used
-//   PUT  /ai/settings      managers: the limits
-//   POST /ai/chat          the assistant. Body (text): { messages: [{ role, content, attachments?: [{ name, type, data }] }] }
-//                          Answers as a stream of events: status, text, reset, done (reply, tools, files, usage) or error.
-//   GET  /ai/files/:id     a file the assistant made, for the person who asked
-//   POST /ai/tidy-note     { text } -> { text }   the same note with spelling, punctuation and speech-to-text slips fixed
+// Saved chats are private to each person and kept for the retention period set in the limits. Files and charts the
+// assistant makes are kept with the chat (files for 30 days).
+//   GET    /ai/status         what is configured and how much has been used
+//   PUT    /ai/settings       managers: the limits and the company's instructions
+//   POST   /ai/chat           the assistant. Body (text): { messages: [{ role, content, attachments?: [{ name, type, data }] }], chatId?, keep?, think? }
+//                             Answers as a stream of events: status, text, reset, done (reply, tools, steps, files, charts, chatId, title, usage) or error.
+//   GET    /ai/chats?q=       your saved chats, newest first, searchable
+//   GET    /ai/chats/:id      one of your chats, with its messages
+//   PATCH  /ai/chats/:id      { title }  rename
+//   DELETE /ai/chats/:id      delete one;  DELETE /ai/chats  delete all of yours
+//   GET/PUT /ai/prefs         how you like the assistant to answer (the "About me" box)
+//   GET    /ai/files/:id      a file the assistant made, for the person who asked
+//   POST   /ai/tidy-note      { text } -> { text }   the same note with spelling, punctuation and speech-to-text slips fixed
 export const aiRouter = Router();
 
 const PER_HOUR = 40;
@@ -59,9 +65,9 @@ aiRouter.get('/status', async (req, res) => {
   try {
     const settings = await loadSettings();
     const u = await loadUsage(req.rep!.id, melDay());
-    const monthTokens = u.monthInput + u.monthOutput;
+    const monthTokens = u.monthInput + u.monthOutput, manager = req.rep!.role === 'manager';
     res.json({
-      configured: aiConfigured(), settings,
+      configured: aiConfigured(), settings: manager ? settings : { ...settings, instructions: '' }, instructionsSet: !!settings.instructions,
       usage: { userDayTokens: u.userDayTokens, monthTokens, monthCostUsd: settings.usdPerMInput > 0 || settings.usdPerMOutput > 0 ? Math.round(costUsd(settings, u.monthInput, u.monthOutput) * 100) / 100 : null },
       files: { max: MAX_FILES, maxFileMb: MAX_FILE_BYTES / 1024 / 1024, maxTotalMb: MAX_TOTAL_BYTES / 1024 / 1024 },
       blocked: checkCaps(settings, u),
@@ -75,32 +81,60 @@ aiRouter.put('/settings', async (req, res) => {
   catch (e) { res.status(400).json({ error: (e as Error).message }); }
 });
 
-aiRouter.get('/files/:id', (req, res) => {
-  const f = takeFile(req.rep!.id, String(req.params.id));
-  if (!f) return res.status(404).json({ error: 'That file has expired. Ask for it again.' });
-  res.setHeader('Content-Type', f.mime);
-  res.setHeader('Content-Disposition', `attachment; filename="${f.name.replace(/"/g, '')}"`);
-  res.send(f.buffer);
+// ---- saved chats and preferences: always the signed-in person's own ----
+const notFound = (res: express.Response) => res.status(404).json({ error: 'That chat was not found' });
+aiRouter.get('/chats', async (req, res) => {
+  try {
+    await purgeOld((await loadSettings()).chatRetentionDays).catch((e: unknown) => console.error('ai purge failed', e));
+    res.json({ chats: await listChats(req.rep!.id, typeof req.query.q === 'string' ? req.query.q : null) });
+  } catch (e) { res.status(500).json({ error: (e as Error).message }); }
+});
+aiRouter.get('/chats/:id', async (req, res) => {
+  try { const c = await getChat(req.rep!.id, String(req.params.id)); c ? res.json(c) : notFound(res); } catch (e) { res.status(500).json({ error: (e as Error).message }); }
+});
+aiRouter.patch('/chats/:id', async (req, res) => {
+  try { (await renameChat(req.rep!.id, String(req.params.id), String(req.body?.title ?? ''))) ? res.json({ ok: true }) : res.status(400).json({ error: 'Give the chat a name' }); } catch (e) { res.status(500).json({ error: (e as Error).message }); }
+});
+aiRouter.delete('/chats/:id', async (req, res) => {
+  try { (await deleteChat(req.rep!.id, String(req.params.id))) ? res.json({ ok: true }) : notFound(res); } catch (e) { res.status(500).json({ error: (e as Error).message }); }
+});
+aiRouter.delete('/chats', async (req, res) => {
+  try { res.json({ deleted: await deleteAllChats(req.rep!.id) }); } catch (e) { res.status(500).json({ error: (e as Error).message }); }
+});
+aiRouter.get('/prefs', async (req, res) => { try { res.json({ text: await getPrefs(req.rep!.id) }); } catch (e) { res.status(500).json({ error: (e as Error).message }); } });
+aiRouter.put('/prefs', async (req, res) => { try { await setPrefs(req.rep!.id, String(req.body?.text ?? '')); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: (e as Error).message }); } });
+
+aiRouter.get('/files/:id', async (req, res) => {
+  try {
+    const f = await takeFile(req.rep!.id, String(req.params.id));
+    if (!f) return res.status(404).json({ error: 'That file has expired. Ask for it again.' });
+    res.setHeader('Content-Type', f.mime);
+    res.setHeader('Content-Disposition', `attachment; filename="${f.name.replace(/"/g, '')}"`);
+    res.send(f.buffer);
+  } catch (e) { res.status(500).json({ error: (e as Error).message }); }
 });
 
+const HISTORY = 30;   // how many messages back the assistant is shown
 aiRouter.post('/chat', express.text({ type: '*/*', limit: '40mb' }), async (req, res) => {
   // 1. Read and check what was sent. Mistakes here are plain JSON errors.
   let raw: any;
   try { raw = JSON.parse(typeof req.body === 'string' ? req.body : ''); } catch { return res.status(400).json({ error: 'That request was not readable' }); }
-  const history: Turn[] = (Array.isArray(raw?.messages) ? raw.messages : []).slice(-10).map((m: any) => ({
+  const history: Turn[] = (Array.isArray(raw?.messages) ? raw.messages : []).slice(-HISTORY).map((m: any) => ({
     role: m?.role === 'assistant' ? 'assistant' as const : 'user' as const,
-    content: String(m?.content ?? '').trim().slice(0, 4000),
+    content: String(m?.content ?? '').trim().slice(0, m?.role === 'assistant' ? 30000 : 12000),
     attachments: Array.isArray(m?.attachments) && m.role !== 'assistant' ? m.attachments as Attachment[] : undefined,
   })).filter((m: Turn) => m.content || m.attachments?.length);
   while (history.length && history[0].role !== 'user') history.shift();   // a conversation has to start with the person
   if (!history.length || history[history.length - 1].role !== 'user') return res.status(400).json({ error: 'Ask a question first' });
   const problem = checkAttachments(history.flatMap(t => t.attachments ?? []));
   if (problem) return res.status(400).json({ error: problem });
+  const chatId = isChatId(raw?.chatId) ? raw.chatId : null, keep = Number.isInteger(raw?.keep) && raw.keep >= 0 ? raw.keep : null;
 
   try {
     const g = await gate(req);
     if ('error' in g) return res.status(g.status).json({ error: g.error });
     if (overLimit(`chat:${req.rep!.id}`, Date.now(), 60)) return res.status(429).json({ error: "That's 60 questions in the last hour. Try again later." });
+    const prefs = await getPrefs(req.rep!.id).catch(() => '');
 
     // 2. From here the answer streams. The person can stop it, and then Claude is stopped too.
     res.setHeader('Content-Type', 'text/event-stream');
@@ -115,11 +149,20 @@ aiRouter.post('/chat', express.text({ type: '*/*', limit: '40mb' }), async (req,
     try {
       const r = await runChat({
         history, ctx: { rep: req.rep!, today: melDay(), addFile: f => saveFile(req.rep!.id, f) },
-        maxReplyTokens: g.settings.maxReplyTokens, perRequestTokens: g.settings.perRequestTokens,
+        maxReplyTokens: g.settings.maxReplyTokens, perRequestTokens: g.settings.perRequestTokens, instructions: g.settings.instructions, prefs,
+        think: raw?.think === true ? { budget: g.settings.thinkingBudgetTokens } : undefined,
         onText: d => send({ type: 'text', delta: d }), onStatus: s => send({ type: 'status', text: s }), onReset: () => send({ type: 'reset' }), signal: stop.signal,
       });
       logUsage(req.rep!.id, 'assistant', smartModel(), r.inputTokens, r.outputTokens);
-      send({ type: 'done', reply: r.reply, tools: [...new Set(r.tools)], files: r.files, usage: { inputTokens: r.inputTokens, outputTokens: r.outputTokens, calls: r.calls } });
+
+      // Saved with the chat: what was asked (and the names of what was attached), and the answer with what it made.
+      let saved: { chatId: string; title: string } | null = null;
+      try {
+        const asMsg = (t: Turn) => ({ role: t.role, content: t.content, meta: t.attachments?.length ? { attachments: t.attachments.map(a => ({ name: a.name, type: a.type, size: Math.floor((a.data.length * 3) / 4) })) } : {} });
+        const toSave = chatId ? [asMsg(history[history.length - 1])] : history.map(asMsg);
+        saved = await saveTurn(req.rep!.id, chatId, history[0].content, chatId ? keep : null, [...toSave, { role: 'assistant' as const, content: r.reply, meta: { tools: [...new Set(r.tools)], steps: r.steps, files: r.files, charts: r.charts, thinking: raw?.think === true } }]);
+      } catch (e) { console.error('saving the chat failed', e); }
+      send({ type: 'done', reply: r.reply, tools: [...new Set(r.tools)], steps: r.steps, files: r.files, charts: r.charts, chatId: saved?.chatId ?? null, title: saved?.title ?? null, usage: { inputTokens: r.inputTokens, outputTokens: r.outputTokens, calls: r.calls } });
     } catch (e) {
       if (!stop.signal.aborted) { console.error('claude chat failed', e); send({ type: 'error', error: aiProblem(e).message }); }
     }

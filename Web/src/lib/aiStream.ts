@@ -5,11 +5,13 @@ import { supabase } from './supabase';
 const API_URL = import.meta.env.VITE_API_URL;
 
 export type MadeFile = { id: string; name: string; size: number };
+export type Step = { tool: string; what: string };
+export type Chart = { title: string; svg: string };
 export type ChatEvent =
   | { type: 'status'; text: string }
   | { type: 'text'; delta: string }
   | { type: 'reset' }
-  | { type: 'done'; reply: string; tools: string[]; files: MadeFile[]; usage: { inputTokens: number; outputTokens: number; calls: number } }
+  | { type: 'done'; reply: string; tools: string[]; steps: Step[]; files: MadeFile[]; charts: Chart[]; chatId: string | null; title: string | null; usage: { inputTokens: number; outputTokens: number; calls: number } }
   | { type: 'error'; error: string };
 export type SendMessage = { role: 'user' | 'assistant'; content: string; attachments?: { name: string; type: string; data: string }[] };
 
@@ -37,11 +39,11 @@ export async function readStream(res: Response, onEvent: (e: ChatEvent) => void)
   const tail = parseSse(buf + '\n\n'); tail.events.forEach(onEvent);
 }
 
-export async function streamChat(messages: SendMessage[], o: { signal?: AbortSignal; onEvent: (e: ChatEvent) => void }): Promise<void> {
+export async function streamChat(messages: SendMessage[], o: { signal?: AbortSignal; onEvent: (e: ChatEvent) => void; chatId?: string | null; keep?: number | null; think?: boolean }): Promise<void> {
   const { data } = await supabase.auth.getSession();
   const headers: Record<string, string> = { 'Content-Type': 'text/plain' };
   if (data.session?.access_token) headers.Authorization = `Bearer ${data.session.access_token}`;
-  const res = await fetch(`${API_URL}/ai/chat`, { method: 'POST', headers, body: JSON.stringify({ messages }), signal: o.signal });
+  const res = await fetch(`${API_URL}/ai/chat`, { method: 'POST', headers, body: JSON.stringify({ messages, chatId: o.chatId ?? undefined, keep: o.keep ?? undefined, think: o.think || undefined }), signal: o.signal });
   if (!res.ok || !(res.headers.get('content-type') ?? '').includes('text/event-stream')) {
     let message = `The assistant is not available (${res.status})`;
     try { const b = await res.json(); if (typeof b?.error === 'string') message = b.error; } catch { /* keep the default */ }

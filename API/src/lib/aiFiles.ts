@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { randomUUID } from 'crypto';
+import { prisma } from './prisma';
 import type Anthropic from '@anthropic-ai/sdk';
 
 // Files in and out of the assistant.
@@ -80,26 +80,65 @@ export async function attachmentBlocks(list: Attachment[]): Promise<Anthropic.Co
   return out;
 }
 
-// ---- Files the assistant makes ----
-type Stored = { repId: string; name: string; mime: string; buffer: Buffer; expires: number };
-const store = new Map<string, Stored>();
-const TTL_MS = 30 * 60 * 1000, MAX_STORE_BYTES = 150 * 1024 * 1024;
+// ---- Reading an attached spreadsheet or CSV as a table (a supplier price list, say) ----
+export type Table = { file: string; sheet: string; sheets: string[]; headerRow: number; headers: string[]; rows: Record<string, unknown>[]; truncated: boolean };
+export class TableError extends Error {}
 
-function purge(now = Date.now()) {
-  for (const [id, f] of store) if (f.expires <= now) store.delete(id);
-  let total = [...store.values()].reduce((s, f) => s + f.buffer.length, 0);
-  for (const [id, f] of store) { if (total <= MAX_STORE_BYTES) break; total -= f.buffer.length; store.delete(id); }   // oldest first
+// A number typed the way people type money: $1,234.50, 12.5%, (45.00), "AUD 8.40". NaN if it is not a number.
+export function parseNumber(v: unknown): number {
+  if (typeof v === 'number') return v;
+  if (v == null) return NaN;
+  let t = String(v).trim(); if (!t) return NaN;
+  const neg = /^\(.*\)$/.test(t) || /^-/.test(t);
+  t = t.replace(/^[-(]+|[)]+$/g, '').replace(/[A-Za-z$€£¥%\s]/g, '');
+  if (/^\d{1,3}(\.\d{3})+,\d{1,2}$/.test(t)) t = t.replace(/\./g, '').replace(',', '.');   // 1.234,50 (European)
+  else if (/^\d+,\d{1,2}$/.test(t) && !t.includes('.')) t = t.replace(',', '.');                   // 12,50
+  else t = t.replace(/,/g, '');
+  const n = Number(t); return Number.isFinite(n) && /\d/.test(t) ? (neg ? -n : n) : NaN;
 }
-export function saveFile(repId: string, f: { name: string; mime: string; buffer: Buffer }, now = Date.now()) {
-  purge(now);
-  const id = randomUUID();
-  store.set(id, { repId, name: f.name, mime: f.mime, buffer: f.buffer, expires: now + TTL_MS });
-  return { id, name: f.name, size: f.buffer.length };
+
+// The header is the first of the top rows that looks like column names: several text cells, mostly text.
+function headerIndex(aoa: unknown[][]): number {
+  for (let i = 0; i < Math.min(aoa.length, 20); i++) {
+    const cells = aoa[i].filter(c => c !== null && c !== undefined && String(c).trim() !== '');
+    if (cells.length >= 2 && cells.filter(c => typeof c === 'string' && Number.isNaN(parseNumber(c))).length / cells.length >= 0.6 && aoa.slice(i + 1, i + 4).some(r => r.some(c => c !== null && String(c).trim() !== ''))) return i;
+  }
+  return 0;
 }
-export function takeFile(repId: string, id: string, now = Date.now()): { name: string; mime: string; buffer: Buffer } | null {
-  purge(now);
-  const f = store.get(id);
-  return f && f.repId === repId ? f : null;   // somebody else's file looks the same as no file
+
+export function readTable(a: Attachment, sheetName?: string): Table {
+  const kind = kindOf(a);
+  if (kind !== 'sheet' && kind !== 'text') throw new TableError(`${a.name} is not a spreadsheet or CSV. For a PDF or image, read it and pass the rows yourself.`);
+  let wb: XLSX.WorkBook;
+  try { wb = XLSX.read(Buffer.from(a.data, 'base64'), { type: 'buffer', cellDates: true }); } catch { throw new TableError(`${a.name} could not be read as a table.`); }
+  const sheets = wb.SheetNames; if (!sheets.length) throw new TableError(`${a.name} has no sheets.`);
+  const wanted = sheetName ? sheets.find(n => n.toLowerCase() === sheetName.toLowerCase()) ?? sheets.find(n => n.toLowerCase().includes(sheetName.toLowerCase())) : sheets.find(n => (XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, blankrows: false }) as unknown[][]).length > 0);
+  if (!wanted) throw new TableError(sheetName ? `${a.name} has no sheet called "${sheetName}". Its sheets are: ${sheets.join(', ')}.` : `${a.name} has nothing in it.`);
+  const aoa = (XLSX.utils.sheet_to_json(wb.Sheets[wanted], { header: 1, raw: true, defval: null, blankrows: false }) as unknown[][]).filter(r => r.some(c => c !== null && String(c).trim() !== ''));
+  if (!aoa.length) throw new TableError(`The sheet "${wanted}" is empty.`);
+  const hi = headerIndex(aoa), seen = new Map<string, number>();
+  const headers = aoa[hi].map((c, i) => { let h = c == null || String(c).trim() === '' ? `Column ${i + 1}` : String(c).trim(); const n = (seen.get(h.toLowerCase()) ?? 0) + 1; seen.set(h.toLowerCase(), n); return n > 1 ? `${h} (${n})` : h; });
+  const MAX = 20000, body = aoa.slice(hi + 1), rows = body.slice(0, MAX).map(r => Object.fromEntries(headers.map((h, i) => [h, r[i] instanceof Date ? (r[i] as Date).toISOString().slice(0, 10) : r[i] ?? null])));
+  return { file: a.name, sheet: wanted, sheets, headerRow: hi + 1, headers, rows, truncated: body.length > MAX };
+}
+
+// ---- Files the assistant makes ----
+// Kept in the database for 30 days, only for the person who asked, so a saved chat can still offer its downloads. Up to
+// 300 MB per person; the oldest go first.
+const MAX_PER_PERSON = 300 * 1024 * 1024;
+
+export async function saveFile(repId: string, f: { name: string; mime: string; buffer: Buffer }): Promise<{ id: string; name: string; size: number }> {
+  const [row] = await prisma.$queryRaw<{ id: string }[]>`insert into crm.ai_files (rep_id, name, mime, data, size) values (${repId}::uuid, ${f.name}, ${f.mime}, ${f.buffer}, ${f.buffer.length}) returning id`;
+  await prisma.$queryRaw`delete from crm.ai_files where rep_id = ${repId}::uuid and created_at < now() - interval '30 days'`;
+  await prisma.$queryRaw`
+    delete from crm.ai_files where rep_id = ${repId}::uuid and id in (
+      select id from (select id, sum(size) over (order by created_at desc, id) as running from crm.ai_files where rep_id = ${repId}::uuid) t where running > ${MAX_PER_PERSON})`;
+  return { id: row.id, name: f.name, size: f.buffer.length };
+}
+export async function takeFile(repId: string, id: string): Promise<{ name: string; mime: string; buffer: Buffer } | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+  const [r] = await prisma.$queryRaw<{ name: string; mime: string; data: Uint8Array }[]>`select name, mime, data from crm.ai_files where id = ${id}::uuid and rep_id = ${repId}::uuid and created_at > now() - interval '30 days'`;
+  return r ? { name: r.name, mime: r.mime, buffer: Buffer.from(r.data) } : null;   // somebody else's file looks the same as no file
 }
 
 export type OutFormat = 'xlsx' | 'csv' | 'docx' | 'pdf';

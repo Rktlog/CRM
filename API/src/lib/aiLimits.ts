@@ -12,23 +12,29 @@ export type AiSettings = {
   monthlyUsd: number;        // 0 = no dollar limit
   usdPerMInput: number;      // dollars per million input tokens. Use the dearest model's price, so the limit errs on the safe side
   usdPerMOutput: number;
+  thinkingBudgetTokens: number;  // how much Claude may think before answering when "Think harder" is on
+  chatRetentionDays: number;     // saved chats older than this are deleted. 0 = keep them
+  instructions: string;          // the company's own instructions for the assistant (tone, rules, terms), up to 4,000 characters
 };
-export const DEFAULTS: AiSettings = { enabled: true, maxReplyTokens: 2000, perRequestTokens: 120_000, userDailyTokens: 300_000, monthlyTokens: 3_000_000, monthlyUsd: 0, usdPerMInput: 0, usdPerMOutput: 0 };
+export const DEFAULTS: AiSettings = { enabled: true, maxReplyTokens: 4000, perRequestTokens: 120_000, userDailyTokens: 300_000, monthlyTokens: 3_000_000, monthlyUsd: 0, usdPerMInput: 0, usdPerMOutput: 0, thinkingBudgetTokens: 8000, chatRetentionDays: 90, instructions: '' };
+export const MAX_INSTRUCTIONS = 4000;
 
-const FIELDS: { key: Exclude<keyof AiSettings, 'enabled'>; label: string; lo: number; hi: number }[] = [
-  { key: 'maxReplyTokens', label: 'Longest reply', lo: 100, hi: 4000 },
+const FIELDS: { key: Exclude<keyof AiSettings, 'enabled' | 'instructions'>; label: string; lo: number; hi: number }[] = [
+  { key: 'maxReplyTokens', label: 'Longest reply', lo: 100, hi: 16000 },
   { key: 'perRequestTokens', label: 'Tokens per question', lo: 2000, hi: 200_000 },
   { key: 'userDailyTokens', label: 'Tokens per person per day', lo: 1000, hi: 5_000_000 },
   { key: 'monthlyTokens', label: 'Tokens per month', lo: 10_000, hi: 500_000_000 },
   { key: 'monthlyUsd', label: 'Monthly dollar limit', lo: 0, hi: 100_000 },
   { key: 'usdPerMInput', label: 'Price per million input tokens', lo: 0, hi: 1000 },
   { key: 'usdPerMOutput', label: 'Price per million output tokens', lo: 0, hi: 1000 },
+  { key: 'thinkingBudgetTokens', label: 'Thinking budget when Think harder is on', lo: 1024, hi: 32000 },
+  { key: 'chatRetentionDays', label: 'Days to keep saved chats (0 keeps them)', lo: 0, hi: 3650 },
 ];
 
 // From the stored rows. Anything missing or out of range falls back, so a bad row can never switch the limits off.
 export function parseSettings(rows: { key: string; value: string }[]): AiSettings {
   const m = new Map(rows.map(r => [r.key, r.value]));
-  const out: AiSettings = { ...DEFAULTS, enabled: m.has('enabled') ? m.get('enabled') === 'true' : DEFAULTS.enabled };
+  const out: AiSettings = { ...DEFAULTS, enabled: m.has('enabled') ? m.get('enabled') === 'true' : DEFAULTS.enabled, instructions: (m.get('instructions') ?? '').slice(0, MAX_INSTRUCTIONS) };
   for (const f of FIELDS) {
     const v = Number(m.get(f.key));
     if (m.has(f.key) && Number.isFinite(v) && v >= f.lo && v <= f.hi) out[f.key] = v;
@@ -40,7 +46,9 @@ export function parseSettings(rows: { key: string; value: string }[]): AiSetting
 export function validateSettings(raw: unknown): AiSettings {
   const o = (raw ?? {}) as Record<string, unknown>;
   if (typeof o.enabled !== 'boolean') throw new Error('Say whether the assistant is on or off');
-  const out: AiSettings = { ...DEFAULTS, enabled: o.enabled };
+  const instructions = o.instructions === undefined || o.instructions === null ? '' : String(o.instructions).trim();
+  if (instructions.length > MAX_INSTRUCTIONS) throw new Error(`Instructions are too long: ${instructions.length.toLocaleString('en-AU')} characters, and the most is ${MAX_INSTRUCTIONS.toLocaleString('en-AU')}`);
+  const out: AiSettings = { ...DEFAULTS, enabled: o.enabled, instructions };
   for (const f of FIELDS) {
     const v = Number(o[f.key]);
     if (!Number.isFinite(v) || v < f.lo || v > f.hi) throw new Error(`${f.label} must be between ${f.lo.toLocaleString('en-AU')} and ${f.hi.toLocaleString('en-AU')}`);
@@ -85,7 +93,7 @@ export async function loadUsage(repId: string, today: string): Promise<Usage> {
 }
 
 export async function saveSettings(s: AiSettings, repId: string): Promise<void> {
-  const rows: [string, string][] = [['enabled', String(s.enabled)], ...FIELDS.map(f => [f.key, String(s[f.key])] as [string, string])];
+  const rows: [string, string][] = [['enabled', String(s.enabled)], ['instructions', s.instructions], ...FIELDS.map(f => [f.key, String(s[f.key])] as [string, string])];
   for (const [key, value] of rows) {
     await prisma.$executeRaw`insert into crm.ai_settings (key, value, updated_by) values (${key}, ${value}, ${repId}::uuid)
       on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`;

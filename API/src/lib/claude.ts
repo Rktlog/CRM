@@ -29,19 +29,31 @@ export async function ask(o: { system: string; user: string; fast?: boolean; max
 // One turn of a conversation that may use tools. The caller runs the tools and calls again until Claude is done.
 // With onText the words arrive as they are written (streaming); without it the whole turn comes back at once.
 // The system prompt is marked cacheable, so it is read cheaply from the second turn on.
+// think: let Claude reason before it answers ("Think harder"). Models differ in how they want this asked for, so it tries the
+// current way first, then the older way with a token budget, and only then answers without it.
+const isThinkingRejected = (e: unknown) => e instanceof Anthropic.APIError && e.status === 400 && /thinking/i.test(String(e.message));
 export async function chatTurn(o: {
   system: string; messages: Anthropic.MessageParam[]; tools: Anthropic.Tool[]; maxTokens: number;
-  onText?: (delta: string) => void; signal?: AbortSignal;
+  onText?: (delta: string) => void; signal?: AbortSignal; think?: { budget: number };
 }): Promise<Anthropic.Message> {
-  const params = {
-    model: SMART(), max_tokens: o.maxTokens, tools: o.tools, messages: o.messages,
-    system: [{ type: 'text' as const, text: o.system, cache_control: { type: 'ephemeral' as const } }],
-  };
+  const budget = Math.max(1024, o.think?.budget ?? 0);
+  const modes: ({ type: 'adaptive' } | { type: 'enabled'; budget_tokens: number } | null)[] = o.think ? [{ type: 'adaptive' }, { type: 'enabled', budget_tokens: budget }, null] : [null];
   const opts = o.signal ? { signal: o.signal } : undefined;
-  if (!o.onText) return getClient().messages.create(params, opts);
-  const stream = getClient().messages.stream(params, opts);
-  stream.on('text', (delta: string) => o.onText!(delta));
-  return stream.finalMessage();
+  for (let i = 0; i < modes.length; i++) {
+    const th = modes[i];
+    const params: any = {
+      model: SMART(), max_tokens: th && th.type === 'enabled' ? o.maxTokens + th.budget_tokens : o.maxTokens, tools: o.tools, messages: o.messages,
+      system: [{ type: 'text' as const, text: o.system, cache_control: { type: 'ephemeral' as const } }],
+      ...(th ? { thinking: th } : {}),
+    };
+    try {
+      if (!o.onText) return await getClient().messages.create(params, opts);
+      const stream = getClient().messages.stream(params, opts);
+      stream.on('text', (delta: string) => o.onText!(delta));
+      return await stream.finalMessage();
+    } catch (e) { if (th && i < modes.length - 1 && isThinkingRejected(e)) continue; throw e; }
+  }
+  throw new Error('unreachable');
 }
 export const smartModel = SMART;
 

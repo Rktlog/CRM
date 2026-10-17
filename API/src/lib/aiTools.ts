@@ -7,8 +7,12 @@ import { wholesalePrice } from './pricing';
 import { PRODUCT_STATUSES, isStatusKey, statusLabel } from './productImport';
 import { DATASETS, parseDefinition, runReport, ReportInputError } from './customReport';
 import { reportWorkbook } from './customReportXlsx';
-import { safeFilename, toCsv, OutFormat } from './aiFiles';
+import { safeFilename, toCsv, OutFormat, Attachment } from './aiFiles';
 import { parseMarkdown, withTitle, renderDocx, renderPdf, DocsMissingError } from './aiDocs';
+import { runCalculations, CalcError } from './aiCalc';
+import { runDataset, DataError, DATA_HELP, DATA_KEYS } from './aiData';
+import { accountDetails, orderDetails } from './aiDetail';
+import { renderChart, specFromRows, ChartError, ChartSpec, ChartType } from './aiChart';
 import * as XLSX from 'xlsx';
 
 // What the assistant can look up. Read only: it can read what the person asking can already see, and change nothing.
@@ -17,7 +21,9 @@ import * as XLSX from 'xlsx';
 export type MadeFile = { id: string; name: string; size: number };
 export type Ctx = {
   rep: { id: string; role: string }; today: string;
-  addFile?: (f: { name: string; mime: string; buffer: Buffer }) => MadeFile;   // keeps a file the assistant made, for the person to download
+  addFile?: (f: { name: string; mime: string; buffer: Buffer }) => Promise<MadeFile>;   // keeps a file the assistant made, for the person to download
+  addChart?: (c: { title: string; svg: string }) => void;                      // shows a chart in the chat
+  attachments?: Attachment[];                                                  // the files the person has attached in this chat, for the data sets that read them
 };
 
 const DATASET_HELP = Object.entries(DATASETS).map(([k, d]) =>
@@ -30,9 +36,14 @@ export const TOOLS: Anthropic.Tool[] = [
     input_schema: { type: 'object', properties: { query: { type: 'string', description: 'Part of the customer name, at least 2 letters' } }, required: ['query'] },
   },
   {
-    name: 'account_summary',
-    description: 'Everything useful about one account: contact name, status, spend, recent orders, open quotes and the latest notes the team logged. Needs an account id from find_accounts. It does not have phone numbers or email addresses.',
-    input_schema: { type: 'object', properties: { accountId: { type: 'string' } }, required: ['accountId'] },
+    name: 'account_details',
+    description: 'EVERYTHING saved about one customer, in one go: contact details, status, balance owing and unpaid invoices, open quotes, recent orders, credit held, the team notes, emails logged on them, marketing emails sent to them, planner tasks and what they buy most. Use it whenever someone asks about a customer. Give the customer name, or an id from find_accounts. If several customers match, it returns the choices.',
+    input_schema: { type: 'object', properties: { customer: { type: 'string', description: 'The customer name (part of it is fine) or an id' } }, required: ['customer'] },
+  },
+  {
+    name: 'order_details',
+    description: 'EVERYTHING saved about one order: the customer and contact, status, what has been paid and what is owing, the invoices and credit notes, held prepayment, the follow-up schedule, every line, the team log on the order and emails that mention it. Use it whenever someone asks about a particular order or quote. Give the order number, like SQ37604.',
+    input_schema: { type: 'object', properties: { orderNo: { type: 'string', description: 'The order number, like SQ37604' } }, required: ['orderNo'] },
   },
   {
     name: 'open_quotes',
@@ -79,6 +90,7 @@ Dates are YYYY-MM-DD. Adding up (groupBy) totals the number and money columns fo
         format: { type: 'string', enum: ['xlsx', 'csv', 'docx', 'pdf'] },
         markdown: { type: 'string', description: 'For docx and pdf: the full text of the document in markdown. The first # heading becomes the title.' },
         report: { type: 'object', description: 'A report definition: dataset, columns, filters, groupBy, sort' },
+        data: { type: 'object', description: 'Or write a query_data data set to the file, every row of it: { dataset, args }', properties: { dataset: { type: 'string', enum: DATA_KEYS }, args: { type: 'object' } } },
         sheets: {
           type: 'array',
           items: { type: 'object', properties: { name: { type: 'string' }, header: { type: 'array', items: { type: 'string' } }, rows: { type: 'array', items: { type: 'array', items: {} } } }, required: ['header', 'rows'] },
@@ -87,11 +99,69 @@ Dates are YYYY-MM-DD. Adding up (groupBy) totals the number and money columns fo
       required: ['filename'],
     },
   },
+  {
+    name: 'query_data',
+    description: `Read any other part of the CRM's saved data: balances owing, unpaid invoices, orders to ship, quotes, the team log, the planner, credit, stock on order, conversion, the team and targets. It reads only what the person can see. Returns a summary and the first rows.
+${DATA_HELP}
+Put the options in args, for example {"dataset":"balances_owing","args":{"state":"VIC","minDaysOverdue":30}}. For sales lines, products and customers use run_report.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        dataset: { type: 'string', enum: DATA_KEYS },
+        args: { type: 'object', description: 'The options listed for that dataset' },
+        limit: { type: 'number', description: 'How many rows to return, up to 100. Default 40. The summary always covers every row.' },
+      },
+      required: ['dataset'],
+    },
+  },
+  {
+    name: 'make_chart',
+    description: 'Draw a chart in the chat: column, bar (horizontal, good for long names), stacked_column, line or pie. Either give the labels and numbers yourself (series), or point it at data and it reads every row for you, which is better for anything big: data = { dataset and args (as query_data) or report (as run_report), labelColumn, valueColumns, or seriesColumn plus valueColumn to make one line or bar group per brand, state and so on, sortBy, top }. Column names are the keys shown in the data\'s columns. Use it whenever a picture would help: trends, comparisons, shares of a total.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', enum: ['column', 'bar', 'stacked_column', 'line', 'pie'] }, title: { type: 'string' },
+        labels: { type: 'array', items: { type: 'string' } }, series: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, values: { type: 'array', items: { type: ['number', 'null'] } } }, required: ['name', 'values'] } },
+        format: { type: 'string', enum: ['number', 'money', 'percent'] }, xLabel: { type: 'string' }, yLabel: { type: 'string' },
+        data: {
+          type: 'object',
+          properties: {
+            dataset: { type: 'string', enum: DATA_KEYS }, args: { type: 'object' }, report: { type: 'object' },
+            labelColumn: { type: 'string' }, valueColumns: { type: 'array', items: { type: 'string' } }, seriesColumn: { type: 'string' }, valueColumn: { type: 'string' },
+            sortBy: { type: 'string', enum: ['value', 'label', 'none'] }, top: { type: 'number' },
+          },
+        },
+      },
+      required: ['type'],
+    },
+  },
+  {
+    name: 'calculate',
+    description: `Exact arithmetic. Use it for every calculation beyond a trivial one (totals, percentages, averages, growth, margins, GST, repayments, anything with several steps). Never work such numbers out yourself.
+Give a list of calculations, in order. Name a result (name) to use it in later ones. Each expression uses numbers, + - * / ^, brackets, a % after a number (12% is 0.12), pi and e, and these functions: abs, sqrt, pow, exp, ln, log (base 10), floor, ceil, trunc, round(x, decimals), mod, min, max, sum, count, mean (or avg), median, stdev (sample), stdevp, variance, pct(part, whole) as a percent, change(old, new) as a percent, cagr(start, end, years) as a fraction, pmt(rate, periods, amount), exgst(x), incgst(x), gst(x) for Australian GST at 10%.
+Example: [{ "name": "ex", "expr": "exgst(1230.02)" }, { "label": "Margin %", "expr": "round(pct(ex - 700, ex), 1)" }]. Round money with round(x, 2).`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        calculations: {
+          type: 'array',
+          items: { type: 'object', properties: { name: { type: 'string', description: 'Optional. Lets later calculations use this result.' }, label: { type: 'string' }, expr: { type: 'string' } }, required: ['expr'] },
+        },
+      },
+      required: ['calculations'],
+    },
+  },
 ];
 
 const LIMIT_CHARS = 7000;
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
 const out = (v: unknown, max = LIMIT_CHARS) => { const s = JSON.stringify(v); return s.length > max ? `${s.slice(0, max)}…(cut: ask for something narrower)` : s; };
+// A result that is too big is trimmed by whole rows, so what Claude reads is always valid JSON, and it is told how many it got.
+function fitRows(build: (rows: unknown[], cut: boolean) => object, all: unknown[], max = 24000): string {
+  let n = all.length, payload = build(all.slice(0, n), false);
+  while (JSON.stringify(payload).length > max && n > 1) { n = Math.max(1, Math.floor(n * 0.8)); payload = build(all.slice(0, n), true); }
+  return JSON.stringify(payload);
+}
 const day = (d: Date | string | null | undefined) => (d ? new Date(d).toISOString().slice(0, 10) : null);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -115,23 +185,13 @@ export async function runTool(name: string, input: any, ctx: Ctx): Promise<strin
         const st = await statuses(accounts.map(a => a.id));
         return out({ matches: accounts.map(a => ({ id: a.id, name: a.name, state: a.region, status: st.get(a.id) ?? null, hiddenFromLists: a.archived, lastOrder: day(a.lastOrderAt), spend365: a.spend365 })) });
       }
-      case 'account_summary': {
-        const id = String(input?.accountId ?? '');
-        if (!UUID.test(id)) return out({ error: 'accountId must come from find_accounts' });
-        const a = await prisma.account.findUnique({ where: { id }, select: { id: true, name: true, region: true, repId: true, contactName: true, type: true, spend30: true, spend90: true, spend365: true, lastOrderAt: true, rep: { select: { name: true } } } });
-        if (!a || !(await canSeeAccount(ctx.rep, a))) return out({ error: 'That account is not available to you' });
-        const [st, activity, quotes] = await Promise.all([
-          statuses([id]),
-          prisma.activity.findMany({ where: { accountId: id }, orderBy: { occurredAt: 'desc' }, take: 8, select: { type: true, note: true, occurredAt: true, rep: { select: { name: true } } } }),
-          prisma.quote.findMany({ where: { accountId: id, source: { not: 'rhino-history' }, NOT: { number: { startsWith: 'Q' } } }, orderBy: { sentAt: 'desc' }, take: 10, select: { number: true, sentAt: true, fulfillmentStatus: true, total: true, amount: true } }),
-        ]);
-        const open = ['DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING'];
-        return out({
-          name: a.name, state: a.region, rep: a.rep?.name ?? null, status: st.get(id) ?? null, contactName: a.contactName,   // phone and email are deliberately not sent to Claude
-          spend: { last30days: a.spend30, last90days: a.spend90, last365days: a.spend365 }, lastOrder: day(a.lastOrderAt),
-          recentOrders: quotes.map(q => ({ number: q.number, date: day(q.sentAt), status: q.fulfillmentStatus, totalIncGst: q.total ?? q.amount, open: open.includes((q.fulfillmentStatus ?? '').toUpperCase()) })),
-          recentNotes: activity.map(x => ({ date: day(x.occurredAt), type: x.type, by: x.rep?.name ?? null, note: clip(x.note, 300) })),
-        });
+      case 'account_details': {
+        try { return await accountDetails(ctx, input?.customer ?? input?.accountId); }
+        catch (e) { if (e instanceof DataError) return out({ error: e.message }); throw e; }
+      }
+      case 'order_details': {
+        try { return await orderDetails(ctx, input?.orderNo); }
+        catch (e) { if (e instanceof DataError) return out({ error: e.message }); throw e; }
       }
       case 'open_quotes': {
         const state = String(input?.state ?? '').trim().toUpperCase();
@@ -162,7 +222,8 @@ export async function runTool(name: string, input: any, ctx: Ctx): Promise<strin
           const def = parseDefinition(input);
           const r = await runReport(def, ctx.rep, ctx.today);
           const limit = Math.min(Math.max(Math.floor(Number(input?.limit)) || 40, 1), 100);
-          return out({ total: r.total, showing: Math.min(r.total, limit), columns: r.columns.map(c => ({ key: c.key, label: c.label })), rows: r.rows.slice(0, limit) }, 14000);
+          const cols = r.columns.map(c => ({ key: c.key, label: c.label }));
+          return fitRows((rows, cut) => ({ total: r.total, showing: rows.length, ...(cut ? { note: 'Cut to fit: ask for fewer columns or group the data' } : {}), columns: cols, rows }), r.rows.slice(0, limit));
         } catch (e) {
           if (e instanceof ReportInputError) return out({ error: e.message });
           throw e;
@@ -182,6 +243,20 @@ export async function runTool(name: string, input: any, ctx: Ctx): Promise<strin
             const { blocks, title } = withTitle(parseMarkdown(md), filename.replace(/\.(docx|pdf)$/, '').replace(/-/g, ' '));
             buffer = format === 'docx' ? await renderDocx(blocks, { title, on: ctx.today }) : await renderPdf(blocks, { title, on: ctx.today });
             rows = blocks.length;
+          } else if (input?.data) {
+            const r = await runDataset(input.data.dataset, input.data.args, ctx);
+            const rows2 = r.rows.slice(0, 20000);
+            rows = rows2.length;
+            const header = r.columns.map(c => c.label), body = rows2.map(x => r.columns.map(c => x[c.key] ?? ''));
+            if (format === 'csv') buffer = Buffer.from(toCsv(header, body), 'utf8');
+            else {
+              const wb = XLSX.utils.book_new();
+              const ws = XLSX.utils.aoa_to_sheet([header, ...body]);
+              ws['!cols'] = header.map(h => ({ wch: Math.min(40, Math.max(10, h.length + 2)) }));
+              XLSX.utils.book_append_sheet(wb, ws, 'Data');
+              XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['About this export'], ['Data set', String(input.data.dataset)], ['Options', JSON.stringify(input.data.args ?? {})], ['Rows', rows2.length], ['Made', ctx.today], ['By', 'CRM assistant']]), 'About this export');
+              buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+            }
           } else if (input?.report) {
             const def = parseDefinition(input.report);
             const r = await runReport(def, ctx.rep, ctx.today);
@@ -208,13 +283,49 @@ export async function runTool(name: string, input: any, ctx: Ctx): Promise<strin
               }
               buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
             }
-          } else return out({ error: 'Give either a report or sheets to put in the file' });
+          } else return out({ error: 'Give a report, a data set, or sheets to put in the file' });
         } catch (e) {
-          if (e instanceof ReportInputError || e instanceof DocsMissingError) return out({ error: e.message });
+          if (e instanceof ReportInputError || e instanceof DocsMissingError || e instanceof DataError) return out({ error: e.message });
           throw e;
         }
-        const f = ctx.addFile({ name: filename, mime, buffer });
+        const f = await ctx.addFile({ name: filename, mime, buffer });
         return out({ created: f.name, ...(format === 'docx' || format === 'pdf' ? {} : { rows }), note: 'The person can download it from the chat. Do not paste its contents.' });
+      }
+      case 'query_data': {
+        try {
+          const r = await runDataset(input?.dataset, input?.args, ctx);
+          const limit = Math.min(Math.max(Math.floor(Number(input?.limit)) || 40, 1), 100);
+          const keys = r.columns.map(c => c.key);
+          return fitRows((rows, cut) => ({ dataset: input.dataset, summary: r.summary ?? {}, total: r.rows.length, showing: rows.length, ...(cut ? { note: 'Cut to fit: ask for a narrower question (one state, one customer)' } : {}), columns: keys, rows }), r.rows.slice(0, limit));
+        } catch (e) {
+          if (e instanceof DataError) return out({ error: e.message });
+          throw e;
+        }
+      }
+      case 'make_chart': {
+        if (!ctx.addChart) return out({ error: 'Charts cannot be shown here' });
+        try {
+          const type = input?.type as ChartType; let spec: ChartSpec;
+          if (input?.data && typeof input.data === 'object') {
+            const d = input.data as Record<string, any>; let columns: { key: string; label: string }[], rows: Record<string, unknown>[];
+            if (d.report) { const def = parseDefinition(d.report), r = await runReport(def, ctx.rep, ctx.today); columns = r.columns.map(c => ({ key: c.key, label: c.label })); rows = r.rows as Record<string, unknown>[]; }
+            else if (d.dataset) { const r = await runDataset(d.dataset, d.args, ctx); columns = r.columns; rows = r.rows; }
+            else return out({ error: 'data needs a dataset (and args) or a report' });
+            const col = (n: unknown) => { const w = String(n ?? '').trim().toLowerCase(); return columns.find(c => c.key.toLowerCase() === w)?.key ?? columns.find(c => c.label.toLowerCase() === w)?.key ?? String(n ?? ''); };
+            const labelOf = (key: string) => columns.find(c => c.key === key)?.label ?? key;
+            spec = specFromRows({ rows, type, title: input.title, labelColumn: col(d.labelColumn), valueColumns: Array.isArray(d.valueColumns) ? d.valueColumns.map(col) : undefined, seriesColumn: d.seriesColumn ? col(d.seriesColumn) : undefined, valueColumn: d.valueColumn ? col(d.valueColumn) : undefined, sortBy: d.sortBy, top: d.top, format: input.format, xLabel: input.xLabel, yLabel: input.yLabel, labelOf });
+          } else spec = { type, title: input?.title, labels: input?.labels, series: input?.series, format: input?.format, xLabel: input?.xLabel, yLabel: input?.yLabel };
+          const svg = renderChart(spec);
+          ctx.addChart({ title: spec.title ?? 'Chart', svg });
+          return out({ drawn: true, title: spec.title ?? null, points: spec.labels.length, series: spec.series.map(s => s.name), note: 'The chart is shown in the chat. Describe what it shows; do not repeat all the numbers.' });
+        } catch (e) {
+          if (e instanceof ChartError || e instanceof ReportInputError || e instanceof DataError) return out({ error: e.message });
+          throw e;
+        }
+      }
+      case 'calculate': {
+        try { return out({ results: runCalculations(input?.calculations) }); }
+        catch (e) { if (e instanceof CalcError) return out({ error: e.message }); throw e; }
       }
       default:
         return out({ error: `Unknown tool ${name}` });

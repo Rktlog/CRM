@@ -64,7 +64,7 @@ export default function GmailCard({ go = (url: string) => window.location.assign
   const connect = () => run('connect', async () => { const r = await apiGet('/gmail/connect'); go(r.url); });
   const syncNow = () => run('sync', async () => {
     const r = await apiPost('/gmail/sync', {});
-    setMsg(r.status === 'ok' ? { ok: true, text: `Checked. ${r.saved === 1 ? '1 new email' : `${r.saved} new emails`} logged${r.remaining ? `, ${r.remaining} more still to look through` : ''}.` }
+    setMsg(r.status === 'ok' ? { ok: true, text: `Checked. ${r.saved === 1 ? '1 new email' : `${r.saved} new emails`} logged${r.removed ? `, ${r.removed === 1 ? '1 email' : `${r.removed} emails`} removed because you marked ${r.removed === 1 ? 'it' : 'them'} Private` : ''}${r.remaining ? `, ${r.remaining} more still to look through` : ''}.` }
       : r.status === 'paused' ? { ok: false, text: 'Logging is paused. Switch it on first.' } : { ok: false, text: r.error ?? 'Could not check your email just now.' });
   });
   const setLogging = (on: boolean) => run('logging', async () => { await apiPatch('/gmail/settings', { loggingEnabled: on }); setMsg({ ok: true, text: on ? 'Logging is on.' : 'Logging is paused. Nothing new will be logged until you switch it back on.' }); });
@@ -94,7 +94,8 @@ export default function GmailCard({ go = (url: string) => window.location.assign
             Connect your Gmail so emails to and from your customers are logged on their accounts. The CRM can only <b>read</b> your email, and it keeps
             only emails to or from an address already in the CRM: who it was between, the subject, the date and a short preview. It never keeps the
             message itself, and it ignores everything else, including newsletters. Anyone who can see that customer's account in the CRM (the team for
-            that state, and managers) will see those emails' subjects and previews. You can pause it or disconnect at any time.
+            that state, and managers) will see those emails' subjects and previews. You can pause it or disconnect at any time. To keep any email or
+            conversation out, give it the Gmail label <b>Private</b>: it is never saved.
           </div>
           <button className="btn" disabled={!!busy} onClick={connect}>{connectLabel}</button>
         </>
@@ -120,6 +121,10 @@ export default function GmailCard({ go = (url: string) => window.location.assign
             <span><b>Keep a short preview of each email</b></span>
           </label>
           <div className="acct-region" style={{ margin: '0 0 10px 24px' }}>The first line or two, so the account page shows what it was about. Off keeps only the subject.</div>
+          <div className="acct-region" style={{ margin: '0 0 12px', maxWidth: 640 }}>
+            <b>Keep an email out.</b> In Gmail, make a label called <b>Private</b> and put it on the email, or on the whole conversation. It is never saved here,
+            and if it was saved before it is removed the next time the CRM checks (within about 15 minutes). Nobody else can see which emails you marked.
+          </div>
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button className="btn secondary" disabled={!!busy || problem} onClick={syncNow}>{busy === 'sync' ? 'Checking…' : 'Check for new emails now'}</button>

@@ -119,6 +119,26 @@ export async function listMessageIds(accessToken: string, q: string, maxPages = 
   return ids;
 }
 
+// The Gmail label people use to keep an email, or a whole conversation, out of the CRM. They make it themselves in Gmail.
+// It is never saved, and if it was saved before it is removed. GMAIL_PRIVATE_LABELS can name others, separated by commas.
+export const privateLabels = (): string[] => (process.env.GMAIL_PRIVATE_LABELS || 'Private').split(',').map(s => s.trim()).filter(Boolean);
+const labelTerm = (name: string) => `label:${name.toLowerCase().replace(/\s+/g, '-')}`;   // how Gmail's search spells a label
+export const privateSearch = () => privateLabels().map(labelTerm).join(' OR ');                // finds them
+export const privateExclusion = () => privateLabels().map(n => `-${labelTerm(n)}`).join(' ');   // leaves them out
+
+// Every message carrying a private label, with its conversation, so the whole conversation can be left out. Spam and trash
+// are included so nothing is missed.
+export async function listPrivateMessages(accessToken: string, maxPages = 6): Promise<{ id: string; threadId: string }[]> {
+  const out: { id: string; threadId: string }[] = []; let pageToken = '';
+  for (let i = 0; i < maxPages; i++) {
+    const p = new URLSearchParams({ q: `(${privateSearch()})`, maxResults: '500', includeSpamTrash: 'true' }); if (pageToken) p.set('pageToken', pageToken);
+    const b = await parse(await fetchImpl(`${API}/messages?${p}`, auth(accessToken)));
+    for (const m of b.messages ?? []) out.push({ id: m.id, threadId: m.threadId });
+    pageToken = b.nextPageToken ?? ''; if (!pageToken) break;
+  }
+  return out;
+}
+
 export type GmailMeta = { id: string; threadId: string; labelIds: string[]; snippet: string; internalDate: string; headers: Record<string, string> };
 const HEADERS = ['From', 'To', 'Cc', 'Subject', 'Date', 'List-Unsubscribe', 'Precedence', 'Auto-Submitted'];
 // Only the headers: never the body of the email. null if it has been deleted since.
