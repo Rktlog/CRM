@@ -8,6 +8,11 @@ import { syncRep, syncAll } from '../lib/gmail/sync';
 // Gmail: each rep connects THEIR OWN mailbox (read only). Emails to or from a customer already in the CRM are
 // logged on that customer's account. Only the people, subject, date and a short preview: never the body.
 export const gmailRouter = Router();
+
+// The rep's email only pre-fills Google's account chooser, so if it can't be found the connection still works without it.
+async function repEmail(repId: string): Promise<string | null> {
+  try { return (await prisma.rep.findUnique({ where: { id: repId }, select: { email: true } }))?.email ?? null; } catch { return null; }
+}
 const uuid = (v: unknown) => typeof v === 'string' && /^[0-9a-f-]{36}$/i.test(v);
 
 // GET /gmail/status -> the signed-in rep's connection. Never includes any token.
@@ -24,8 +29,7 @@ gmailRouter.get('/status', async (req, res) => {
 // GET /gmail/connect -> { url }: where to send the rep to approve access on Google's own page.
 gmailRouter.get('/connect', async (req, res) => {
   if (!gmailConfigured()) return res.status(400).json({ error: 'Gmail is not set up on the server yet', missing: missingSetup() });
-  const [r] = await prisma.$queryRaw<{ email: string | null }[]>`select email from crm.reps where id = ${req.rep!.id}::uuid`;
-  res.json({ url: authUrl(signState(req.rep!.id), r?.email) });
+  res.json({ url: authUrl(signState(req.rep!.id), await repEmail(req.rep!.id)) });
 });
 
 // PATCH /gmail/settings { loggingEnabled?, savePreview? }

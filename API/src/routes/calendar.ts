@@ -36,7 +36,8 @@ calendarRouter.get('/status', async (req, res) => {
 calendarRouter.get('/connect', async (req, res) => {
   const cfg = calendarOauthConfig();
   if (!calendarConfigured() || !cfg) return res.status(400).json({ error: 'Google Calendar is not set up on the server yet', missing: calendarMissingSetup() });
-  const rep = await prisma.rep.findUnique({ where: { id: req.rep!.id }, select: { email: true } });
+  // The email only pre-fills Google's account chooser, so if it can't be found the connection still works without it.
+  const rep = await prisma.rep.findUnique({ where: { id: req.rep!.id }, select: { email: true } }).catch(() => null);
   res.json({ url: authUrlFor({ scopes: CALENDAR_SCOPES, redirectUri: cfg.redirectUri, state: signState(req.rep!.id), loginHint: rep?.email }) });
 });
 
