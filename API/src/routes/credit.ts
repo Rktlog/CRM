@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { canSeeAccount, territoryWhere } from '../lib/territory';
+import { dearGet } from '../sync/dearClient';
+import { readDearPayments, type DearPayments } from '../lib/dearPayments';
 
 // Credit.
 //   - Reservations: the team sets credit aside by hand: a name, an amount, the credit
@@ -12,6 +14,10 @@ import { canSeeAccount, territoryWhere } from '../lib/territory';
 //   - The Credit page: every credit note on account, every reservation (one row each,
 //     with its status) and every credit movement (issued, applied, refunded).
 // The credit itself is always applied in DEAR; the CRM only records the plan.
+// Prepaid money can be reserved from ANY order, open or finished, except an order that is complete in full (its
+// prepayment has been used by that order). Money on an open order is checked against DEAR itself before it is reserved.
+// An order the customer no longer wants (for example a backorder they have dropped) can also be RELEASED: it then
+// moves to "To apply in DEAR" to be applied or refunded. Releasing is checked against DEAR itself too.
 
 export const creditRouter = Router();
 
@@ -200,21 +206,26 @@ export async function loadMovements(rep: Rep, f: CreditFilters): Promise<{ rows:
 // ---------- Money held on orders that is NOT a credit note ----------
 // The sync also counts a prepayment that hasn't been applied to an invoice yet (a customer
 // who paid up front for an order) and an order that is overpaid. One row per order and kind.
-//   A prepayment on a FINISHED or CANCELLED order (completed, credited, closed, voided) is spare
-//   money: the order no longer needs it, so the sales team can RESERVE it for this customer's next
-//   order. Money on an OPEN order stays with that order until it is cancelled or finished. Overpaid
-//   money is shown but not reservable.
+//   Any prepayment can be RESERVED for this customer's next order, whatever state the order is in (open, part
+//   shipped, backordered, credited, closed, voided), EXCEPT on an order that is complete in full: that order has
+//   used its prepayment. Overpaid money is shown but not reservable. A prepayment on an open order is checked
+//   against DEAR before it is reserved, and the order stops counting it as paid (see Open Quotes).
 export type HeldRow = {
   id: string; number: string; accountId: string; account: string; region: string; rep: string | null;
   status: string; orderDate: string | null; kind: 'Prepayment' | 'Overpaid'; amount: number;
-  finished: boolean;     // completed, credited, closed or cancelled: the order no longer needs the money
+  finished: boolean;     // completed, credited, closed, cancelled or released: the order no longer needs the money
   cancelled: boolean;
-  reservable: boolean;   // a prepayment on a finished or cancelled order
+  completeInFull: boolean;   // the order is completed: its prepayment has been used by it
+  reservable: boolean;   // a prepayment on any order that is not complete in full
   reserved: number;      // of this prepayment, set aside and not yet used or released
   free: number;          // still free to reserve
+  released: boolean;     // an open order the customer no longer wants: its prepayment has been freed by hand
+  releaseNote: string | null;
+  dearSaleId: string | null;
 };
 const isCancelled = (status: string) => /^VOIDED/i.test(status.trim());
 const isFinished = (status: string) => /^(COMPLETED|CREDITED|CLOSED|VOIDED)/i.test(status.trim());
+const isComplete = (status: string) => /^COMPLETED/i.test(status.trim());   // complete in full
 
 export async function loadHeld(rep: Rep, f: CreditFilters, accountId?: string): Promise<HeldRow[]> {
   const ids = await scopeIds(rep);
@@ -224,14 +235,15 @@ export async function loadHeld(rep: Rep, f: CreditFilters, accountId?: string): 
     const like = `%${f.q}%`;
     w.push(Prisma.sql`(a.name ilike ${like} or q.number ilike ${like})`);
   }
-  const rows = await prisma.$queryRaw<(Omit<HeldRow, 'finished' | 'cancelled' | 'reservable' | 'free' | 'orderDate'> & { orderDate: Date | null })[]>`
+  const rows = await prisma.$queryRaw<(Omit<HeldRow, 'finished' | 'cancelled' | 'completeInFull' | 'reservable' | 'free' | 'orderDate'> & { orderDate: Date | null })[]>`
     with o as (
       select q.id, q.number, a.id as account_id, a.name as account, a.region, rp.name as rep,
              coalesce(q.fulfillment_status, '') as status, q.sent_at as order_date,
              greatest(coalesce(q.unapplied_credit, 0)::numeric
                - coalesce((select sum((c->>'onAccount')::numeric) from jsonb_array_elements(q.credit_notes) c), 0), 0) as prepayment,
              greatest(-coalesce(q.amount_due, 0)::numeric, 0) as overpaid,
-             coalesce(rv.taken, 0) as taken
+             coalesce(rv.taken, 0) as taken,
+             q.dear_sale_id as dear_sale_id, (q.prepay_released_at is not null) as released, q.prepay_release_note as release_note
       from crm.quotes q
       join crm.accounts a on a.id = q.account_id
       left join crm.reps rp on rp.id = a.rep_id
@@ -243,18 +255,21 @@ export async function loadHeld(rep: Rep, f: CreditFilters, accountId?: string): 
       ) rv on true
       where q.source <> 'rhino-history' and q.number not like 'Q%' and ${Prisma.join(w, ' and ')}
     )
-    select id, number, account_id as "accountId", account, region, rep, status, order_date as "orderDate", 'Prepayment' as kind, prepayment::float8 as amount, least(taken, prepayment)::float8 as reserved
+    select id, number, account_id as "accountId", account, region, rep, status, order_date as "orderDate", 'Prepayment' as kind, prepayment::float8 as amount, least(taken, prepayment)::float8 as reserved,
+           dear_sale_id as "dearSaleId", released, release_note as "releaseNote"
     from o where prepayment > 0.005
     union all
-    select id, number, account_id, account, region, rep, status, order_date, 'Overpaid', overpaid::float8, 0::float8
+    select id, number, account_id, account, region, rep, status, order_date, 'Overpaid', overpaid::float8, 0::float8, dear_sale_id, released, release_note
     from o where overpaid > 0.005
     order by amount desc
     limit 5000`;
   return rows.map(r => {
-    const finished = isFinished(r.status), reservable = r.kind === 'Prepayment' && finished;
+    // A released order counts as finished: its prepayment is to be applied or refunded in DEAR.
+    // Any prepayment can be reserved unless the order is complete in full.
+    const finished = isFinished(r.status) || (r.kind === 'Prepayment' && r.released), completeInFull = isComplete(r.status), reservable = r.kind === 'Prepayment' && !completeInFull;
     const amount = cents(r.amount), reserved = reservable ? cents(r.reserved) : 0;
     return {
-      ...r, amount, finished, cancelled: isCancelled(r.status), reservable, reserved,
+      ...r, amount, finished, cancelled: isCancelled(r.status), completeInFull, reservable, reserved,
       free: reservable ? cents(Math.max(0, amount - reserved)) : 0,
       orderDate: r.orderDate ? new Date(r.orderDate).toISOString().slice(0, 10) : null,
     };
@@ -294,9 +309,9 @@ creditRouter.get('/account/:id', async (req, res) => {
       reservedFrom(v.account.id, 'notes'), reservedFrom(v.account.id, 'prepaid'), loadCreditNotes(req.rep!, {}, v.account.id), loadHeld(req.rep!, {}, v.account.id),
     ]);
     const credit = notesTotal(notes);                          // credit notes on account
-    const prepaid = heldRows.filter(h => h.reservable);        // prepaid money on finished or cancelled orders: reservable too
+    const prepaid = heldRows.filter(h => h.reservable);        // prepaid money on any order that is not complete in full: reservable like a credit note
     const prepaidFree = cents(prepaid.reduce((t, h) => t + h.free, 0));
-    const held = heldTotal(heldRows.filter(h => !h.reservable));   // still held for open orders, or overpaid: not free
+    const held = heldTotal(heldRows.filter(h => !h.reservable));   // held on orders complete in full, or overpaid: not free
     const rows = await prisma.$queryRaw<any[]>`
       select c.id, coalesce(nullif(c.name, ''), ${v.account.name}) as "name", c.amount, nullif(c.order_ref, '') as "orderRef",
              c.credit_no as "creditNo", c.source_kind as "sourceKind", c.source_order as "sourceOrder", c.used_on_order as "usedOnOrder", c.note, c.status,
@@ -320,7 +335,7 @@ creditRouter.get('/account/:id', async (req, res) => {
       otherCredit: held,
       reserved: cents(reservedNotes + reservedPrepaid), reservedNotes, reservedPrepaid,
       available: cents(Math.max(0, credit - reservedNotes)),           // credit notes free to use
-      prepaid: prepaid.map(h => ({ orderNo: h.number, orderId: h.id, status: h.status, cancelled: h.cancelled, orderDate: h.orderDate, amount: h.amount, reserved: h.reserved, free: h.free })),
+      prepaid: prepaid.map(h => ({ orderNo: h.number, orderId: h.id, status: h.status, cancelled: h.cancelled, released: h.released, orderDate: h.orderDate, amount: h.amount, reserved: h.reserved, free: h.free })),
       prepaidHeld: heldTotal(prepaid), prepaidFree,                    // prepaid money free to use
       // credit notes with credit left that is not already reserved: what can be reserved
       reservable: notes.filter(n => n.free > 0.005).map(n => ({ creditNo: n.creditNo, date: n.date, onAccount: cents(n.onAccount), free: n.free })),
@@ -344,8 +359,8 @@ creditRouter.get('/account/:id', async (req, res) => {
 // One credit note:      { name?, amount, creditNo?, orderNo?, note? }
 // One prepayment:       { name?, amount?, prepaidOrder: "SQ37327", orderNo?, note? }
 // Several at once:      { name?, orderNo?, note?, items: [{ creditNo | prepaidOrder, amount? }, ...] }
-// The money comes from THIS customer: a credit note, or a prepayment held on a cancelled or finished order
-// (money on an open order is not free). It can be set aside for this customer's next order or for a specific
+// The money comes from THIS customer: a credit note, or a prepayment held on any of their orders except one that
+// is complete in full (a prepayment on an open order is checked against DEAR first). It can be set aside for this customer's next order or for a specific
 // order of theirs, never for a different customer. One reservation is made per source, so each is marked used
 // by itself (credit notes: when DEAR shows them applied; prepayments: by hand), and all are made or none.
 creditRouter.post('/account/:id/reserve', async (req, res) => {
@@ -371,7 +386,8 @@ creditRouter.post('/account/:id/reserve', async (req, res) => {
     if (rawItems.length > 25) return res.status(400).json({ error: 'That is too many at once' });
 
     const notes = await loadCreditNotes(req.rep!, {}, v.account.id);
-    const prepaid = (await loadHeld(req.rep!, {}, v.account.id)).filter(h => h.reservable);
+    const allHeld = await loadHeld(req.rep!, {}, v.account.id);
+    const prepaid = allHeld.filter(h => h.reservable);
     const seen = new Set<string>();
     const planned: { creditNo: string | null; amount: number; cn?: CreditNoteRow; pp?: HeldRow }[] = [];
     for (const it of rawItems) {
@@ -385,7 +401,10 @@ creditRouter.post('/account/:id/reserve', async (req, res) => {
         seen.add(key);
       }
       const pp = ppNo ? prepaid.find(h => h.number.toUpperCase() === ppNo) : undefined;
-      if (ppNo && !pp) return res.status(400).json({ error: `${ppNo} isn't prepaid money that is free to reserve. Money on an open order stays with that order until it is cancelled or finished` });
+      if (ppNo && !pp) {
+        const held = allHeld.find(h => h.number.toUpperCase() === ppNo && h.kind === 'Prepayment');
+        return res.status(400).json({ error: held?.completeInFull ? `${ppNo} is complete in full, so its prepaid money was used by that order and can't be reserved` : `${ppNo} has no prepaid money held for this customer` });
+      }
       const cn = creditNo ? notes.find(n => n.creditNo.toUpperCase() === creditNo) : undefined;
       // A number that looks like a credit note must be one of this customer's.
       if (creditNo && !cn && /^CR\d+$/.test(creditNo)) return res.status(400).json({ error: `${creditNo} isn't a credit note on this account` });
@@ -409,6 +428,20 @@ creditRouter.post('/account/:id/reserve', async (req, res) => {
       if (p.pp && p.amount > p.pp.free + 0.005) return res.status(400).json({ error: `${p.pp.number} has only ${p.pp.free.toFixed(2)} of prepaid money left to reserve` });
     }
 
+    // Money on an open order is checked against DEAR itself, so the CRM never sets aside more than DEAR holds.
+    // (Money on a credited, closed or voided order has no order left to use it, so it is not asked about.)
+    for (const p of planned) {
+      if (!p.pp || isFinished(p.pp.status)) continue;
+      const live = await liveDear(p.pp.dearSaleId);
+      if (!live.ok) {
+        if (p.pp.releaseNote?.includes(NO_CHECK)) continue;   // it was released on the person's word, DEAR could not be asked
+        return res.status(502).json({ error: `Couldn't confirm ${p.pp.number} with DEAR: ${live.reason}. Try again in a minute.` });
+      }
+      if (p.amount + p.pp.reserved > live.data.held + 0.005) {
+        return res.status(400).json({ error: `DEAR shows ${live.data.held.toFixed(2)} still held on ${p.pp.number}${p.pp.reserved > 0.005 ? `, and ${p.pp.reserved.toFixed(2)} of it is already reserved` : ''}` });
+      }
+    }
+
     // If the order is already in the CRM it must belong to who this is for, and not be voided.
     const order = orderNo ? await prisma.quote.findFirst({ where: { number: orderNo }, select: { accountId: true, fulfillmentStatus: true } }) : null;
     if (order && order.accountId !== target.id) return res.status(400).json({ error: `${orderNo} belongs to a different customer` });
@@ -424,6 +457,98 @@ creditRouter.post('/account/:id/reserve', async (req, res) => {
     res.status(201).json({ id: made[0].id, ids: made.map(m => m.id), count: made.length, total: cents(planned.reduce((t, p) => t + p.amount, 0)) });
   } catch (e) {
     console.error('credit reserve failed', e);
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// ---------- Live payment info from DEAR ----------
+const NO_CHECK = 'released without a live DEAR check';
+type Live = { ok: true; data: DearPayments } | { ok: false; reason: string };
+async function liveDear(dearSaleId: string | null): Promise<Live> {
+  if (!dearSaleId) return { ok: false, reason: 'this order is not linked to DEAR yet' };
+  if (!process.env.CIN7_ACCOUNT_ID || !process.env.CIN7_APPLICATION_KEY) return { ok: false, reason: 'the DEAR keys are not set on the API (CIN7_ACCOUNT_ID and CIN7_APPLICATION_KEY)' };
+  try {
+    const data = readDearPayments(await dearGet('/sale', { ID: dearSaleId }));
+    if (!data.prepayments.length && !data.invoices.length) return { ok: false, reason: 'DEAR answered, but no prepayments or invoices were found on the order in the shape expected' };
+    return { ok: true, data };
+  } catch (e) { return { ok: false, reason: (e as Error).message.slice(0, 200) }; }
+}
+
+// One of this person's visible orders, by number.
+async function visibleOrder(rep: Rep, raw: unknown) {
+  const no = String(raw ?? '').trim().toUpperCase();
+  if (!/^SQ\d{3,}$/.test(no)) return { error: 400 as const, message: 'Enter an order number like SQ36807' };
+  const q = await prisma.quote.findFirst({ where: { number: no }, select: { id: true, number: true, accountId: true, fulfillmentStatus: true, dearSaleId: true } });
+  if (!q) return { error: 404 as const, message: `${no} isn't in the CRM` };
+  const v = await visibleAccount(rep, q.accountId);
+  if ('error' in v) return { error: v.error!, message: denied(v.error!).body.error };
+  return { q, no };
+}
+const prepaymentOn = async (rep: Rep, accountId: string, no: string) =>
+  (await loadHeld(rep, {}, accountId)).find(h => h.number.toUpperCase() === no && h.kind === 'Prepayment');
+
+// ---------- GET /credit/order-dear/:no ----------
+// What DEAR says about an order's money, next to what the CRM holds. Asks DEAR live.
+creditRouter.get('/order-dear/:no', async (req, res) => {
+  try {
+    const o = await visibleOrder(req.rep!, req.params.no);
+    if (o.error) return res.status(o.error).json({ error: o.message });
+    const row = await prepaymentOn(req.rep!, o.q.accountId, o.no);
+    const live = await liveDear(o.q.dearSaleId);
+    const crmHeld = row?.amount ?? 0;
+    res.json({
+      order: o.no, status: o.q.fulfillmentStatus, crmHeld, crmReserved: row?.reserved ?? 0, released: row?.released ?? false, releaseNote: row?.releaseNote ?? null,
+      live: live.ok ? live.data : null, problem: live.ok ? null : live.reason,
+      matches: live.ok ? Math.abs(live.data.held - crmHeld) < 0.02 : null,
+    });
+  } catch (e) {
+    console.error('credit dear check failed', e);
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// ---------- POST /credit/release-order  { orderNo, note, confirmedInDear? } ----------
+// The customer no longer wants this open order (for example they have dropped a backorder), so its prepayment is
+// moved to "To apply in DEAR" (apply or refund). It can be reserved with or without this. DEAR is asked first: if it holds less than the CRM shows, nothing is released. If DEAR
+// can't be asked, the person can confirm they have looked in DEAR themselves.
+// The backordered lines must also be cancelled in DEAR, or the stock may still ship and use this money.
+creditRouter.post('/release-order', async (req, res) => {
+  try {
+    const o = await visibleOrder(req.rep!, req.body?.orderNo);
+    if (o.error) return res.status(o.error).json({ error: o.message });
+    const note = String(req.body?.note ?? '').trim().slice(0, 500);
+    if (note.length < 3) return res.status(400).json({ error: 'Say why, for example: customer cancelled the backorder' });
+    const row = await prepaymentOn(req.rep!, o.q.accountId, o.no);
+    if (!row) return res.status(400).json({ error: `${o.no} has no prepayment held on it` });
+    if (row.finished) return res.status(400).json({ error: `${o.no} is already ${row.released ? 'released' : 'finished or cancelled'}` });
+
+    const live = await liveDear(o.q.dearSaleId);
+    if (!live.ok && req.body?.confirmedInDear !== true) return res.status(409).json({ error: `Couldn't confirm with DEAR: ${live.reason}` });
+    if (live.ok && live.data.held + 0.02 < row.amount) {
+      return res.status(409).json({ error: `DEAR shows only ${live.data.held.toFixed(2)} held on ${o.no}, but the CRM shows ${row.amount.toFixed(2)}. Check the order in DEAR first.` });
+    }
+    const stamp = live.ok ? `${note} (DEAR shows ${live.data.held.toFixed(2)} held)` : `${note} (${NO_CHECK})`;
+    await prisma.$executeRaw`update crm.quotes set prepay_released_at = now(), prepay_released_by = ${req.rep!.id}::uuid, prepay_release_note = ${stamp} where id = ${o.q.id}::uuid`;
+    res.json({ ok: true, order: o.no, amount: row.amount, checkedInDear: live.ok });
+  } catch (e) {
+    console.error('credit release failed', e);
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// ---------- POST /credit/unrelease-order  { orderNo } ----------
+// Puts the money back with the order. Not while some of it is still reserved.
+creditRouter.post('/unrelease-order', async (req, res) => {
+  try {
+    const o = await visibleOrder(req.rep!, req.body?.orderNo);
+    if (o.error) return res.status(o.error).json({ error: o.message });
+    const [r] = await prisma.$queryRaw<{ n: number }[]>`
+      select count(*)::int as n from crm.credit_reservations where source_kind = 'prepayment' and source_order = ${o.no} and status = 'reserved'`;
+    if (r.n > 0) return res.status(400).json({ error: `Release the ${r.n} open reservation${r.n === 1 ? '' : 's'} from ${o.no} first` });
+    await prisma.$executeRaw`update crm.quotes set prepay_released_at = null, prepay_released_by = null, prepay_release_note = null where id = ${o.q.id}::uuid`;
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('credit unrelease failed', e);
     res.status(500).json({ error: (e as Error).message });
   }
 });
@@ -513,7 +638,7 @@ creditRouter.get('/notes', async (req, res) => {
     const held = await loadHeld(req.rep!, { regions, q });
     const heldOnOrdersTotal = heldTotal(held);
     const toApply = heldTotal(held.filter(h => h.finished));
-    const prepaidFree = cents(held.reduce((t, h) => t + h.free, 0));   // prepaid money on finished or cancelled orders that can be reserved
+    const prepaidFree = cents(held.reduce((t, h) => t + h.free, 0));   // prepaid money that can be reserved (any order not complete in full)
 
     res.json({
       totals: { onAccount, reserved, free, openNotes: open.length, customers: onAccountBy.size, heldOnOrders: heldOnOrdersTotal, toApply, prepaidFree },
@@ -526,8 +651,8 @@ creditRouter.get('/notes', async (req, res) => {
 });
 
 // ---------- GET /credit/prepayments ----------   (the Credit page: Prepayments tab)
-// ?region= &q= &view=free|apply|open|all   free = prepaid money that can be reserved right now,
-// apply = finished or cancelled orders still holding money (to apply in DEAR or refund),
+// ?region= &q= &view=free|apply|open|all   free = prepaid money that can be reserved right now (any order that is
+// not complete in full), apply = finished or cancelled orders still holding money (to apply in DEAR or refund),
 // open = held for orders not yet invoiced. The totals ignore the view.
 creditRouter.get('/prepayments', async (req, res) => {
   try {

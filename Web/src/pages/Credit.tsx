@@ -1,17 +1,19 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { apiGet, apiDownload } from '../lib/api';
+import { apiGet, apiPost, apiDownload } from '../lib/api';
 import { fmtMoney, fmtDate } from '../lib/types';
 import { groupReservations, groupStatus } from '../lib/creditGroups';
 import { useMe, stateOptionsFor } from '../lib/useMe';
 import StateFilter from '../components/StateFilter';
+import DearPaymentCheck from '../components/DearPaymentCheck';
 
 // Credit: every credit note on account, every reservation (one row each, whose status
 // changes from Reserved to Used when DEAR shows the credit applied), and every credit
 // movement, so the team can follow where credit has gone. Credit is applied in DEAR.
 // The Prepayments tab lists money held on orders that is not a credit note: customers who
 // paid up front, and overpaid orders. Finished orders that still hold money need applying
-// in DEAR (or refunding); money on open orders is held until the order is invoiced.
+// in DEAR (or refunding). Any prepaid money can be reserved, open order or finished, except on an order that is
+// complete in full (it has used its prepayment).
 
 type NoteRow = {
   accountId: string; account: string; region: string; rep: string | null; orderNo: string; creditNo: string; date: string | null;
@@ -27,7 +29,7 @@ type Totals = { onAccount: number; reserved: number; free: number; openNotes: nu
 type Held = {
   id: string; number: string; accountId: string; account: string; region: string; rep: string | null; status: string;
   orderDate: string | null; kind: 'Prepayment' | 'Overpaid'; amount: number; finished: boolean;
-  cancelled?: boolean; reservable?: boolean; reserved?: number; free?: number;
+  cancelled?: boolean; completeInFull?: boolean; reservable?: boolean; reserved?: number; free?: number; released?: boolean; releaseNote?: string | null;
 };
 type HeldTotals = { free?: { amount: number; count: number }; toApply: { amount: number; count: number }; open: { amount: number; count: number }; all: { amount: number; count: number } };
 const nice = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '');
@@ -69,6 +71,30 @@ export default function Credit() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [reload, setReload] = useState(0);
+  const [dearFor, setDearFor] = useState<string | null>(null);
+
+  // The customer no longer wants this open order (a dropped backorder): free its prepayment so it can be reserved.
+  async function release(h: Held) {
+    const note = window.prompt(`Free the ${fmtMoney(h.amount)} prepaid on ${h.number} so it can be used?\n\nWhy? For example: customer doesn't want the backorder`);
+    if (!note || !note.trim()) return;
+    try {
+      await apiPost('/credit/release-order', { orderNo: h.number, note });
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (!msg.startsWith("Couldn't confirm with DEAR")) { window.alert(msg); return; }
+      if (!window.confirm(`${msg}\n\nRelease it anyway? Only if you have checked the payment in DEAR yourself.`)) return;
+      try { await apiPost('/credit/release-order', { orderNo: h.number, note, confirmedInDear: true }); }
+      catch (e2) { window.alert((e2 as Error).message); return; }
+    }
+    window.alert(`${h.number} is released. Also cancel its backordered lines in DEAR, or the stock may still ship and use this money.`);
+    setReload(n => n + 1);
+  }
+  async function unrelease(h: Held) {
+    if (!window.confirm(`Put the money back with ${h.number}?`)) return;
+    try { await apiPost('/credit/unrelease-order', { orderNo: h.number }); setReload(n => n + 1); }
+    catch (e) { window.alert((e as Error).message); }
+  }
 
   const base = () => {
     const p = new URLSearchParams();
@@ -104,7 +130,7 @@ export default function Credit() {
       }
     }, search ? 300 : 0);
     return () => clearTimeout(t);
-  }, [tab, region, search, status, resStatus, heldView, type, from, to]);
+  }, [tab, region, search, status, resStatus, heldView, type, from, to, reload]);
 
   function loadMoves(offset: number, append: boolean) {
     const p = base();
@@ -148,7 +174,7 @@ export default function Credit() {
       {totals && (totals.heldOnOrders ?? 0) > 0.005 && (
         <div className="acct-region" style={{ margin: '-4px 0 12px' }}>
           Not counted above: {fmtMoney(totals.heldOnOrders!)} held as prepayments or overpayments on orders. They are not credit notes.{' '}
-          {(totals.prepaidFree ?? 0) > 0.005 ? `${fmtMoney(totals.prepaidFree!)} of it is prepaid money on cancelled or finished orders and can be reserved. ` : ''}
+          {(totals.prepaidFree ?? 0) > 0.005 ? `${fmtMoney(totals.prepaidFree!)} of it is prepaid money that can be reserved. ` : ''}
           {(totals.toApply ?? 0) > 0.005 ? `${fmtMoney(totals.toApply!)} is on finished or cancelled orders and needs applying in DEAR. ` : ''}
           <button className="link-btn" onClick={() => setTab('prepayments')}>See the Prepayments tab</button>
         </div>
@@ -211,9 +237,11 @@ export default function Credit() {
       {!error && tab === 'prepayments' && (
         <>
           <div className="acct-region" style={{ marginBottom: 8, maxWidth: 760 }}>
-            Money held on orders that is not a credit note. Prepaid money on a <b>cancelled or finished</b> order is spare, so it can be
-            <b> reserved</b> for that customer's next order (press Reserve to open the customer). It still has to be
-            applied or refunded in DEAR. Money on an <b>open</b> order is held until the order is invoiced.
+            Money held on orders that is not a credit note. Any prepaid money can be <b>reserved</b> for that customer's next order
+            (press Reserve to open the customer), whether the order is open, cancelled or released, except on an order that is
+            <b>complete in full</b>: that order has used its prepayment. Money on an open order is checked against DEAR before it is
+            reserved, and that order stops counting it as paid. It still has to be applied or refunded in DEAR. If the customer has
+            dropped an open order, press <b>Release</b> (also checked against DEAR first).
           </div>
           <div className="tab-bar" style={{ marginBottom: 10 }}>
             {([
@@ -228,25 +256,30 @@ export default function Credit() {
             ))}
           </div>
           {loading && !held ? <div className="empty-state">Loading…</div>
-            : !held || !held.length ? <div className="empty-state">{heldView === 'free' ? 'No prepaid money is free to reserve. It becomes free when an order that was prepaid is cancelled or finished.' : heldView === 'apply' ? 'Nothing to apply: no finished or cancelled order is holding a prepayment.' : 'None.'}</div>
+            : !held || !held.length ? <div className="empty-state">{heldView === 'free' ? 'No prepaid money is free to reserve. (Prepaid money on an order that is complete in full is not reservable.)' : heldView === 'apply' ? 'Nothing to apply: no finished or cancelled order is holding a prepayment.' : 'None.'}</div>
             : (
               <div className="manifest">
-                <div className="m-row head" style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 1.1fr 0.9fr 0.8fr 0.9fr 0.9fr 0.7fr' }}>
+                <div className="m-row head" style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 1.1fr 0.9fr 0.8fr 0.9fr 0.9fr 1.5fr' }}>
                   <div>Customer</div><div>State</div><div>Order</div><div>Status</div><div>Order date</div><div>Type</div><div className="num">Amount</div><div className="num">Free to reserve</div><div></div>
                 </div>
                 {held.map(h => (
-                  <div className="m-row" key={h.id + h.kind} style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 1.1fr 0.9fr 0.8fr 0.9fr 0.9fr 0.7fr', cursor: 'default' }}>
+                  <div className="m-row" key={h.id + h.kind} style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 1.1fr 0.9fr 0.8fr 0.9fr 0.9fr 1.5fr', cursor: 'default' }}>
                     <div><Link to={`/accounts/${h.accountId}`} className="order-link">{h.account}</Link>{h.rep && <div className="acct-region">{h.rep}</div>}</div>
                     <div>{h.region}</div>
                     <div><Link to={`/orders/${h.id}`} className="order-link">{h.number}</Link></div>
-                    <div><span className={`pill ${h.cancelled ? 'rust' : h.finished ? 'amber' : 'neutral'}`}>{h.cancelled ? 'Cancelled' : nice(h.status) || '—'}</span></div>
+                    <div><span className={`pill ${h.cancelled ? 'rust' : h.finished ? 'amber' : 'neutral'}`}>{h.cancelled ? 'Cancelled' : nice(h.status) || '—'}</span>{h.released && <div><span className="pill teal" title={h.releaseNote ?? undefined}>Released</span></div>}</div>
                     <div>{h.orderDate ? fmtDate(h.orderDate) : ''}</div>
                     <div><span className={`pill ${h.kind === 'Overpaid' ? 'rust' : 'teal'}`}>{h.kind}</span></div>
                     <div className="num"><b>{fmtMoney(h.amount)}</b></div>
                     <div className="num">
-                      {h.reservable ? <><b>{fmtMoney(h.free ?? 0)}</b>{(h.reserved ?? 0) > 0.005 && <div className="acct-region">{fmtMoney(h.reserved!)} reserved</div>}</> : <span className="acct-region">held</span>}
+                      {h.reservable ? <><b>{fmtMoney(h.free ?? 0)}</b>{(h.reserved ?? 0) > 0.005 && <div className="acct-region">{fmtMoney(h.reserved!)} reserved</div>}</> : <span className="acct-region">{h.completeInFull ? 'complete in full' : 'held'}</span>}
                     </div>
-                    <div>{(h.free ?? 0) > 0.005 && <Link to={`/accounts/${h.accountId}`} className="order-link">Reserve</Link>}</div>
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                      {(h.free ?? 0) > 0.005 && <Link to={`/accounts/${h.accountId}`} className="order-link">Reserve</Link>}
+                      {h.kind === 'Prepayment' && <button type="button" className="link-btn" onClick={() => setDearFor(h.number)}>Check DEAR</button>}
+                      {h.kind === 'Prepayment' && !h.finished && <button type="button" className="link-btn" title="The customer has dropped this order. Checked against DEAR first." onClick={() => release(h)}>Release</button>}
+                      {h.released && <button type="button" className="link-btn" onClick={() => unrelease(h)}>Undo release</button>}
+                    </div>
                   </div>
                 ))}
               </div>

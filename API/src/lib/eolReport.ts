@@ -155,11 +155,16 @@ export function buildEolReport(p: Inputs & { checkpoints: string[]; asOf: string
   });
   const prev = [...columns].reverse().find(c => c.kind === 'saved');   // the last saved day before today
 
+  // Order dates from before the start date are not shown. A few orders placed the day before are invoiced on the start
+  // day and are still counted (the original sheet counts them), but the report only shows dates from the start on.
+  const shown = (d: string) => (d >= from ? d : '');
+  const earlier = lines.filter(l => l.orderDate < from);
+
   // raw
   const rawHead = ['Order Date', 'Status', 'Customer', 'State', 'Business Category', 'Contact Name', 'Email', 'Phone', 'Brand', 'SKU', 'Product', 'Qty', 'Unit Price', 'Discount %', 'Line Total ex GST', 'Invoice #', 'Invoice Date', 'Invoice match'];
   const raw: Sheet = {
     name: 'raw',
-    aoa: [rawHead, ...lines.map(l => [l.orderDate, l.status, l.customer, l.state, l.category, l.contact, l.email, l.phone, l.brand, l.sku, l.product, l.qty, l.unitPrice, l.discount, l.lineTotal, l.invoiceNo ?? '', l.invoiceDate ?? '', l.match])],
+    aoa: [rawHead, ...lines.map(l => [shown(l.orderDate), l.status, l.customer, l.state, l.category, l.contact, l.email, l.phone, l.brand, l.sku, l.product, l.qty, l.unitPrice, l.discount, l.lineTotal, l.invoiceNo ?? '', l.invoiceDate ?? '', l.match])],
     widths: [12, 13, 30, 7, 28, 20, 26, 14, 18, 16, 40, 6, 10, 10, 14, 12, 12, 14], moneyCols: [12, 14],
   };
 
@@ -233,7 +238,7 @@ export function buildEolReport(p: Inputs & { checkpoints: string[]; asOf: string
   const purchaseHead = ['Customer', 'Customer additional attribute 3', 'Brand', 'Product', 'SKU', 'Order Date', 'Invoice Date', 'TotalQty2026', 'TotalSales2026', 'Discount %', 'Invoice #', 'Invoice match'];
   const purchase = (name: string, ls: EolLine[]): Sheet => ({
     name,
-    aoa: [['', '', '', '', '', '', 'TOTAL', qtyOf(ls), salesOf(ls)], purchaseHead, ...ls.map(l => [l.customer, l.category, l.brand, l.product, l.sku, l.orderDate, l.invoiceDate, l.qty, l.lineTotal, l.discount, l.invoiceNo, l.match])],
+    aoa: [['', '', '', '', '', '', 'TOTAL', qtyOf(ls), salesOf(ls)], purchaseHead, ...ls.map(l => [l.customer, l.category, l.brand, l.product, l.sku, shown(l.orderDate), l.invoiceDate, l.qty, l.lineTotal, l.discount, l.invoiceNo, l.match])],
     widths: [30, 30, 18, 42, 16, 12, 12, 13, 14, 10, 12, 14], moneyCols: [8],
   });
 
@@ -269,6 +274,7 @@ export function buildEolReport(p: Inputs & { checkpoints: string[]; asOf: string
       [`Brands: ${EOL_BRANDS.join(', ')}.`],
       ['Maison Deux leaves out Miffy, Smiley and Peanuts products. WWF Plush is only the 23 listed SKUs.'],
       ['Sales are invoiced lines only, ex GST, after discount (the line total). Credit notes are not taken off.'],
+      [`Order dates before ${from} are not shown. ${earlier.length ? `${earlier.length} line${earlier.length === 1 ? ' was' : 's were'} ordered earlier and invoiced on or after the start date, so ${earlier.length === 1 ? 'it is' : 'they are'} counted but ${earlier.length === 1 ? 'its' : 'their'} order date is left blank.` : 'No line was ordered earlier.'}`],
       [`Staff purchases (${STAFF_CUSTOMER}) are on STAFF_Purchase and are not in the customer totals.`],
       ['Stock is what is available (above zero), valued at the wholesale price ex GST.'],
       ['History: each download saves that day\'s stock and sales, and the next download shows every saved day side by side. A second download on the same day replaces that day.'],

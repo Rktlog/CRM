@@ -63,11 +63,13 @@ export function followUpState(orderDay: string, f: { manualOn: string | null; fu
 const nice = (s: string | null) => (s ? s.charAt(0) + s.slice(1).toLowerCase() : '');
 
 // Paid = cash applied to invoices + any prepayment DEAR still holds against the order (what the Credit page calls
-// "held"). An order that is fully invoiced with nothing due is settled, even if part of it was a credit note.
-export function paymentState(q: { total: number | null; amount: number; amountPaid: number | null; unappliedCredit: number | null; amountDue: number | null; invoicedTotal: number | null; creditNotes: unknown }) {
+// "held"), less any of that prepayment the team has reserved for another order (reservedPrepay): that money is
+// spoken for, so this order no longer counts it. An order that is fully invoiced with nothing due is settled, even if
+// part of it was a credit note.
+export function paymentState(q: { total: number | null; amount: number; amountPaid: number | null; unappliedCredit: number | null; amountDue: number | null; invoicedTotal: number | null; creditNotes: unknown }, reservedPrepay = 0) {
   const total = q.total ?? q.amount;
   const onAccount = Array.isArray(q.creditNotes) ? (q.creditNotes as any[]).reduce((s, c) => s + (Number(c?.onAccount) || 0), 0) : 0;
-  const prepayment = Math.max((q.unappliedCredit ?? 0) - onAccount, 0);
+  const prepayment = Math.max(Math.max((q.unappliedCredit ?? 0) - onAccount, 0) - Math.max(reservedPrepay, 0), 0);
   let paid = (q.amountPaid ?? 0) + prepayment;
   if (q.amountDue != null && q.amountDue <= 0.005 && (q.invoicedTotal ?? 0) >= total - 0.005) paid = Math.max(paid, total);
   const remaining = cents(Math.max(total - paid, 0));
@@ -92,13 +94,18 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
   const owing = accountIds.length
     ? await prisma.$queryRaw<{ id: string }[]>`
         select q.id from crm.quotes q join crm.accounts a on a.id = q.account_id
+        left join lateral (
+          select coalesce(sum(r.amount), 0) as taken from crm.credit_reservations r
+          where r.source_kind = 'prepayment' and r.source_order = q.number
+            and (r.status = 'reserved' or (r.status = 'used' and r.resolved_at > now() - interval '2 days'))
+        ) rv on true
         where q.account_id = any(${accountIds}::uuid[])
           and q.source <> 'rhino-history' and q.number not like 'Q%' and q.misc_type is null
           and upper(coalesce(q.fulfillment_status, '')) not in ('VOIDED', 'CREDITED', 'DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING')
           and nullif(trim(coalesce(a.payment_terms, '')), '') is null
-          and coalesce(q.total, q.amount) - (coalesce(q.amount_paid, 0) + greatest(coalesce(q.unapplied_credit, 0)
+          and coalesce(q.total, q.amount) - (coalesce(q.amount_paid, 0) + greatest(greatest(coalesce(q.unapplied_credit, 0)
                 - coalesce(case when jsonb_typeof(q.credit_notes) = 'array'
-                                then (select sum(nullif(c->>'onAccount', '')::numeric) from jsonb_array_elements(q.credit_notes) c) end, 0), 0)) > 0.005
+                                then (select sum(nullif(c->>'onAccount', '')::numeric) from jsonb_array_elements(q.credit_notes) c) end, 0), 0) - rv.taken, 0)) > 0.005
           and not (q.amount_due is not null and q.amount_due <= 0.005 and coalesce(q.invoiced_total, 0) >= coalesce(q.total, q.amount) - 0.005)`
     : [];
   const quotes = await prisma.quote.findMany({
@@ -112,6 +119,14 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
     select: { id: true, number: true, accountId: true, sentAt: true, fulfillmentStatus: true, reference: true, total: true, amount: true, amountPaid: true, unappliedCredit: true, amountDue: true, invoicedTotal: true, creditNotes: true },
   });
   const ids = quotes.map(q => q.id);
+  // Prepayments on these orders that have been reserved for another order (a use in the last 2 days counts until the sync catches up).
+  const reservedBy = new Map<string, number>(quotes.length
+    ? (await prisma.$queryRaw<{ number: string; taken: number }[]>`
+        select source_order as number, sum(amount)::float8 as taken from crm.credit_reservations
+        where source_kind = 'prepayment' and source_order = any(${quotes.map(q => q.number)}::text[])
+          and (status = 'reserved' or (status = 'used' and resolved_at > now() - interval '2 days'))
+        group by source_order`).map((r): [string, number] => [r.number, r.taken])
+    : []);
   const [fuRows, notes] = await Promise.all([
     ids.length
       ? prisma.$queryRaw<{ id: string; follow_up_at: Date | null; fu1_done_on: Date | null; fu2_done_on: Date | null }[]>`
@@ -126,7 +141,7 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
   const rows = quotes.map(q => {
     const status = (q.fulfillmentStatus ?? '').toUpperCase();
     const confirmed = !QUOTE_STATUSES.includes(status);
-    const pay = paymentState(q);
+    const pay = paymentState(q, reservedBy.get(q.number) ?? 0);
     const n = notes.get(q.id);
     return {
       id: q.id,
