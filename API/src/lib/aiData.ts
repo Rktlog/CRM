@@ -291,12 +291,15 @@ const DATASETS: Dataset[] = [
   },
   {
     key: 'conversion',
-    blurb: 'Conversion funnels over a period: prospects set up in DEAR, new leads, inactive stockists (never ordered, or 12+ months), abandoned carts, and how many reached a quote or an order.',
+    blurb: 'Conversion over a period, for four starting points: abandoned carts, prospects set up in DEAR, Inactive Stockist P1 (set up in DEAR, never ordered; the New Leads are in here) and P2 (no order for 12+ months). For each: how many started, reached a quote or an order, and the DAYS: the median days to order and the share who ordered within 30, 60 and 90 days of starting (only counting those who have had that long, so periods compare fairly). For prospects also the median days to be set up in DEAR and from DEAR to the first order, once known. Always give the days alongside the percentages: a short period under-counts people who take two months.',
     args: 'days (7-365, default 90) or from and to (YYYY-MM-DD), state',
     async run(ctx, a) {
       const { period, result } = await helpers.conversion(ctx.rep, a);
-      const out = result.funnels.map((f: any) => ({ funnel: f.title, what: f.description, started: f.started, quotes: f.quotes, orders: f.orders, orderRatePct: f.started ? Math.round((f.orders / f.started) * 1000) / 10 : null }));
-      return { columns: cols('funnel:Funnel', 'what:What it counts', 'started:Started', 'quotes:Reached a quote', 'orders:Reached an order', 'orderRatePct:Order rate %'), rows: out, summary: { from: day(period.from), to: day(period.to), days: period.days } };
+      const out = result.funnels.map((f: any) => ({ funnel: f.title, what: f.description, started: f.started, quotes: f.quotes, orders: f.orders, orderRatePct: f.started ? Math.round((f.orders / f.started) * 1000) / 10 : null,
+        medianDaysToOrder: f.timing?.medianDaysToOrder ?? null, within30Pct: f.timing?.within?.[0]?.pct ?? null, within60Pct: f.timing?.within?.[1]?.pct ?? null, within90Pct: f.timing?.within?.[2]?.pct ?? null,
+        medianDaysToDear: f.timing?.dear?.medianDaysToDear ?? null, medianDaysDearToOrder: f.timing?.dear?.medianDaysDearToOrder ?? null,
+        extraMeasure: f.timing?.age?.medianDays != null ? `${f.timing.age.label}: ${f.timing.age.medianDays} (median)` : null }));
+      return { columns: cols('funnel:Funnel', 'what:What it counts', 'started:Started', 'quotes:Reached a quote', 'orders:Reached an order', 'orderRatePct:Order rate %', 'medianDaysToOrder:Median days to order', 'within30Pct:Ordered within 30 days %', 'within60Pct:Ordered within 60 days %', 'within90Pct:Ordered within 90 days %', 'medianDaysToDear:Median days to set up in DEAR (prospects)', 'medianDaysDearToOrder:Median days from DEAR to first order (prospects)', 'extraMeasure:Extra measure (P1, P2)'), rows: out, summary: { from: day(period.from), to: day(period.to), days: period.days } };
     },
   },
   {

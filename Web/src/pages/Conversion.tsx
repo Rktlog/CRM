@@ -4,6 +4,7 @@ import { apiGet, apiDownload } from '../lib/api';
 import { fmtDate, fmtMoney } from '../lib/types';
 import { Period, decodePeriod, encodePeriod, periodLabel, conversionQuery } from '../lib/period';
 import ConversionFilters from '../components/ConversionFilters';
+import ConversionTiming, { Timing } from '../components/ConversionTiming';
 
 // Conversion detail: the customers behind each number on the Dashboard. Pick a funnel, then
 // who started, who ordered, who got a sales quote, or who has not converted yet. Open any
@@ -12,12 +13,13 @@ import ConversionFilters from '../components/ConversionFilters';
 type Row = {
   who: string; state: string; rep: string | null; started: string; email?: string; cartValue?: number; accountId: string | null;
   orderId: string | null; orderNo: string | null; orderDate: string | null; quoteId: string | null; quoteNo: string | null; quoteDate: string | null;
+  daysToOrder?: number | null; daysToQuote?: number | null; daysToDear?: number | null; daysDearToOrder?: number | null; ageDays?: number | null;
 };
-type Funnel = { key: string; title: string; description: string; started: number; orders: number; quotes: number };
+type Funnel = { key: string; title: string; description: string; started: number; orders: number; quotes: number; timing?: Timing };
 type Outcome = 'started' | 'order' | 'quote' | 'none';
-type SortKey = 'who' | 'state' | 'started';
-const COLS = '1.7fr 0.5fr 0.8fr 0.8fr 1.1fr 1.1fr';
-const SHORT: Record<string, string> = { abandoned_cart: 'Abandoned Cart', prospect: 'Prospect set up in DEAR', new_lead: 'New Lead', inactive_p1: 'Inactive P1 (Never Ordered)', inactive_p2: 'Inactive P2 (12+ Months)' };
+type SortKey = 'who' | 'state' | 'started' | 'days';
+const COLS = '1.6fr 0.45fr 0.75fr 0.75fr 1fr 1fr 1.1fr';
+const SHORT: Record<string, string> = { abandoned_cart: 'Abandoned Cart', prospect: 'Prospect set up in DEAR', inactive_p1: 'Inactive P1 (Never Ordered)', inactive_p2: 'Inactive P2 (12+ Months)' };
 const pct = (n: number, d: number) => (d ? `${Math.round((n / d) * 1000) / 10}%` : '0%');
 
 export default function Conversion() {
@@ -71,7 +73,14 @@ export default function Conversion() {
       (outcome === 'started' || (outcome === 'order' && r.orderNo) || (outcome === 'quote' && r.quoteNo) || (outcome === 'none' && !r.orderNo && !r.quoteNo))
       && (!needle || [r.who, r.rep ?? '', r.state, r.email ?? '', r.orderNo ?? '', r.quoteNo ?? ''].some(v => v.toLowerCase().includes(needle))));
     return list.sort((a, b) => {
-      const cmp = sortKey === 'who' ? a.who.localeCompare(b.who) : sortKey === 'state' ? a.state.localeCompare(b.state) : new Date(a.started).getTime() - new Date(b.started).getTime();
+      if (sortKey === 'days') {
+        // Those who have not ordered have no days: they always go last, whichever way it is sorted.
+        const x = a.daysToOrder ?? null, y = b.daysToOrder ?? null;
+        if (x === null || y === null) return x === null && y === null ? 0 : x === null ? 1 : -1;
+        return sortDir === 1 ? x - y : y - x;
+      }
+      const cmp = sortKey === 'who' ? a.who.localeCompare(b.who) : sortKey === 'state' ? a.state.localeCompare(b.state)
+        : new Date(a.started).getTime() - new Date(b.started).getTime();
       return sortDir === 1 ? cmp : -cmp;
     });
   }, [rows, outcome, search, sortKey, sortDir]);
@@ -118,7 +127,8 @@ export default function Conversion() {
           </button>
         ))}
       </div>
-      {funnels && <div className="acct-region" style={{ marginBottom: 10, maxWidth: 760 }}>{funnels.find(f => f.key === funnelKey)?.description}</div>}
+      {funnels && <div className="acct-region" style={{ maxWidth: 760 }}>{funnels.find(f => f.key === funnelKey)?.description}</div>}
+      {funnels && <div style={{ marginBottom: 10, maxWidth: 760 }}><ConversionTiming timing={funnels.find(f => f.key === funnelKey)?.timing} /></div>}
 
       <div className="tab-bar" style={{ marginBottom: 10 }} aria-label="Who to show">
         {segments.map(s => (
@@ -140,6 +150,7 @@ export default function Conversion() {
             <div>Rep</div>
             <div className="sortable-head" onClick={() => toggleSort('started')}>{isCart ? 'Cart left' : 'Started'}{arrow('started')}</div>
             <div>Order</div><div title="A quote that is still open: the order has not been finalised yet">Sales Quote</div>
+            <div className="sortable-head" onClick={() => toggleSort('days')} title="Days from the start to the order">Days to order{arrow('days')}</div>
           </div>
           {shown.map((r, i) => (
             <div className="m-row" key={`${r.accountId ?? r.email}-${r.started}-${i}`} style={{ gridTemplateColumns: COLS, cursor: 'default' }}>
@@ -159,6 +170,15 @@ export default function Conversion() {
               </div>
               <div>
                 {r.quoteNo && r.quoteId ? <Link to={`/orders/${r.quoteId}`} className="order-link">{r.quoteNo}</Link> : <span className="acct-region">—</span>}
+              </div>
+              <div>
+                {r.daysToOrder != null ? <b>{r.daysToOrder} {r.daysToOrder === 1 ? 'day' : 'days'}</b>
+                  : r.daysToQuote != null ? <span className="acct-region">quote after {r.daysToQuote} {r.daysToQuote === 1 ? 'day' : 'days'}</span> : <span className="acct-region">—</span>}
+                {funnelKey === 'prospect' && r.daysToDear != null && (
+                  <div className="acct-region">{r.daysToDear} to DEAR{r.daysDearToOrder != null ? `, ${r.daysDearToOrder} more to order` : ''}</div>
+                )}
+                {funnelKey === 'inactive_p1' && r.ageDays != null && <div className="acct-region">{r.ageDays} days in DEAR first</div>}
+                {funnelKey === 'inactive_p2' && r.ageDays != null && <div className="acct-region">{r.ageDays} days since last order</div>}
               </div>
             </div>
           ))}

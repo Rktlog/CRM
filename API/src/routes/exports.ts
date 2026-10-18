@@ -5,7 +5,7 @@ import { territoryWhere, canSeeAccount } from '../lib/territory';
 import { LIVE_ORDER, isHistory, isOwing } from '../lib/orderSource';
 import { wholesalePrice, retailPrice } from '../lib/pricing';
 import { buildPriceList, priceListWorkbook, PriceListAvailability, PriceListStatus } from '../lib/priceList';
-import { computeConversion, parsePeriod, regionsOf } from './conversion';
+import { computeConversion, conversionSheets, parsePeriod, regionsOf } from './conversion';
 import { buildEolReport, makeSnapshot, allocateInvoices, EOL_BRANDS, DEFAULT_START, DEFAULT_CHECKPOINTS, EolOrder, Snapshot, Sheet as EolSheet } from '../lib/eolReport';
 import { melDay } from '../lib/receivables';
 import { overview, campaignReport } from '../lib/marketing/overview';
@@ -738,30 +738,10 @@ exportsRouter.get('/:type', async (req, res) => {
       }
 
       case 'conversion': {
-        // Abandoned cart / Prospect / New lead / Inactive stockist, each to an Order and a Sales Quote.
+        // Abandoned cart / Prospect / Inactive Stockist P1 and P2, each to an Order and a Sales Quote, with the days it took.
         const period = parsePeriod(req.query);   // ?days=90 or ?from=&to= (a month or a fiscal quarter)
         const r = await computeConversion(req.rep!, { from: period.from, to: period.to, regions: regionsOf(req.query.region) });
-        const pct = (n: number, d: number) => (d ? Math.round((n / d) * 1000) / 10 : 0);
-        const summary = r.funnels.map(f => ({
-          Funnel: f.title, 'How it is counted': f.description,
-          Started: f.started, Order: f.orders, 'Order %': pct(f.orders, f.started),
-          'Sales Quote': f.quotes, 'Sales Quote %': pct(f.quotes, f.started),
-          'Period from': xlDate(r.from), 'Period to': xlDate(r.to),
-        }));
-        const detail = (key: string) => r.funnels.find(f => f.key === key)!.rows.map(x => ({
-          Customer: x.who, State: x.state, Rep: x.rep ?? '', 'Started on': xlDate(x.started),
-          ...(x.email !== undefined ? { Email: x.email, 'Cart value': x.cartValue ?? 0 } : {}),
-          Order: x.orderNo ?? '', 'Order date': xlDate(x.orderDate),
-          'Sales Quote': x.quoteNo ?? '', 'Sales Quote date': xlDate(x.quoteDate),
-        }));
-        const sheets = [
-          { name: 'Summary', rows: summary },
-          { name: 'Abandoned carts', rows: detail('abandoned_cart') },
-          { name: 'Prospects added to DEAR', rows: detail('prospect') },
-          { name: 'New leads', rows: detail('new_lead') },
-          { name: 'Inactive stockists', rows: detail('inactive_stockist') },
-        ].map(sh => (sh.rows.length ? sh : { ...sh, rows: [{ Note: 'None in this period' }] }));
-        return sendWorkbook(res, 'conversion.xlsx', sheets);
+        return sendWorkbook(res, 'conversion.xlsx', conversionSheets(r, xlDate));
       }
 
       case 'eol': {

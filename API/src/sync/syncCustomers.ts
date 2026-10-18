@@ -7,6 +7,10 @@
  * never spam the Accounts page with junk. If you ever need account
  * auto-creation from DEAR, that is a deliberate new decision, not a
  * bug to "fix" here.
+ *
+ * The moment a CRM customer is first linked to its DEAR record is saved (crm.accounts.dear_linked_at, added by
+ * conversion-days.sql), so Conversion can tell how long a new prospect took to be set up in DEAR, and how long after that
+ * to the first order.
  */
 import { prisma } from '../lib/prisma';
 import { normalize } from '../lib/normalize';
@@ -33,16 +37,18 @@ export async function syncCustomers() {
   let updated = 0;
   let newlyLinked = 0;
   let unmatched = 0;
+  let warnedNoColumn = false;
 
   for (const c of dearCustomers) {
     const dearId = String(c.ID ?? c.CustomerID ?? '');
     if (!dearId) continue;
 
     let account = byDearId.get(dearId);
+    let linkedNow = false;   // found by name: this is the first time it is linked to DEAR
     if (!account) {
       const key = normalize(String(c.Name ?? ''));
       account = byName.get(key);
-      if (account) newlyLinked++;
+      if (account) { newlyLinked++; linkedNow = true; }
     }
     if (!account) {
       unmatched++;
@@ -67,6 +73,12 @@ export async function syncCustomers() {
       },
     });
     updated++;
+    if (linkedNow) {
+      try { await prisma.$executeRaw`update crm.accounts set dear_linked_at = now() where id = ${account.id}::uuid and dear_linked_at is null`; }
+      catch (e) {
+        if (!warnedNoColumn) { console.warn('Could not record when this customer was linked to DEAR (run conversion-days.sql to add the column):', (e as Error).message); warnedNoColumn = true; }
+      }
+    }
   }
 
   console.log(`Accounts updated from DEAR: ${updated} (${newlyLinked} newly linked by name)`);
