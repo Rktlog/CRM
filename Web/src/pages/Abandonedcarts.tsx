@@ -1,9 +1,14 @@
 import { ChangeEvent, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { apiGet, apiPostText } from '../lib/api';
+import { apiGet, apiPost, apiDelete, apiPostText } from '../lib/api';
 import { fmtDateWithYear } from '../lib/types';
+import DictationTextarea from '../components/DictationTextarea';
+import { useAuth } from '../context/AuthContext';
 
 type Item = { productName: string; sku: string | null; available: number | null; quantity: number; price: number; total: number };
+type Earlier = { quoteId: string; number: string; status: string };   // an order or quote the current one took over from
+type Standing = { quoteId: string; number: string; date: string; itemsOrdered: number; otherItems: number; status: string; total: number; replaces: Earlier[] };
+type Log = { id: string; method: string; note: string; at: string; by: string | null; mine: boolean };
 type Cart = {
   id: string;
   abandonedAt: string;
@@ -14,18 +19,26 @@ type Cart = {
   units: number;
   value: number;
   status: 'open' | 'ordered';
-  orderedSince: { quoteId: string; number: string; date: string; itemsOrdered: number } | null;
+  orderedSince: Standing | null;      // the order as it stands now: a voided one is replaced by the new one
+  quotePrepared: Standing | null;     // no order yet, but a quote has been prepared
+  cancelled: Earlier[];               // orders since the cart that were voided and not replaced
+  logs: Log[];
   items: Item[];
 };
 type Data = {
   summary: { openCarts: number; openValue: number; orderedCarts: number; notInCrm: number };
   lastImportedAt: string | null;
+  logsAvailable: boolean;
   carts: Cart[];
 };
 
 const COLS = '1fr 2.2fr 0.7fr 0.9fr 1.3fr';
 const money = (n: number) => '$' + n.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const qty = (n: number) => n.toLocaleString('en-AU', { maximumFractionDigits: 2 });
+const STATUS_WORDS: Record<string, string> = { VOIDED: 'voided', CREDITED: 'credited', DRAFT: 'draft quote', ESTIMATING: 'quote being prepared', ESTIMATED: 'quote', ORDERING: 'being ordered', ORDERED: 'ordered', BACKORDERED: 'backordered', SHIPPING: 'shipping', SHIPPED: 'shipped', COMPLETED: 'completed' };
+const statusWord = (s: string) => STATUS_WORDS[s.toUpperCase()] ?? s.toLowerCase();
+const METHODS: { key: string; label: string }[] = [{ key: 'note', label: 'Note' }, { key: 'called', label: 'Called' }, { key: 'emailed', label: 'Emailed' }, { key: 'left_message', label: 'Left a message' }];
+const methodLabel = (k: string) => METHODS.find(m => m.key === k)?.label ?? 'Note';
 const when = (d: string) => new Date(d).toLocaleString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 
 export default function AbandonedCarts() {
@@ -41,7 +54,15 @@ export default function AbandonedCarts() {
   async function load() {
     setError(null);
     try {
-      setData(await apiGet(`/abandoned-carts?status=${status}&days=${days}`));
+      const d: Data = await apiGet(`/abandoned-carts?status=${status}&days=${days}`);
+      // Tolerates an older API that does not send the newer fields yet.
+      setData({
+        ...d, logsAvailable: d.logsAvailable ?? false,
+        carts: d.carts.map(c => ({
+          ...c, logs: c.logs ?? [], quotePrepared: c.quotePrepared ?? null, cancelled: c.cancelled ?? [],
+          orderedSince: c.orderedSince ? { ...c.orderedSince, otherItems: c.orderedSince.otherItems ?? 0, status: c.orderedSince.status ?? '', total: c.orderedSince.total ?? 0, replaces: c.orderedSince.replaces ?? [] } : null,
+        })),
+      });
     } catch (e: any) {
       setError(e.message);
     }
@@ -143,9 +164,12 @@ export default function AbandonedCarts() {
                     {c.status === 'ordered'
                       ? <span className="pill teal">Ordered {fmtDateWithYear(c.orderedSince!.date)}</span>
                       : <span className="pill amber">Open</span>}
+                    {c.status === 'ordered' && <div className="acct-region">#{c.orderedSince!.number}{c.orderedSince!.replaces.length > 0 ? ' (replaces an earlier one)' : ''}</div>}
+                    {c.status === 'open' && c.quotePrepared && <div className="acct-region">Quote #{c.quotePrepared.number} prepared</div>}
+                    {c.logs.length > 0 && <div className="acct-region" title={c.logs[0].note}>{c.logs.length} {c.logs.length === 1 ? 'note' : 'notes'}, last {fmtDateWithYear(c.logs[0].at)}</div>}
                   </div>
                 </div>
-                {open && <CartDetail cart={c} />}
+                {open && <CartDetail cart={c} logsAvailable={data.logsAvailable} onLogs={logs => setData(d => d && ({ ...d, carts: d.carts.map(x => (x.id === c.id ? { ...x, logs } : x)) }))} />}
               </div>
             );
           })}
@@ -155,7 +179,107 @@ export default function AbandonedCarts() {
   );
 }
 
-function CartDetail({ cart: c }: { cart: Cart }) {
+// Where the customer has got to since the cart: the order as it stands now, what it replaced, or a quote not yet an order.
+function SinceThen({ c }: { c: Cart }) {
+  const earlier = (e: Earlier) => <span key={e.quoteId}><Link to={`/orders/${e.quoteId}`} className="order-link">#{e.number}</Link> ({statusWord(e.status)})</span>;
+  const list = (items: Earlier[]) => items.map((e, i) => <span key={e.quoteId}>{i > 0 ? ', ' : ''}{earlier(e)}</span>);
+  const items = (o: Standing) => (
+    <div className="pd-sub">
+      {o.itemsOrdered} of {c.itemCount} cart {c.itemCount === 1 ? 'item' : 'items'} on {o.status && isQuote(o.status) ? 'that quote' : 'that order'}
+      {o.otherItems > 0 ? `, plus ${o.otherItems} other ${o.otherItems === 1 ? 'item' : 'items'} that ${o.otherItems === 1 ? 'was' : 'were'} not in the cart` : ''}
+    </div>
+  );
+  if (c.orderedSince) {
+    const o = c.orderedSince;
+    return (
+      <>
+        <div>
+          Ordered <Link to={`/orders/${o.quoteId}`} className="order-link">#{o.number}</Link> on {fmtDateWithYear(o.date)}{' '}
+          <span className="pill neutral">{statusWord(o.status)}</span> {money(o.total)}
+        </div>
+        {items(o)}
+        {o.replaces.length > 0 && <div className="pd-sub">Replaces {list(o.replaces)}: the order was changed, and this is the new one.</div>}
+      </>
+    );
+  }
+  if (c.quotePrepared) {
+    const q = c.quotePrepared;
+    return (
+      <>
+        <div>
+          Quote <Link to={`/orders/${q.quoteId}`} className="order-link">#{q.number}</Link> prepared on {fmtDateWithYear(q.date)}{' '}
+          <span className="pill amber">{statusWord(q.status)}</span> {money(q.total)}
+        </div>
+        {items(q)}
+        <div className="pd-sub">Not confirmed as an order yet.{q.replaces.length > 0 ? <> Replaces {list(q.replaces)}.</> : null}</div>
+      </>
+    );
+  }
+  return (
+    <>
+      {c.cancelled.length > 0 && <div className="pd-sub" style={{ marginBottom: 4 }}>{list(c.cancelled)} {c.cancelled.length === 1 ? 'was' : 'were'} cancelled and nothing has replaced {c.cancelled.length === 1 ? 'it' : 'them'}.</div>}
+      <div className="pd-sub">No order since. Worth a follow-up call.</div>
+    </>
+  );
+}
+const isQuote = (status: string) => ['DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING'].includes(status.toUpperCase());
+
+// Notes, calls and emails on a cart, newest first, with a box to add one.
+function CartLog({ cart: c, available, onLogs }: { cart: Cart; available: boolean; onLogs: (logs: Log[]) => void }) {
+  const { role } = useAuth();
+  const canDeleteAny = role === 'manager';   // anyone can delete their own entries; a manager can delete any
+  const [note, setNote] = useState('');
+  const [method, setMethod] = useState('note');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function add() {
+    if (!note.trim() || busy) return;
+    setBusy(true); setError(null);
+    try {
+      const l: Log = await apiPost('/abandoned-carts/log', { cart: c.id, note, method });
+      onLogs([l, ...c.logs]); setNote(''); setMethod('note');
+    } catch (e: any) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+  async function remove(l: Log) {
+    if (!window.confirm('Delete this entry?')) return;
+    try { await apiDelete(`/abandoned-carts/log/${l.id}`); onLogs(c.logs.filter(x => x.id !== l.id)); }
+    catch (e: any) { setError(e.message); }
+  }
+
+  return (
+    <div className="pd-section">
+      <div className="pd-section-title">Log ({c.logs.length})</div>
+      {!available && <div className="pd-sub">Logging is not set up yet. Ask for abandoned-cart-logs.sql to be run in the database.</div>}
+      {available && (
+        <div style={{ marginBottom: 10, maxWidth: 640 }}>
+          <DictationTextarea value={note} onChange={setNote} rows={2} maxLength={2000} placeholder="What happened? For example: rang Ann, she will reorder next week" aria-label="Add to the log" />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
+            <select value={method} onChange={e => setMethod(e.target.value)} aria-label="How you got in touch">
+              {METHODS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+            </select>
+            <button type="button" className="btn" disabled={busy || !note.trim()} onClick={add}>{busy ? 'Adding…' : 'Add to log'}</button>
+            {error && <span className="save-msg err">{error}</span>}
+          </div>
+        </div>
+      )}
+      {c.logs.length === 0 && available && <div className="pd-sub">Nothing logged on this cart yet.</div>}
+      {c.logs.map(l => (
+        <div key={l.id} style={{ padding: '6px 0', borderTop: '1px solid var(--line)' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+            <span className="pill neutral">{methodLabel(l.method)}</span>
+            <span className="acct-region">{l.by ?? 'Someone'}, {when(l.at)}</span>
+            {(l.mine || canDeleteAny) && <button type="button" className="link-btn" style={{ fontSize: 12 }} onClick={() => remove(l)}>Delete</button>}
+          </div>
+          <div style={{ whiteSpace: 'pre-wrap', marginTop: 2 }}>{l.note}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CartDetail({ cart: c, logsAvailable, onLogs }: { cart: Cart; logsAvailable: boolean; onLogs: (logs: Log[]) => void }) {
   return (
     <div className="pd">
       <div className="pd-row">
@@ -170,21 +294,11 @@ function CartDetail({ cart: c }: { cart: Cart }) {
         </div>
         <div className="pd-box">
           <div className="pd-box-title">Since then</div>
-          {c.orderedSince ? (
-            <>
-              <div>
-                Ordered <Link to={`/orders/${c.orderedSince.quoteId}`} className="order-link">#{c.orderedSince.number}</Link>
-                {' '}on {fmtDateWithYear(c.orderedSince.date)}
-              </div>
-              <div className="pd-sub">
-                {c.orderedSince.itemsOrdered} of {c.itemCount} cart {c.itemCount === 1 ? 'item' : 'items'} on that order
-              </div>
-            </>
-          ) : (
-            <div className="pd-sub">No order since. Worth a follow-up call.</div>
-          )}
+          <SinceThen c={c} />
         </div>
       </div>
+
+      <CartLog cart={c} available={logsAvailable} onLogs={onLogs} />
 
       <div className="pd-section">
         <div className="pd-section-title">Cart ({c.itemCount} items, {qty(c.units)} units, {money(c.value)})</div>
