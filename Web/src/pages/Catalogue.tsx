@@ -4,14 +4,13 @@ import { apiGet } from '../lib/api';
 import ProductPhoto from '../components/ProductPhoto';
 import ProductStatusPill from '../components/ProductStatusPill';
 import EtaText, { Eta } from '../components/EtaText';
-import ProductDescription from '../components/ProductDescription';
 
 // Catalogue: product photos by brand, with stock and price. Built for scrolling on a
 // phone during a visit. Tap a photo to see it large; tap the SKU for the full stock
 // detail on the Products page. Photos come from the team's Google Sheet.
 
 type Item = {
-  sku: string; name: string; brand: string | null; category: string | null; uom: string | null; imageUrl: string | null; lifecycle?: string | null; description?: string | null; eta?: Eta;
+  sku: string; name: string; brand: string | null; category: string | null; uom: string | null; imageUrl: string | null; lifecycle?: string | null; eta?: Eta;
   available: number; onHand: number; onOrder: number; wholesale: number | null; retail: number | null;
 };
 type Facet = { name: string; count: number };
@@ -164,7 +163,6 @@ function Fragment({ item: it, showBrand }: { item: Item; showBrand: boolean }) {
           {it.category && <div className="acct-region">{it.category}</div>}
           {it.lifecycle && <div style={{ marginTop: 3 }}><ProductStatusPill status={it.lifecycle} /></div>}
         </div>
-        {it.description && <ProductDescription text={it.description} lines={3} expandable={false} />}
         <div>
           <span className={`pill ${tone} num`}>{qty(it.available)} available</span>
           {it.onOrder > 0 && it.available <= 0 && <div className="acct-region" style={{ marginTop: 3 }}>{qty(it.onOrder)} on order</div>}

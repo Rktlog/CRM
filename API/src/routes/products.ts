@@ -60,7 +60,7 @@ function rank(sku: string, name: string, q: string, words: string[]): number {
   return 4;
 }
 
-// The product description DEAR holds, as plain text (filled by the sync). A separate read, so product search keeps working
+// The product description DEAR holds, as plain text (filled by the sync), for the Products page. The catalogue does not show it. A separate read, so product search keeps working
 // even before the column has been added.
 async function descriptionsFor(skus: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
@@ -71,8 +71,6 @@ async function descriptionsFor(skus: string[]): Promise<Map<string, string>> {
   } catch (e) { console.error('product descriptions unavailable:', (e as Error).message); }
   return out;
 }
-const CATALOGUE_DESCRIPTION = 280;   // the catalogue tile shows the start; the product page shows it all
-const brief = (s: string | undefined) => (s ? (s.length > CATALOGUE_DESCRIPTION ? `${s.slice(0, CATALOGUE_DESCRIPTION - 1).trimEnd()}…` : s) : null);
 
 // ---------- Product status (EOL, Discontinued, Pre-order, New, Confirmed for Ranging, For Customer Only Then Cease, Preorder Only) and photo links ----------
 // Set one product by hand, or many from a spreadsheet. Managers only. Everything else about a product comes from DEAR.
@@ -133,8 +131,9 @@ productsRouter.post('/import', express.text({ type: '*/*', limit: '20mb' }), asy
 });
 
 // PATCH /products/:sku   { lifecycle: one of the stages (eol, discontinued, preorder, new, ranging, customer_only, preorder_only) | null, imageUrl: 'https://...' | null, eta: '2026-12-01' | null }
-// An EOL product with nothing left (none available, on hand or on order) is moved to Discontinued by the database itself,
-// whichever job changed the stock. Setting EOL on one like that is moved straight away, and the reply says so (note).
+// An EOL product with no stock anywhere (none available, on hand, on order, or in any location) for 24 hours is moved to
+// Discontinued by the database itself, whichever job changed the stock. The reply says (note) when that has just happened,
+// or when it is about to because there is none left now.
 productsRouter.patch('/:sku', async (req, res) => {
   if (!managersOnly(req, res)) return;
   const data: { lifecycle?: string | null; imageUrl?: string | null; eta?: Date | null } = {};
@@ -160,9 +159,14 @@ productsRouter.patch('/:sku', async (req, res) => {
   if (!p) return res.status(404).json({ error: 'Product not found' });
   const incoming = await incomingFor([p.sku]);
   const moved = data.lifecycle === 'eol' && p.lifecycle === 'discontinued';
+  let waiting = false;   // set to EOL with no stock left: it becomes Discontinued after 24 hours of that
+  if (data.lifecycle === 'eol' && p.lifecycle === 'eol') {
+    try { const [r] = await prisma.$queryRaw<{ gone: boolean }[]>`select not crm.product_has_stock(p) as gone from crm.products p where p.sku = ${p.sku}`; waiting = !!r?.gone; } catch { /* the stage rule is not installed yet */ }
+  }
   res.json({
     sku: p.sku, imageUrl: p.imageUrl, lifecycle: p.lifecycle, etaManual: dayOf(p.eta), eta: chooseEta(p.eta, p.onOrder, incoming.get(p.sku) ?? [], melDay()),
-    ...(moved ? { note: 'There is no stock left (none available, on hand or on order), so it was set to Discontinued instead of EOL.' } : {}),
+    ...(moved ? { note: 'There is no stock left (none available, on hand, on order or in any location), so it was set to Discontinued instead of EOL.' }
+      : waiting ? { note: 'There is no stock left (none available, on hand, on order or in any location). It will change to Discontinued by itself after 24 hours with none.' } : {}),
   });
 });
 
@@ -208,7 +212,6 @@ productsRouter.get('/catalogue', async (req, res) => {
       prisma.product.groupBy({ by: ['lifecycle'], where: { AND: [...common, ...byBrand, ...byCategory] }, _count: { _all: true } }),
     ]);
     const incoming = await incomingFor(rows.map(r => r.sku));
-    const descriptions = await descriptionsFor(rows.map(r => r.sku));
     const today = melDay();
 
     const facet = (rows: { _count: { _all: number } }[], key: 'brand' | 'category') =>
@@ -220,7 +223,7 @@ productsRouter.get('/catalogue', async (req, res) => {
       items: rows.map(p => {
         const prices = (p.prices as Record<string, number>) ?? {};
         return {
-          sku: p.sku, name: p.name, brand: p.brand, category: p.category, uom: p.uom, imageUrl: p.imageUrl, lifecycle: p.lifecycle, description: brief(descriptions.get(p.sku)),
+          sku: p.sku, name: p.name, brand: p.brand, category: p.category, uom: p.uom, imageUrl: p.imageUrl, lifecycle: p.lifecycle,
           eta: chooseEta(p.eta, p.onOrder, incoming.get(p.sku) ?? [], today), etaManual: dayOf(p.eta),
           available: p.available, onHand: p.onHand, onOrder: p.onOrder,
           wholesale: pickPrice(prices, WHOLESALE)?.price ?? null,

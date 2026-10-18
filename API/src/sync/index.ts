@@ -4,6 +4,7 @@ import { syncCustomers } from './syncCustomers';
 import { syncSales } from './syncSales';
 import { syncProductDetails } from './syncProductDetails';
 import { syncPurchaseDates } from './syncPurchaseDates';
+import { prisma } from '../lib/prisma';
 
 async function runSync() {
   const start = Date.now();
@@ -17,6 +18,11 @@ async function runSync() {
   }
   // Separate steps: if one fails, the sales sync above and the other step are not affected.
   try { await syncPurchaseDates(); } catch (e) { console.error('Purchase dates failed:', e); }
+  // EOL products that have had no stock for 24 hours and that nothing has updated since (see product-stages.sql).
+  try {
+    const [r] = await prisma.$queryRaw<{ n: number }[]>`select crm.finish_eol_products() as n`;
+    if (r?.n) console.log(`EOL products with no stock for 24 hours: ${r.n} moved to Discontinued.`);
+  } catch (e) { console.error('EOL check failed:', e); }
 }
 
 // Product descriptions barely change, so this runs every 6 hours and once at the start, not every 30 minutes.
