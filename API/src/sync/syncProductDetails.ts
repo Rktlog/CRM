@@ -6,6 +6,8 @@ import { fetchAllProducts } from './dearClient';
 // price sync creates them), and only where the text differs. Plain text: DEAR's tags and entities are stripped, so it can
 // be shown safely anywhere.
 //
+// The "ORDER INCREMENT: 4" line in a description is saved as the product's order increment (crm.products.order_increment).
+//
 // A description that says "end of line" (or EOL) moves the product to the EOL stage. That happens when the description
 // BEGINS to say it, not on every run, so a stage someone sets by hand afterwards is never taken back. Products already
 // EOL or Discontinued are left alone. (An EOL product with no stock left then becomes Discontinued by the database rule.)
@@ -31,29 +33,61 @@ export const END_OF_LINE = /\bend[\s_-]*of[\s_-]*line\b|\beol\b/i;
 export const saysEndOfLine = (text: string | null | undefined): boolean => !!text && END_OF_LINE.test(text);
 const REASON = 'Description says end of line';
 
-export async function syncProductDetails(products?: any[]): Promise<{ checked: number; updated: number; markedEol: number; skipped?: string }> {
+// "ORDER INCREMENT: 4", "Order increment - 6", "order increment 12". The first one in the text; a whole number from 1 up.
+export function orderIncrementOf(text: string | null | undefined): number | null {
+  const m = text ? /\border[\s_-]*increment\b\s*[:=\-\u2013]?\s*(\d{1,5})\b/i.exec(text) : null;
+  const n = m ? Number(m[1]) : 0;
+  return n >= 1 ? n : null;
+}
+let noIncrementColumn = false;   // the column is added by product-increment.sql; until then, descriptions are still saved
+
+export type Preview = { sku: string; from: string | null };
+// dryRun: work out what would change and change nothing. `examples` are the first products that would move to EOL.
+export async function syncProductDetails(products?: any[], o: { dryRun?: boolean } = {}): Promise<{ checked: number; updated: number; markedEol: number; skipped?: string; examples?: Preview[] }> {
   const list = products ?? await fetchAllProducts();
-  const rows = list.filter(p => p && p.SKU != null && String(p.SKU).trim() !== '').map(p => ({ sku: String(p.SKU).trim(), text: descriptionOf(p) ?? '' }));
+  const rows = list.filter(p => p && p.SKU != null && String(p.SKU).trim() !== '').map(p => { const text = descriptionOf(p) ?? ''; return { sku: String(p.SKU).trim(), text, inc: orderIncrementOf(text) ?? 0 }; });
   // If DEAR's answer carries no Description field at all, something is different about it: leave what we have, never wipe it.
   if (!list.some(p => p && 'Description' in p)) {
     console.warn('Product details: DEAR\'s product list has no Description field, so descriptions were left as they are.');
     return { checked: rows.length, updated: 0, markedEol: 0, skipped: 'no Description field in the DEAR product list' };
   }
   let updated = 0, markedEol = 0;
+  const examples: Preview[] = [];
   for (let i = 0; i < rows.length; i += 1000) {
     const batch = rows.slice(i, i + 1000);
     // What the CRM has now, read before it changes, to tell a description that has just begun to say "end of line".
     type Before = { sku: string; description: string | null; lifecycle: string | null };
     const before = new Map<string, Before>((await prisma.$queryRaw<Before[]>`
       select sku, description, lifecycle from crm.products where sku = any(${batch.map(r => r.sku)}::text[])`).map((r): [string, Before] => [r.sku, r]));
-    const changed = await prisma.$queryRaw<{ n: number }[]>`
-      update crm.products p set description = nullif(v.text, '')
-      from unnest(${batch.map(r => r.sku)}::text[], ${batch.map(r => r.text)}::text[]) as v(sku, text)
-      where p.sku = v.sku and p.description is distinct from nullif(v.text, '')
-      returning 1 as n`;
-    updated += changed.length;
+    if (o.dryRun) updated += batch.filter(r => before.has(r.sku) && (before.get(r.sku)!.description ?? '') !== r.text).length;
+    else {
+      const skus = batch.map(r => r.sku), texts = batch.map(r => r.text), incs = batch.map(r => r.inc);
+      const descriptionOnly = () => prisma.$queryRaw<{ n: number }[]>`
+        update crm.products p set description = nullif(v.text, '')
+        from unnest(${skus}::text[], ${texts}::text[]) as v(sku, text)
+        where p.sku = v.sku and p.description is distinct from nullif(v.text, '')
+        returning 1 as n`;
+      let changed: { n: number }[];
+      if (noIncrementColumn) changed = await descriptionOnly();
+      else {
+        try {
+          changed = await prisma.$queryRaw<{ n: number }[]>`
+            update crm.products p set description = nullif(v.text, ''), order_increment = nullif(v.inc, 0)
+            from unnest(${skus}::text[], ${texts}::text[], ${incs}::int[]) as v(sku, text, inc)
+            where p.sku = v.sku and (p.description is distinct from nullif(v.text, '') or p.order_increment is distinct from nullif(v.inc, 0))
+            returning 1 as n`;
+        } catch (e) {
+          if (!/order_increment/.test(String((e as Error).message))) throw e;
+          console.warn('Product details: crm.products has no order_increment column yet (run product-increment.sql). Saving descriptions only.');
+          noIncrementColumn = true;
+          changed = await descriptionOnly();
+        }
+      }
+      updated += changed.length;
+    }
 
     const toEol = batch.filter(r => { const b = before.get(r.sku); return !!b && saysEndOfLine(r.text) && !saysEndOfLine(b.description) && b.lifecycle !== 'eol' && b.lifecycle !== 'discontinued'; });
+    if (o.dryRun) { markedEol += toEol.length; for (const r of toEol) if (examples.length < 25) examples.push({ sku: r.sku, from: before.get(r.sku)!.lifecycle }); continue; }
     if (toEol.length) {
       const skus = toEol.map(r => r.sku), froms = toEol.map(r => before.get(r.sku)!.lifecycle ?? '');
       // The log entry first, then the move: the stock rule may move an EOL product with no stock on to Discontinued the
@@ -69,6 +103,6 @@ export async function syncProductDetails(products?: any[]): Promise<{ checked: n
       markedEol += moved.length;
     }
   }
-  console.log(`Product details: ${rows.length} products read from DEAR, ${updated} descriptions updated, ${markedEol} moved to EOL because the description says end of line.`);
-  return { checked: rows.length, updated, markedEol };
+  console.log(`Product details${o.dryRun ? ' (preview, nothing changed)' : ''}: ${rows.length} products read from DEAR (${rows.filter(r => r.inc).length} with an order increment), ${updated} ${o.dryRun ? 'would be' : ''} updated, ${markedEol} ${o.dryRun ? 'would be' : ''} moved to EOL because the description says end of line.`);
+  return { checked: rows.length, updated, markedEol, ...(o.dryRun ? { examples } : {}) };
 }

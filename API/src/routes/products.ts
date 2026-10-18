@@ -72,6 +72,18 @@ async function descriptionsFor(skus: string[]): Promise<Map<string, string>> {
   return out;
 }
 
+// The order increment from the DEAR description ("ORDER INCREMENT: 4"): customers order in multiples of it. Saved by the
+// sync. A separate read, so the pages keep working before the column has been added.
+async function incrementsFor(skus: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!skus.length) return out;
+  try {
+    const rows = await prisma.$queryRaw<{ sku: string; order_increment: number | null }[]>`select sku, order_increment from crm.products where sku = any(${skus}::text[]) and order_increment is not null`;
+    for (const r of rows) if (r.order_increment) out.set(r.sku, Number(r.order_increment));
+  } catch (e) { console.error('order increments unavailable:', (e as Error).message); }
+  return out;
+}
+
 // ---------- Product status (EOL, Discontinued, Pre-order, New, Confirmed for Ranging, For Customer Only Then Cease, Preorder Only) and photo links ----------
 // Set one product by hand, or many from a spreadsheet. Managers only. Everything else about a product comes from DEAR.
 const managersOnly = (req: any, res: any) => {
@@ -212,6 +224,7 @@ productsRouter.get('/catalogue', async (req, res) => {
       prisma.product.groupBy({ by: ['lifecycle'], where: { AND: [...common, ...byBrand, ...byCategory] }, _count: { _all: true } }),
     ]);
     const incoming = await incomingFor(rows.map(r => r.sku));
+    const increments = await incrementsFor(rows.map(r => r.sku));
     const today = melDay();
 
     const facet = (rows: { _count: { _all: number } }[], key: 'brand' | 'category') =>
@@ -223,7 +236,7 @@ productsRouter.get('/catalogue', async (req, res) => {
       items: rows.map(p => {
         const prices = (p.prices as Record<string, number>) ?? {};
         return {
-          sku: p.sku, name: p.name, brand: p.brand, category: p.category, uom: p.uom, imageUrl: p.imageUrl, lifecycle: p.lifecycle,
+          sku: p.sku, name: p.name, brand: p.brand, category: p.category, uom: p.uom, imageUrl: p.imageUrl, lifecycle: p.lifecycle, orderIncrement: increments.get(p.sku) ?? null,
           eta: chooseEta(p.eta, p.onOrder, incoming.get(p.sku) ?? [], today), etaManual: dayOf(p.eta),
           available: p.available, onHand: p.onHand, onOrder: p.onOrder,
           wholesale: pickPrice(prices, WHOLESALE)?.price ?? null,
@@ -380,6 +393,7 @@ productsRouter.get('/search', async (req, res) => {
   }
 
   const descriptions = await descriptionsFor(skus);
+  const increments = await incrementsFor(skus);
   const results = products.map((p, idx) => {
     const prices = (p.prices as Record<string, number>) ?? {};
     const totals = totalsBySku.get(p.sku);
@@ -493,6 +507,7 @@ productsRouter.get('/search', async (req, res) => {
       imageUrl: p.imageUrl,   // the photo link (shown small, large on click)
       lifecycle: p.lifecycle, // one of the stages (EOL, discontinued, pre-order, new, confirmed for ranging, ...); null = none
       description: descriptions.get(p.sku) ?? null,   // DEAR's description, plain text
+      orderIncrement: increments.get(p.sku) ?? null,  // customers order in multiples of this
       eta: chooseEta(p.eta, p.onOrder, purchaseOrders, melDay()),   // when the next delivery should arrive
       etaManual: dayOf(p.eta),                                       // the date set by hand, if any
       uom: p.uom,

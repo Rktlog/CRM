@@ -10,7 +10,7 @@ import EtaText, { Eta } from '../components/EtaText';
 // detail on the Products page. Photos come from the team's Google Sheet.
 
 type Item = {
-  sku: string; name: string; brand: string | null; category: string | null; uom: string | null; imageUrl: string | null; lifecycle?: string | null; eta?: Eta;
+  sku: string; name: string; brand: string | null; category: string | null; uom: string | null; imageUrl: string | null; lifecycle?: string | null; orderIncrement?: number | null; eta?: Eta;
   available: number; onHand: number; onOrder: number; wholesale: number | null; retail: number | null;
 };
 type Facet = { name: string; count: number };
@@ -161,6 +161,7 @@ function Fragment({ item: it, showBrand }: { item: Item; showBrand: boolean }) {
         <div>
           <Link to={`/products?q=${encodeURIComponent(it.sku)}`} className="order-link" style={{ fontSize: 11.5 }}>{it.sku}</Link>
           {it.category && <div className="acct-region">{it.category}</div>}
+          {it.orderIncrement ? <div className="acct-region" style={{ fontWeight: 600 }}>Order increment: {it.orderIncrement}</div> : null}
           {it.lifecycle && <div style={{ marginTop: 3 }}><ProductStatusPill status={it.lifecycle} /></div>}
         </div>
         <div>

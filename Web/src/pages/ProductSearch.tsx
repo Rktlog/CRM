@@ -30,6 +30,7 @@ type Product = {
   imageUrl?: string | null; // photo link
   lifecycle?: string | null; // the stage (EOL, discontinued, pre-order, new, confirmed for ranging, ...); none if empty
   description?: string | null; // DEAR's description, plain text
+  orderIncrement?: number | null; // customers order in multiples of this (from the DEAR description)
   eta?: Eta;                 // when the next delivery should arrive
   etaManual?: string | null; // the ETA set by hand, if any
   uom: string | null;
@@ -175,6 +176,7 @@ export default function ProductSearch() {
                     <div>
                       <div className="acct-name">{p.name} <ProductStatusPill status={p.lifecycle} /></div>
                       {p.category && <div className="acct-region">{p.category}</div>}
+                      {p.orderIncrement ? <div className="acct-region" style={{ fontWeight: 600 }}>Order increment: {p.orderIncrement}</div> : null}
                     </div>
                   </div>
                   <div className="hide-sm" style={{ color: 'var(--ink-soft)' }}>{p.brand ?? '—'}</div>
@@ -284,6 +286,13 @@ function ProductDetail({ product: p, canEdit, onSaved }: { product: Product; can
           <ProductPhoto url={p.imageUrl} name={p.name} sku={p.sku} size={150} />
         </div>
       )}
+
+      {p.orderIncrement ? (
+        <div style={{ marginBottom: 12 }}>
+          <div className="stat-label">Order increment</div>
+          <div><b>{p.orderIncrement}</b> <span className="acct-region">customers order in multiples of {p.orderIncrement}</span></div>
+        </div>
+      ) : null}
 
       {p.description && (
         <div style={{ marginBottom: 12, maxWidth: 760 }}>
