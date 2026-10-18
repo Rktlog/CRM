@@ -60,7 +60,21 @@ function rank(sku: string, name: string, q: string, words: string[]): number {
   return 4;
 }
 
-// ---------- Product status (EOL, Discontinued, Pre-order, New) and photo links ----------
+// The product description DEAR holds, as plain text (filled by the sync). A separate read, so product search keeps working
+// even before the column has been added.
+async function descriptionsFor(skus: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!skus.length) return out;
+  try {
+    const rows = await prisma.$queryRaw<{ sku: string; description: string | null }[]>`select sku, description from crm.products where sku = any(${skus}::text[]) and description is not null`;
+    for (const r of rows) if (r.description) out.set(r.sku, r.description);
+  } catch (e) { console.error('product descriptions unavailable:', (e as Error).message); }
+  return out;
+}
+const CATALOGUE_DESCRIPTION = 280;   // the catalogue tile shows the start; the product page shows it all
+const brief = (s: string | undefined) => (s ? (s.length > CATALOGUE_DESCRIPTION ? `${s.slice(0, CATALOGUE_DESCRIPTION - 1).trimEnd()}…` : s) : null);
+
+// ---------- Product status (EOL, Discontinued, Pre-order, New, Confirmed for Ranging, For Customer Only Then Cease, Preorder Only) and photo links ----------
 // Set one product by hand, or many from a spreadsheet. Managers only. Everything else about a product comes from DEAR.
 const managersOnly = (req: any, res: any) => {
   if (req.rep!.role === 'manager') return true;
@@ -118,7 +132,9 @@ productsRouter.post('/import', express.text({ type: '*/*', limit: '20mb' }), asy
   }
 });
 
-// PATCH /products/:sku   { lifecycle: 'eol' | 'discontinued' | 'preorder' | 'new' | null, imageUrl: 'https://...' | null, eta: '2026-12-01' | null }
+// PATCH /products/:sku   { lifecycle: one of the stages (eol, discontinued, preorder, new, ranging, customer_only, preorder_only) | null, imageUrl: 'https://...' | null, eta: '2026-12-01' | null }
+// An EOL product with nothing left (none available, on hand or on order) is moved to Discontinued by the database itself,
+// whichever job changed the stock. Setting EOL on one like that is moved straight away, and the reply says so (note).
 productsRouter.patch('/:sku', async (req, res) => {
   if (!managersOnly(req, res)) return;
   const data: { lifecycle?: string | null; imageUrl?: string | null; eta?: Date | null } = {};
@@ -126,7 +142,7 @@ productsRouter.patch('/:sku', async (req, res) => {
     const v = req.body.lifecycle;
     if (v === null || v === '') data.lifecycle = null;
     else if (isStatusKey(v)) data.lifecycle = v;
-    else return res.status(400).json({ error: 'Status must be eol, discontinued, preorder, new, or empty' });
+    else return res.status(400).json({ error: `Status must be one of ${PRODUCT_STATUSES.map(s => s.key).join(', ')}, or empty` });
   }
   if ('imageUrl' in (req.body ?? {})) {
     const v = typeof req.body.imageUrl === 'string' ? req.body.imageUrl.trim() : '';
@@ -143,7 +159,11 @@ productsRouter.patch('/:sku', async (req, res) => {
   const p = await prisma.product.update({ where: { sku: req.params.sku }, data, select: { sku: true, imageUrl: true, lifecycle: true, eta: true, onOrder: true } }).catch(() => null);
   if (!p) return res.status(404).json({ error: 'Product not found' });
   const incoming = await incomingFor([p.sku]);
-  res.json({ sku: p.sku, imageUrl: p.imageUrl, lifecycle: p.lifecycle, etaManual: dayOf(p.eta), eta: chooseEta(p.eta, p.onOrder, incoming.get(p.sku) ?? [], melDay()) });
+  const moved = data.lifecycle === 'eol' && p.lifecycle === 'discontinued';
+  res.json({
+    sku: p.sku, imageUrl: p.imageUrl, lifecycle: p.lifecycle, etaManual: dayOf(p.eta), eta: chooseEta(p.eta, p.onOrder, incoming.get(p.sku) ?? [], melDay()),
+    ...(moved ? { note: 'There is no stock left (none available, on hand or on order), so it was set to Discontinued instead of EOL.' } : {}),
+  });
 });
 
 // ---------- GET /products/catalogue ----------
@@ -188,6 +208,7 @@ productsRouter.get('/catalogue', async (req, res) => {
       prisma.product.groupBy({ by: ['lifecycle'], where: { AND: [...common, ...byBrand, ...byCategory] }, _count: { _all: true } }),
     ]);
     const incoming = await incomingFor(rows.map(r => r.sku));
+    const descriptions = await descriptionsFor(rows.map(r => r.sku));
     const today = melDay();
 
     const facet = (rows: { _count: { _all: number } }[], key: 'brand' | 'category') =>
@@ -199,7 +220,7 @@ productsRouter.get('/catalogue', async (req, res) => {
       items: rows.map(p => {
         const prices = (p.prices as Record<string, number>) ?? {};
         return {
-          sku: p.sku, name: p.name, brand: p.brand, category: p.category, uom: p.uom, imageUrl: p.imageUrl, lifecycle: p.lifecycle,
+          sku: p.sku, name: p.name, brand: p.brand, category: p.category, uom: p.uom, imageUrl: p.imageUrl, lifecycle: p.lifecycle, description: brief(descriptions.get(p.sku)),
           eta: chooseEta(p.eta, p.onOrder, incoming.get(p.sku) ?? [], today), etaManual: dayOf(p.eta),
           available: p.available, onHand: p.onHand, onOrder: p.onOrder,
           wholesale: pickPrice(prices, WHOLESALE)?.price ?? null,
@@ -355,6 +376,7 @@ productsRouter.get('/search', async (req, res) => {
     adjustmentsBySku.set(r.sku, list);
   }
 
+  const descriptions = await descriptionsFor(skus);
   const results = products.map((p, idx) => {
     const prices = (p.prices as Record<string, number>) ?? {};
     const totals = totalsBySku.get(p.sku);
@@ -466,7 +488,8 @@ productsRouter.get('/search', async (req, res) => {
       brand: p.brand,
       category: p.category,
       imageUrl: p.imageUrl,   // the photo link (shown small, large on click)
-      lifecycle: p.lifecycle, // EOL, discontinued, pre-order or new; null = none
+      lifecycle: p.lifecycle, // one of the stages (EOL, discontinued, pre-order, new, confirmed for ranging, ...); null = none
+      description: descriptions.get(p.sku) ?? null,   // DEAR's description, plain text
       eta: chooseEta(p.eta, p.onOrder, purchaseOrders, melDay()),   // when the next delivery should arrive
       etaManual: dayOf(p.eta),                                       // the date set by hand, if any
       uom: p.uom,

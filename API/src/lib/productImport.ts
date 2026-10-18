@@ -9,19 +9,24 @@ import ExcelJS from 'exceljs';
 //   Product name  for reading only. DEAR's name stands.
 //   Image link    blank = leave the photo as it is. Never wipes a photo.
 //   Status        blank = no status. If the file has no Status column at all, statuses are left alone.
-//   ETA           the date the next delivery should arrive. Blank = no ETA of your own (DEAR's date on an incoming
-//                 order shows instead). If the file has no ETA column at all, ETAs are left alone.
+//   ETA           the date the next delivery should arrive. The ETA is normally the "required by" date on the purchase order
+//                 in DEAR; a date here shows only when no incoming order has one. Blank = no ETA of your own. If the file
+//                 has no ETA column at all, ETAs are left alone.
 
 export const PRODUCT_STATUSES = [
   { key: 'eol', label: 'EOL', meaning: 'End of line: being cleared, will not be reordered' },
   { key: 'discontinued', label: 'Discontinued', meaning: 'No longer available' },
   { key: 'preorder', label: 'Pre-order', meaning: 'Not in stock yet, taking orders' },
   { key: 'new', label: 'New', meaning: 'New to the range' },
+  { key: 'ranging', label: 'Confirmed for Ranging', meaning: 'Confirmed to be ranged' },
+  { key: 'customer_only', label: 'For Customer Only Then Cease', meaning: 'Only for customer orders, then the product ceases' },
+  { key: 'preorder_only', label: 'Preorder Only', meaning: 'Only available to pre-order' },
 ] as const;
 export type ProductStatus = (typeof PRODUCT_STATUSES)[number]['key'];
 export const isStatusKey = (v: unknown): v is ProductStatus => PRODUCT_STATUSES.some(s => s.key === v);
 export const statusLabel = (k: ProductStatus | null) => PRODUCT_STATUSES.find(s => s.key === k)?.label ?? '';
 export const MAX_IMPORT_CHANGES = 5000;
+const STATUS_WORDS = PRODUCT_STATUSES.map(s => s.label).join(', ');
 
 // What someone typed -> a status key, null for blank, 'invalid' for anything else.
 export function parseStatus(text: string): ProductStatus | null | 'invalid' {
@@ -29,8 +34,11 @@ export function parseStatus(text: string): ProductStatus | null | 'invalid' {
   if (!n) return null;
   if (n.startsWith('eol') || n.startsWith('endofl')) return 'eol';
   if (n.startsWith('disc')) return 'discontinued';
+  if (n.startsWith('preorderonly')) return 'preorder_only';   // before "preorder", which it also starts with
   if (n.startsWith('preorder')) return 'preorder';
   if (n === 'new') return 'new';
+  if (n.startsWith('confirmedfor') || n === 'ranging' || n.startsWith('ranging')) return 'ranging';
+  if (n.startsWith('forcustomer') || n.startsWith('customeronly')) return 'customer_only';
   return 'invalid';
 }
 
@@ -140,7 +148,7 @@ export function planImport(file: ParsedFile, products: CurrentProduct[]): Plan {
     }
     if (file.hasStatus) {
       const s = parseStatus(r.status);
-      if (s === 'invalid') problem(r.row, p.sku, `"${r.status}" is not a status. Use EOL, Discontinued, Pre-order, New, or leave it blank`);
+      if (s === 'invalid') problem(r.row, p.sku, `"${r.status}" is not a status. Use ${STATUS_WORDS}, or leave it blank`);
       else if (s !== ((p.lifecycle as ProductStatus | null) ?? null)) change.status = { from: (p.lifecycle as ProductStatus | null) ?? null, to: s };
     }
     if (file.hasEta) {
@@ -187,8 +195,8 @@ export async function productTemplate(
     ws.getCell(r, 5).numFmt = 'dd mmm yyyy';
     for (let c = 1; c <= 6; c++) ws.getCell(r, c).font = c === 2 || c === 6 ? { ...FONT, color: { argb: 'FF7F7F7F' } } : FONT;
     ws.getCell(r, 4).dataValidation = {
-      type: 'list', allowBlank: true, formulae: ['"EOL,Discontinued,Pre-order,New"'],
-      showErrorMessage: true, errorTitle: 'Status', error: 'Pick EOL, Discontinued, Pre-order or New, or leave it blank.',
+      type: 'list', allowBlank: true, formulae: [`"${PRODUCT_STATUSES.map(s => s.label).join(',')}"`],
+      showErrorMessage: true, errorTitle: 'Status', error: 'Pick a status from the list, or leave it blank.',
     };
     ws.getCell(r, 5).dataValidation = {
       type: 'date', operator: 'between', allowBlank: true, formulae: [new Date('2020-01-01T00:00:00Z'), new Date('2100-01-01T00:00:00Z')],
@@ -205,7 +213,7 @@ export async function productTemplate(
     ['Product name', 'To help you find the product. DEAR\'s name is the one used, changes here are ignored.'],
     ['Image link', 'A link to the photo, for example a Dropbox share link as it is. Leave blank to keep the photo the product has now.'],
     ['Status', 'Pick from the list, or leave blank for no status. If you delete the whole Status column, statuses are not touched.'],
-    ['ETA', 'The date the next delivery should arrive, so reps can tell customers. Leave blank for no date of your own: the date on an incoming order in DEAR shows instead. If you delete the whole ETA column, ETAs are not touched.'],
+    ['ETA', 'The ETA is the "required by" date on the incoming purchase order in DEAR. A date here only shows when no incoming order has a date. Leave blank for no date of your own. If you delete the whole ETA column, ETAs are not touched.'],
     ['Brand', 'Only there so you can filter the sheet. Not imported.'],
     ['', ''],
     ...PRODUCT_STATUSES.map(s => [s.label, s.meaning] as [string, string]),

@@ -1,54 +1,26 @@
 /**
- * Two things we don't know yet and shouldn't guess at:
- * 1. What a Sale's line items actually look like (field names for
- *    SKU, product name, quantity) — we've only ever looked at the
- *    Sale's top-level fields before, never its Lines.
- * 2. Whether/where "brand" lives — likely NOT on the sale line
- *    itself, but on the Product record for that SKU (DEAR's
- *    AdditionalAttribute fields, same pattern as Customer category).
+ * Shows what DEAR sends for product descriptions and purchase order dates, so you can see the fields the CRM reads
+ * are really there. Prints a few real products (does each have a Description?) and the fields of one purchase order
+ * (is RequiredBy there, and what does it hold?).
  *
  * Usage:
  *   npx tsx scripts/inspect-dear-product-fields.ts
  */
 import 'dotenv/config';
-import { dearGet, fetchSalesUpdatedSince } from '../src/sync/dearClient';
+import { dearGet } from '../src/sync/dearClient';
+import { descriptionOf, saysEndOfLine } from '../src/sync/syncProductDetails';
 
 async function main() {
-  console.log('=== Fetching one recent sale to inspect its line items ===');
-  const since = new Date(Date.now() - 30 * 86400000);
-  const sales = await fetchSalesUpdatedSince(since);
-  const withLines = sales.find(s => s.SaleID);
+  const products = (await dearGet('/product', { Page: 1, Limit: 100 })).Products ?? [];
+  const withText = products.filter((p: any) => descriptionOf(p));
+  console.log(`Products: ${products.length} read, ${withText.length} have a description, ${withText.filter((p: any) => saysEndOfLine(descriptionOf(p))).length} of them say end of line (they would be set to EOL).`);
+  console.log('Fields on a product:', Object.keys(products[0] ?? {}).join(', '));
+  for (const p of withText.slice(0, 3)) console.log(`\n${p.SKU} (${p.Name})\n  Description: ${JSON.stringify(p.Description)}\n  -> saved as: ${JSON.stringify(descriptionOf(p))}${saysEndOfLine(descriptionOf(p)) ? '\n  -> says end of line: would be set to EOL' : ''}`);
 
-  if (!withLines) {
-    console.log('No recent sales found to inspect.');
-    return;
-  }
-
-  const detail = await dearGet('/sale', { ID: withLines.SaleID });
-  console.log('Full sale detail keys:', Object.keys(detail));
-  console.log('\nLine items (detail.Lines or similar):');
-  console.log(JSON.stringify(detail.Lines ?? detail.LineItems ?? 'NO Lines/LineItems FIELD FOUND', null, 2));
-
-  const firstLine = (detail.Lines ?? detail.LineItems ?? [])[0];
-  if (!firstLine) {
-    console.log('\nNo line items on this sale — trying another endpoint shape.');
-    console.log(JSON.stringify(detail, null, 2).slice(0, 3000));
-    return;
-  }
-
-  const sku = firstLine.SKU ?? firstLine.Code ?? firstLine.ProductCode;
-  console.log('\n=== Fetching the Product record for SKU:', sku, '===');
-  if (sku) {
-    try {
-      const product = await dearGet('/product', { SKU: sku });
-      console.log(JSON.stringify(product, null, 2));
-    } catch (e) {
-      console.log('Could not fetch /product with that SKU:', (e as Error).message);
-      console.log('Trying /product list search instead...');
-      const productList = await dearGet('/productlist', { Limit: 1, SKU: sku });
-      console.log(JSON.stringify(productList, null, 2));
-    }
-  }
+  const purchases = (await dearGet('/purchaseList', { Page: 1, Limit: 20 })).PurchaseList ?? [];
+  console.log(`\nPurchase orders: ${purchases.length} read.`);
+  console.log('Fields on a purchase order:', Object.keys(purchases[0] ?? {}).join(', '));
+  for (const p of purchases.slice(0, 8)) console.log(`  ${p.OrderNumber}  status=${p.Status}  RequiredBy=${JSON.stringify(p.RequiredBy)}`);
 }
 
 main().catch(e => { console.error(e); process.exit(1); });

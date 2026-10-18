@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import ProductPhoto from '../components/ProductPhoto';
 import ProductStatusPill from '../components/ProductStatusPill';
 import EtaText, { Eta } from '../components/EtaText';
+import ProductDescription from '../components/ProductDescription';
 import ProductImportModal from '../components/ProductImportModal';
 import { PRODUCT_STATUSES } from '../lib/productStatus';
 
@@ -27,7 +28,8 @@ type Product = {
   brand: string | null;
   category: string | null;
   imageUrl?: string | null; // photo link
-  lifecycle?: string | null; // EOL, discontinued, pre-order, new; none if empty
+  lifecycle?: string | null; // the stage (EOL, discontinued, pre-order, new, confirmed for ranging, ...); none if empty
+  description?: string | null; // DEAR's description, plain text
   eta?: Eta;                 // when the next delivery should arrive
   etaManual?: string | null; // the ETA set by hand, if any
   uom: string | null;
@@ -229,7 +231,8 @@ function ProductEdit({ product: p, onSaved }: { product: Product; onSaved: (sku:
       if (etaChanged) body.eta = eta || null;
       const r = await apiPatch(`/products/${encodeURIComponent(p.sku)}`, body);
       onSaved(p.sku, { lifecycle: r.lifecycle, imageUrl: r.imageUrl, eta: r.eta, etaManual: r.etaManual });
-      setMsg({ text: 'Saved', ok: true });
+      setStatus(r.lifecycle ?? '');   // the server may have changed it (EOL with no stock left becomes Discontinued)
+      setMsg({ text: r.note ?? 'Saved', ok: true });
     } catch (e) {
       setMsg({ text: (e as Error).message, ok: false });
     } finally {
@@ -260,7 +263,7 @@ function ProductEdit({ product: p, onSaved }: { product: Product; onSaved: (sku:
       </div>
       <div className="acct-region" style={{ marginTop: 6 }}>
         {p.eta ? <>Reps see: <EtaText eta={p.eta} /> . </> : 'No ETA to show yet. '}
-        Leave the ETA empty to use the date on the incoming order in DEAR.
+        The ETA is the required-by date on the incoming purchase order in DEAR. A date here is only used when no purchase order has a date.
       </div>
       {msg && <div className={'save-msg ' + (msg.ok ? 'ok' : 'err')} style={{ marginTop: 8 }}>{msg.text}</div>}
     </div>
@@ -279,6 +282,13 @@ function ProductDetail({ product: p, canEdit, onSaved }: { product: Product; can
       {p.imageUrl && (
         <div style={{ marginBottom: 12 }}>
           <ProductPhoto url={p.imageUrl} name={p.name} sku={p.sku} size={150} />
+        </div>
+      )}
+
+      {p.description && (
+        <div style={{ marginBottom: 12, maxWidth: 760 }}>
+          <div className="stat-label">Description</div>
+          <ProductDescription text={p.description} lines={4} />
         </div>
       )}
 

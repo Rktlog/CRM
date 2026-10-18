@@ -5,6 +5,16 @@ import { openQuotes } from './receivables';
 import { chooseEta, incomingFor } from './eta';
 import { wholesalePrice } from './pricing';
 import { PRODUCT_STATUSES, isStatusKey, statusLabel } from './productImport';
+
+// DEAR's description of each product, plain text, if the sync has saved one. A separate read so the lookup works before the column exists.
+async function productDescriptions(skus: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!skus.length) return out;
+  try {
+    for (const r of await prisma.$queryRaw<{ sku: string; description: string | null }[]>`select sku, description from crm.products where sku = any(${skus}::text[]) and description is not null`) if (r.description) out.set(r.sku, r.description);
+  } catch { /* not there yet */ }
+  return out;
+}
 import { DATASETS, parseDefinition, runReport, ReportInputError } from './customReport';
 import { reportWorkbook } from './customReportXlsx';
 import { safeFilename, toCsv, OutFormat, Attachment } from './aiFiles';
@@ -52,7 +62,7 @@ export const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'product_lookup',
-    description: 'Look up products by SKU, name or brand: stock available, on order, ETA of the next delivery, status (EOL, Discontinued, Pre-order, New) and wholesale price. Can list by status, for example every EOL product still in stock.',
+    description: 'Look up products by SKU, name or brand: stock available, on order, ETA of the next delivery, status (EOL, Discontinued, Pre-order, New, Confirmed for Ranging, For Customer Only Then Cease, Preorder Only), the DEAR description and wholesale price. Can list by status, for example every EOL product still in stock.',
     input_schema: {
       type: 'object',
       properties: {
@@ -211,10 +221,11 @@ export async function runTool(name: string, input: any, ctx: Ctx): Promise<strin
         if (input?.inStockOnly === true) where.push({ available: { gt: 0 } });
         const products = await prisma.product.findMany({ where: { AND: where }, orderBy: [{ brand: 'asc' }, { sku: 'asc' }], take: 15 });
         const incoming = await incomingFor(products.map(p => p.sku));
+        const descriptions = await productDescriptions(products.map(p => p.sku));
         return out({ showing: products.length, products: products.map(p => {
           const eta = chooseEta(p.eta, p.onOrder, incoming.get(p.sku) ?? [], ctx.today);
-          return { sku: p.sku, name: p.name, brand: p.brand, status: statusLabel(isStatusKey(p.lifecycle) ? p.lifecycle : null) || null, available: p.available, onOrder: p.onOrder,
-            eta: eta ? { date: eta.date, late: eta.late, from: eta.source === 'manual' ? 'set by hand' : eta.ref ? `order ${eta.ref}` : 'incoming order' } : null, wholesaleExGst: wholesalePrice(p.prices as any) };
+          return { sku: p.sku, name: p.name, brand: p.brand, status: statusLabel(isStatusKey(p.lifecycle) ? p.lifecycle : null) || null, description: (descriptions.get(p.sku) ?? '').slice(0, 400) || null, available: p.available, onOrder: p.onOrder,
+            eta: eta ? { date: eta.date, late: eta.late, from: eta.source === 'manual' ? 'set by hand' : eta.ref ? `purchase order ${eta.ref}` : 'incoming purchase order' } : null, wholesaleExGst: wholesalePrice(p.prices as any) };
         }) });
       }
       case 'run_report': {

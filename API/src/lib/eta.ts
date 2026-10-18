@@ -1,11 +1,13 @@
 import { prisma } from './prisma';
 
 // The ETA a rep can quote for a product: when the next delivery should arrive.
-//   1. A date someone set on the product (by hand or in the import) comes first, while it is still useful: stock is
-//      on order, or the date has not passed yet. Once the stock has arrived the old date drops away by itself.
-//   2. Otherwise the date DEAR has on the next incoming purchase order ("required by"): the earliest one still to come.
-//      If every outstanding order is past its date, the most recent one shows, marked late.
-//   3. Otherwise nothing, or "on order, no date" when stock is on order but no order has a date.
+//   1. It is the "required by" date on the purchase order in DEAR: the earliest incoming order that is still to come.
+//      The sync keeps that date up to date from DEAR.
+//   2. If every outstanding order is past its date, the most recent one shows, marked late. (A purchase order's date always
+//      wins over a date typed in.)
+//   3. Only when no outstanding order has a date: a date someone set on the product (by hand or in the import), while it is
+//      still useful: stock is on order, or the date has not passed yet.
+//   4. Otherwise nothing, or "on order, no date" when stock is on order but no order has a date.
 export type Eta = { date: string | null; source: 'manual' | 'po'; ref: string | null; qty: number; late: boolean };
 export type IncomingPo = { number: string | null; expected: Date | string | null; outstanding: number };
 
@@ -15,13 +17,12 @@ export function chooseEta(manual: Date | string | null | undefined, onOrder: num
   const open = pos.filter(p => p.outstanding > 0);
   const qty = open.reduce((s, p) => s + p.outstanding, 0);
   const m = day(manual);
-  if (m && (onOrder > 0 || m >= today)) return { date: m, source: 'manual', ref: null, qty: qty || onOrder, late: m < today };
-
   const dated = open.filter(p => p.expected).map(p => ({ ...p, d: day(p.expected)! })).sort((a, b) => a.d.localeCompare(b.d));
   const upcoming = dated.find(p => p.d >= today);
   if (upcoming) return { date: upcoming.d, source: 'po', ref: upcoming.number, qty: upcoming.outstanding, late: false };
   const past = dated.length ? dated[dated.length - 1] : null;
   if (past) return { date: past.d, source: 'po', ref: past.number, qty: past.outstanding, late: true };
+  if (m && (onOrder > 0 || m >= today)) return { date: m, source: 'manual', ref: null, qty: qty || onOrder, late: m < today };
   if (open.length) return { date: null, source: 'po', ref: open[0].number, qty, late: false };
   return null;
 }
