@@ -29,7 +29,7 @@ type Totals = { onAccount: number; reserved: number; free: number; openNotes: nu
 type Held = {
   id: string; number: string; accountId: string; account: string; region: string; rep: string | null; status: string;
   orderDate: string | null; kind: 'Prepayment' | 'Overpaid'; amount: number; finished: boolean;
-  cancelled?: boolean; completeInFull?: boolean; reservable?: boolean; reserved?: number; free?: number; released?: boolean; releaseNote?: string | null;
+  cancelled?: boolean; completeInFull?: boolean; reservable?: boolean; orderTotal?: number | null; remaining?: number | null; reserved?: number; free?: number; released?: boolean; releaseNote?: string | null;
 };
 type HeldTotals = { free?: { amount: number; count: number }; toApply: { amount: number; count: number }; open: { amount: number; count: number }; all: { amount: number; count: number } };
 const nice = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '');
@@ -259,18 +259,20 @@ export default function Credit() {
             : !held || !held.length ? <div className="empty-state">{heldView === 'free' ? 'No prepaid money is free to reserve. (Prepaid money on an order that is complete in full is not reservable.)' : heldView === 'apply' ? 'Nothing to apply: no finished or cancelled order is holding a prepayment.' : 'None.'}</div>
             : (
               <div className="manifest">
-                <div className="m-row head" style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 1.1fr 0.9fr 0.8fr 0.9fr 0.9fr 1.5fr' }}>
-                  <div>Customer</div><div>State</div><div>Order</div><div>Status</div><div>Order date</div><div>Type</div><div className="num">Amount</div><div className="num">Free to reserve</div><div></div>
+                <div className="m-row head" style={{ gridTemplateColumns: '1.8fr 0.45fr 0.85fr 1fr 0.8fr 0.7fr 0.85fr 0.85fr 0.85fr 0.85fr 1.4fr' }}>
+                  <div>Customer</div><div>State</div><div>Order</div><div>Status</div><div>Order date</div><div>Type</div><div className="num">Order total</div><div className="num">Prepaid</div><div className="num">Left to pay</div><div className="num">Free to reserve</div><div></div>
                 </div>
                 {held.map(h => (
-                  <div className="m-row" key={h.id + h.kind} style={{ gridTemplateColumns: '2fr 0.5fr 0.9fr 1.1fr 0.9fr 0.8fr 0.9fr 0.9fr 1.5fr', cursor: 'default' }}>
+                  <div className="m-row" key={h.id + h.kind} style={{ gridTemplateColumns: '1.8fr 0.45fr 0.85fr 1fr 0.8fr 0.7fr 0.85fr 0.85fr 0.85fr 0.85fr 1.4fr', cursor: 'default' }}>
                     <div><Link to={`/accounts/${h.accountId}`} className="order-link">{h.account}</Link>{h.rep && <div className="acct-region">{h.rep}</div>}</div>
                     <div>{h.region}</div>
                     <div><Link to={`/orders/${h.id}`} className="order-link">{h.number}</Link></div>
                     <div><span className={`pill ${h.cancelled ? 'rust' : h.finished ? 'amber' : 'neutral'}`}>{h.cancelled ? 'Cancelled' : nice(h.status) || '—'}</span>{h.released && <div><span className="pill teal" title={h.releaseNote ?? undefined}>Released</span></div>}</div>
                     <div>{h.orderDate ? fmtDate(h.orderDate) : ''}</div>
                     <div><span className={`pill ${h.kind === 'Overpaid' ? 'rust' : 'teal'}`}>{h.kind}</span></div>
+                    <div className="num">{h.orderTotal != null ? fmtMoney(h.orderTotal) : ''}</div>
                     <div className="num"><b>{fmtMoney(h.amount)}</b></div>
+                    <div className="num">{h.remaining == null ? <span className="acct-region">—</span> : h.remaining > 0.005 ? <b>{fmtMoney(h.remaining)}</b> : <span className="pill teal">Paid in full</span>}</div>
                     <div className="num">
                       {h.reservable ? <><b>{fmtMoney(h.free ?? 0)}</b>{(h.reserved ?? 0) > 0.005 && <div className="acct-region">{fmtMoney(h.reserved!)} reserved</div>}</> : <span className="acct-region">{h.completeInFull ? 'complete in full' : 'held'}</span>}
                     </div>

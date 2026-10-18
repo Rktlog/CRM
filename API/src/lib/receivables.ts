@@ -69,11 +69,12 @@ const nice = (s: string | null) => (s ? s.charAt(0) + s.slice(1).toLowerCase() :
 export function paymentState(q: { total: number | null; amount: number; amountPaid: number | null; unappliedCredit: number | null; amountDue: number | null; invoicedTotal: number | null; creditNotes: unknown }, reservedPrepay = 0) {
   const total = q.total ?? q.amount;
   const onAccount = Array.isArray(q.creditNotes) ? (q.creditNotes as any[]).reduce((s, c) => s + (Number(c?.onAccount) || 0), 0) : 0;
-  const prepayment = Math.max(Math.max((q.unappliedCredit ?? 0) - onAccount, 0) - Math.max(reservedPrepay, 0), 0);
+  const held = Math.max((q.unappliedCredit ?? 0) - onAccount, 0);                       // prepaid money DEAR holds against this order
+  const prepayment = Math.max(held - Math.max(reservedPrepay, 0), 0);                    // what still counts towards paying it
   let paid = (q.amountPaid ?? 0) + prepayment;
   if (q.amountDue != null && q.amountDue <= 0.005 && (q.invoicedTotal ?? 0) >= total - 0.005) paid = Math.max(paid, total);
   const remaining = cents(Math.max(total - paid, 0));
-  return { total: cents(total), paid: cents(paid), remaining, payment: (remaining <= 0.005 ? 'paid' : paid > 0.005 ? 'part' : 'unpaid') as 'paid' | 'part' | 'unpaid' };
+  return { total: cents(total), paid: cents(paid), held: cents(held), remaining, payment: (remaining <= 0.005 ? 'paid' : paid > 0.005 ? 'part' : 'unpaid') as 'paid' | 'part' | 'unpaid' };
 }
 
 // Keep only rows whose next follow-up is the 1st, the 2nd, a date someone set, or none left ("done"), and/or overdue.

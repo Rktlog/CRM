@@ -222,6 +222,8 @@ export type HeldRow = {
   released: boolean;     // an open order the customer no longer wants: its prepayment has been freed by hand
   releaseNote: string | null;
   dearSaleId: string | null;
+  orderTotal: number | null;   // what the order comes to (inc GST)
+  remaining: number | null;    // still to be paid on the order, counting this prepayment (what is reserved out of it is not counted). null once there is no order left to pay: credited, closed, voided or released
 };
 const isCancelled = (status: string) => /^VOIDED/i.test(status.trim());
 const isFinished = (status: string) => /^(COMPLETED|CREDITED|CLOSED|VOIDED)/i.test(status.trim());
@@ -243,7 +245,9 @@ export async function loadHeld(rep: Rep, f: CreditFilters, accountId?: string): 
                - coalesce((select sum((c->>'onAccount')::numeric) from jsonb_array_elements(q.credit_notes) c), 0), 0) as prepayment,
              greatest(-coalesce(q.amount_due, 0)::numeric, 0) as overpaid,
              coalesce(rv.taken, 0) as taken,
-             q.dear_sale_id as dear_sale_id, (q.prepay_released_at is not null) as released, q.prepay_release_note as release_note
+             q.dear_sale_id as dear_sale_id, (q.prepay_released_at is not null) as released, q.prepay_release_note as release_note,
+             coalesce(q.total, q.amount)::numeric as order_total, coalesce(q.amount_paid, 0)::numeric as cash_paid,
+             (q.amount_due is not null and q.amount_due <= 0.005 and coalesce(q.invoiced_total, 0) >= coalesce(q.total, q.amount) - 0.005) as settled
       from crm.quotes q
       join crm.accounts a on a.id = q.account_id
       left join crm.reps rp on rp.id = a.rep_id
@@ -256,10 +260,12 @@ export async function loadHeld(rep: Rep, f: CreditFilters, accountId?: string): 
       where q.source <> 'rhino-history' and q.number not like 'Q%' and ${Prisma.join(w, ' and ')}
     )
     select id, number, account_id as "accountId", account, region, rep, status, order_date as "orderDate", 'Prepayment' as kind, prepayment::float8 as amount, least(taken, prepayment)::float8 as reserved,
-           dear_sale_id as "dearSaleId", released, release_note as "releaseNote"
+           dear_sale_id as "dearSaleId", released, release_note as "releaseNote", order_total::float8 as "orderTotal",
+           -- the same sum Open Quotes uses: cash applied + the prepayment still held (less what is reserved), or the whole order if it is invoiced in full with nothing due
+           greatest(order_total - (case when settled then greatest(cash_paid + greatest(prepayment - least(taken, prepayment), 0), order_total) else cash_paid + greatest(prepayment - least(taken, prepayment), 0) end), 0)::float8 as remaining
     from o where prepayment > 0.005
     union all
-    select id, number, account_id, account, region, rep, status, order_date, 'Overpaid', overpaid::float8, 0::float8, dear_sale_id, released, release_note
+    select id, number, account_id, account, region, rep, status, order_date, 'Overpaid', overpaid::float8, 0::float8, dear_sale_id, released, release_note, order_total::float8, null::float8
     from o where overpaid > 0.005
     order by amount desc
     limit 5000`;
@@ -268,8 +274,11 @@ export async function loadHeld(rep: Rep, f: CreditFilters, accountId?: string): 
     // Any prepayment can be reserved unless the order is complete in full.
     const finished = isFinished(r.status) || (r.kind === 'Prepayment' && r.released), completeInFull = isComplete(r.status), reservable = r.kind === 'Prepayment' && !completeInFull;
     const amount = cents(r.amount), reserved = reservable ? cents(r.reserved) : 0;
+    const noOrderLeft = /^(VOIDED|CREDITED|CLOSED)/i.test(r.status.trim()) || r.released;   // nothing left to pay on an order that is gone
     return {
       ...r, amount, finished, cancelled: isCancelled(r.status), completeInFull, reservable, reserved,
+      orderTotal: r.orderTotal == null ? null : cents(r.orderTotal),
+      remaining: r.kind === 'Prepayment' && !noOrderLeft && r.remaining != null ? cents(r.remaining) : null,
       free: reservable ? cents(Math.max(0, amount - reserved)) : 0,
       orderDate: r.orderDate ? new Date(r.orderDate).toISOString().slice(0, 10) : null,
     };
@@ -335,7 +344,7 @@ creditRouter.get('/account/:id', async (req, res) => {
       otherCredit: held,
       reserved: cents(reservedNotes + reservedPrepaid), reservedNotes, reservedPrepaid,
       available: cents(Math.max(0, credit - reservedNotes)),           // credit notes free to use
-      prepaid: prepaid.map(h => ({ orderNo: h.number, orderId: h.id, status: h.status, cancelled: h.cancelled, released: h.released, orderDate: h.orderDate, amount: h.amount, reserved: h.reserved, free: h.free })),
+      prepaid: prepaid.map(h => ({ orderNo: h.number, orderId: h.id, status: h.status, cancelled: h.cancelled, released: h.released, orderDate: h.orderDate, amount: h.amount, reserved: h.reserved, free: h.free, orderTotal: h.orderTotal, leftToPay: h.remaining })),
       prepaidHeld: heldTotal(prepaid), prepaidFree,                    // prepaid money free to use
       // credit notes with credit left that is not already reserved: what can be reserved
       reservable: notes.filter(n => n.free > 0.005).map(n => ({ creditNo: n.creditNo, date: n.date, onAccount: cents(n.onAccount), free: n.free })),

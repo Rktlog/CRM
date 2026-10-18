@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma';
 import { isHistory } from '../lib/orderSource';
 import { searchWords } from './products';
 import * as XLSX from 'xlsx';
-import { openQuotes, toShip, unpaidInvoices, balances, AGE_BUCKETS, followUpState, filterFollowUp, melDay } from '../lib/receivables';
+import { openQuotes, toShip, unpaidInvoices, balances, AGE_BUCKETS, followUpState, filterFollowUp, melDay, paymentState } from '../lib/receivables';
 import { orderNoteSummary } from '../lib/orderNotes';
 
 export const ordersRouter = Router();
@@ -379,6 +379,26 @@ ordersRouter.get('/:id', async (req, res) => {
       .sort((a, b) => b.backordered - a.backordered);
   }
 
+  // Prepaid money held on this order and what is left to pay: worked out the same way as Open Quotes and the Credit page, so
+  // all three always agree. Money reserved for another order no longer counts towards paying this one.
+  let reservedPrepay = 0, released = false;
+  try {
+    const [r] = await prisma.$queryRaw<{ taken: number }[]>`
+      select coalesce(sum(amount), 0)::float8 as taken from crm.credit_reservations
+      where source_kind = 'prepayment' and source_order = ${o.number}
+        and (status = 'reserved' or (status = 'used' and resolved_at > now() - interval '2 days'))`;
+    reservedPrepay = r?.taken ?? 0;
+  } catch { /* the credit tables are not there */ }
+  try {
+    const [r] = await prisma.$queryRaw<{ released: boolean }[]>`select (prepay_released_at is not null) as released from crm.quotes where id = ${o.id}::uuid`;
+    released = !!r?.released;
+  } catch { /* the release columns are not added yet */ }
+  const pay = paymentState(o, reservedPrepay);
+  const gone = /^(VOIDED|CREDITED|CLOSED)/i.test((o.fulfillmentStatus ?? '').trim()) || released;   // no order left to pay
+  const prepaid = pay.held > 0.005
+    ? { held: pay.held, reserved: Math.round(Math.min(reservedPrepay, pay.held) * 100) / 100, orderTotal: pay.total, cashPaid: Math.round((o.amountPaid ?? 0) * 100) / 100, leftToPay: gone ? null : pay.remaining, released }
+    : null;
+
   res.json({
     id: o.id,
     number: o.number,
@@ -397,6 +417,7 @@ ordersRouter.get('/:id', async (req, res) => {
     creditNotes: o.creditNotes ?? [],
     invoicedTotal: o.invoicedTotal,
     amountPaid: o.amountPaid,
+    prepaid,   // null when no prepaid money is held on the order
     creditedTotal: o.creditedTotal,
     amountDue: o.amountDue,
     fulfillmentStatus: o.fulfillmentStatus,

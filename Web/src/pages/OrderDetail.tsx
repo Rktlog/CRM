@@ -47,6 +47,7 @@ type Order = {
   creditNotes: CreditDoc[];
   invoicedTotal: number | null;
   amountPaid: number | null;
+  prepaid: { held: number; reserved: number; orderTotal: number; cashPaid: number; leftToPay: number | null; released: boolean } | null;   // prepaid money held on the order
   creditedTotal: number | null;
   amountDue: number | null;
   account: { id: string; name: string; region: string };
@@ -247,6 +248,27 @@ export default function OrderDetail() {
           <div className="card">
             <h3>Payment</h3>
             <Row k="Payment" v={paymentTag(order)?.label ?? 'Nothing to pay'} />
+
+            {order.prepaid && (
+              <div className="money-summary" style={{ marginBottom: 12 }}>
+                <div className="doc-title">Prepaid</div>
+                <div className="kv"><span className="k">Order total</span><span className="num">{money(order.prepaid.orderTotal)}</span></div>
+                <div className="kv"><span className="k">Prepaid</span><span className="num">{money(order.prepaid.held)}</span></div>
+                {order.prepaid.reserved > 0.005 && (
+                  <div className="kv"><span className="k">Reserved for another order</span><span className="num">−{money(order.prepaid.reserved)}</span></div>
+                )}
+                {order.prepaid.cashPaid > 0.005 && (
+                  <div className="kv"><span className="k">Paid on invoices</span><span className="num">{money(order.prepaid.cashPaid)}</span></div>
+                )}
+                {order.prepaid.leftToPay != null ? (
+                  <div className={'kv money-due' + (order.prepaid.leftToPay > 0.005 ? ' owing' : '')}>
+                    <span>Left to pay</span><span className="num">{order.prepaid.leftToPay > 0.005 ? money(order.prepaid.leftToPay) : 'Paid in full'}</span>
+                  </div>
+                ) : (
+                  <div className="acct-region">{order.prepaid.released ? 'Released: the customer dropped this order.' : 'This order is no longer open, so nothing is left to pay.'}</div>
+                )}
+              </div>
+            )}
 
             {order.amountDue != null ? (
               <div className="money-summary">

@@ -21,7 +21,7 @@ type Note = {
   creditNo: string; date: string | null; orderNo: string; total: number; onAccount: number;
   reservedAmount: number; reservedFor: string | null; free: number;
 };
-type Prepaid = { orderNo: string; orderId: string; status: string; cancelled: boolean; orderDate: string | null; amount: number; reserved: number; free: number };
+type Prepaid = { orderNo: string; orderId: string; status: string; cancelled: boolean; orderDate: string | null; amount: number; reserved: number; free: number; orderTotal?: number | null; leftToPay?: number | null };
 type Reservation = {
   id: string; name: string; amount: number; orderRef: string | null; creditNo: string | null; sourceKind?: 'credit_note' | 'prepayment'; sourceOrder?: string | null;
   usedOnOrder: string | null; note: string | null;
@@ -33,7 +33,7 @@ type Credit = {
   creditInDear: number; otherCredit: number; reserved: number; available: number;
   reservable: { creditNo: string; date: string | null; onAccount: number; free: number }[];
   notes: Note[]; reservations: Reservation[];
-  // prepaid money on any order that is not complete in full: reservable like a credit note
+  // prepaid money on cancelled or finished orders: reservable like a credit note
   prepaid?: Prepaid[]; prepaidHeld?: number; prepaidFree?: number;
 };
 type OrderInfo = { found?: boolean; status?: string; total?: number; toPay?: number; error?: string };
@@ -57,7 +57,7 @@ export default function CreditReservations({ accountId, accountName }: { account
   const freeNotes = withCredit.filter(n => n.free > 0.005);
   const noteOf = new Map(credit.notes.map(n => [n.creditNo.toUpperCase(), n]));
   const heldLink = `/credit?tab=prepayments&view=all&q=${encodeURIComponent(accountName ?? '')}`;
-  // Prepaid money on any order that is not complete in full is free to reserve, like a credit note.
+  // Prepaid money on cancelled or finished orders is free to reserve, like a credit note.
   const prepaid = credit.prepaid ?? [];
   const freePrepaid = prepaid.filter(p => p.free > 0.005);
   const prepaidHeld = credit.prepaidHeld ?? 0, prepaidFree = credit.prepaidFree ?? 0;
@@ -70,7 +70,7 @@ export default function CreditReservations({ accountId, accountName }: { account
         <h3>Credit</h3>
         <div className="acct-region">
           No credit notes on account, so there is nothing to reserve here. {fmtMoney(credit.otherCredit)} is held on orders as a prepayment
-          or overpayment, which is not a credit note. It is not free to reserve because the order is complete in full (it used the money) or it is an overpayment.{' '}
+          or overpayment, which is not a credit note. It becomes free to reserve if its order is cancelled.{' '}
           <Link to={heldLink} className="order-link">See those orders</Link>
         </div>
       </div>
@@ -103,14 +103,14 @@ export default function CreditReservations({ accountId, accountName }: { account
             <div className="credit-free num">{fmtMoney(credit.available + prepaidFree)}</div>
           </div>
           <div className="acct-region">
-            {[credit.creditInDear > 0.005 && `${fmtMoney(credit.creditInDear)} on credit notes`, prepaidHeld > 0.005 && `${fmtMoney(prepaidHeld)} prepaid on orders`].filter(Boolean).join(', ')}
+            {[credit.creditInDear > 0.005 && `${fmtMoney(credit.creditInDear)} on credit notes`, prepaidHeld > 0.005 && `${fmtMoney(prepaidHeld)} prepaid on cancelled or finished orders`].filter(Boolean).join(', ')}
             {credit.reserved > 0.005 ? `, ${fmtMoney(credit.reserved)} reserved` : ''}
           </div>
         </div>
       )}
       {credit.otherCredit > 0.005 && (
         <div className="acct-region" style={{ marginBottom: 8 }}>
-          Also {fmtMoney(credit.otherCredit)} is held on orders that are complete in full, or as an overpayment. That is not a credit note, so it is not counted above or free to reserve.{' '}
+          Also {fmtMoney(credit.otherCredit)} is held as a prepayment or overpayment on orders. That is not a credit note, so it is not counted above or free to reserve.{' '}
           <Link to={heldLink} className="order-link">See those orders</Link>
         </div>
       )}
@@ -143,6 +143,11 @@ export default function CreditReservations({ accountId, accountName }: { account
                 <div className="acct-region">
                   {fmtMoney(p.free)} free{p.reserved > 0.005 ? ', the rest is reserved' : ''}{p.amount - p.free - p.reserved > 0.005 ? ` (of ${fmtMoney(p.amount)} prepaid)` : ''}
                 </div>
+                {p.orderTotal != null && (
+                  <div className="acct-region">
+                    Order {fmtMoney(p.orderTotal)}, {fmtMoney(p.amount)} prepaid{p.leftToPay == null ? '' : p.leftToPay > 0.005 ? `, ${fmtMoney(p.leftToPay)} left to pay` : ', paid in full'}
+                  </div>
+                )}
               </div>
               <div style={{ textAlign: 'right' }}><span className="pill teal">Free</span></div>
             </div>
