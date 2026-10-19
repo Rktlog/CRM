@@ -5,6 +5,7 @@ import { syncSales } from './syncSales';
 import { syncProductDetails } from './syncProductDetails';
 import { syncPurchaseDates } from './syncPurchaseDates';
 import { prisma } from '../lib/prisma';
+import { runGmailJob } from './gmailJob';
 
 async function runSync() {
   const start = Date.now();
@@ -39,6 +40,9 @@ if (runOnce) {
   // more of DEAR's rate limit than the team actually needs.
   cron.schedule('*/30 * * * *', runSync);
   cron.schedule('23 */6 * * *', runProductDetails);
-  console.log('Sync worker started — running every 30 minutes. Ctrl+C to stop.');
+  // Gmail: each connected person's own mailbox, every 15 minutes (it is quick: only new mail is looked at).
+  cron.schedule('*/15 * * * *', () => { void runGmailJob(); });
+  console.log('Sync worker started — running every 30 minutes (Gmail every 15). Ctrl+C to stop.');
   runSync().then(runProductDetails); // also run once immediately on startup
+  void runGmailJob();                // Gmail is a different service from DEAR, so it does not wait for the long sales sync
 }

@@ -14,6 +14,10 @@ export function parseAddresses(header: string | undefined | null): string[] {
   for (const m of String(header ?? '').matchAll(EMAIL_RE)) { const a = m[0].toLowerCase(); if (!out.includes(a)) out.push(a); }
   return out;
 }
+// The database cannot store a NUL character, and half of an emoji (cut through the middle) cannot even be sent to it. Text
+// from an email is cleaned first, and shortened by whole characters, so one odd email can never stop the others being saved.
+export const cleanText = (s: string): string => s.replace(/\u0000/g, '').replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '\ufffd');
+export const cut = (s: string, n: number): string => { const chars = Array.from(s); return chars.length > n ? chars.slice(0, n).join('') : s; };
 const decode = (s: string) => s.replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
 export type LogRow = {
@@ -38,11 +42,11 @@ export function classify(meta: GmailMeta, me: string, known: Map<string, string[
   const matches = new Map<string, string>();   // account id -> the address it matched on
   for (const a of people) for (const acc of known.get(a) ?? []) if (!matches.has(acc)) matches.set(acc, a);
   if (!matches.size) return { skip: 'not a customer' };
-  const snippet = savePreview ? decode(meta.snippet ?? '').trim().slice(0, 160) || null : null;
+  const snippet = savePreview ? cut(cleanText(decode(meta.snippet ?? '').trim()), 160) || null : null;
   const when = new Date(Number(meta.internalDate));
   return { rows: [...matches].map(([accountId, counterparty]) => ({
     accountId, messageId: meta.id, threadId: meta.threadId, direction: out ? 'out' as const : 'in' as const,
-    subject: (h['subject'] ?? '').trim().slice(0, 300), snippet, from, to, cc, counterparty, occurredAt: Number.isNaN(when.getTime()) ? new Date() : when,
+    subject: cut(cleanText((h['subject'] ?? '').trim()), 300), snippet, from, to, cc, counterparty, occurredAt: Number.isNaN(when.getTime()) ? new Date() : when,
   })) };
 }
 
@@ -69,6 +73,7 @@ export async function loadKnownAddresses(): Promise<Map<string, string[]>> {
 export type SyncResult = {
   rep: string; listed: number; newMessages: number; saved: number; skipped: number; remaining: number; removed: number;
   status: 'ok' | 'needs_reconnect' | 'error' | 'paused' | 'skipped'; error?: string;
+  failed?: number; failure?: string;   // emails that could not be saved (and were skipped), and the reason for the first
 };
 
 async function finish(repId: string, status: string, error: string | null, now: Date, syncedAt: Date | null) {
@@ -86,6 +91,35 @@ function explain(e: unknown): { status: 'needs_reconnect' | 'error'; message: st
   }
   if (/GMAIL_TOKEN_KEY|known format|authenticate data|Unsupported state/i.test(String((e as Error)?.message))) return { status: 'needs_reconnect', message: 'The saved Google sign-in can no longer be read. Press Connect Gmail again.' };
   return { status: 'error', message: String((e as Error)?.message ?? e).slice(0, 300) };
+}
+
+// ---- Saving ----
+type SaveResult = { saved: number; failed: number; failure: string | null };
+const SAVE_CHUNK = 50;
+const SYSTEMIC = /does not exist|permission denied|connection|timeout|timed out|too many clients|can't reach|econn|terminating|shutdown/i;   // the database, not the email
+const insertRows = async (repId: string, rows: LogRow[]): Promise<number> => {
+  const tuples = rows.map(r => Prisma.sql`(${repId}::uuid, ${r.accountId}::uuid, ${r.messageId}, ${r.threadId}, ${r.direction}, ${r.subject}, ${r.snippet}, ${r.from}, ${r.to}::text[], ${r.cc}::text[], ${r.counterparty}, ${r.occurredAt})`);
+  const saved = await prisma.$queryRaw<{ id: string }[]>`
+    insert into crm.email_log (rep_id, account_id, gmail_message_id, thread_id, direction, subject, snippet, from_addr, to_addrs, cc_addrs, counterparty, occurred_at)
+    values ${Prisma.join(tuples)} on conflict do nothing returning id`;
+  return saved.length;
+};
+// Saves in batches. A batch the database refuses is tried one email at a time, and only the emails it refuses are skipped.
+// A problem with the database itself, or every email being refused, is raised instead: nothing is then marked as seen, so the
+// next check tries them all again.
+export async function saveRows(repId: string, rows: LogRow[], insert: (repId: string, rows: LogRow[]) => Promise<number> = insertRows): Promise<SaveResult> {
+  let saved = 0, failed = 0, failure: string | null = null;
+  const reason = (e: unknown) => String((e as Error)?.message ?? e);
+  for (let i = 0; i < rows.length; i += SAVE_CHUNK) {
+    const chunk = rows.slice(i, i + SAVE_CHUNK);
+    try { saved += await insert(repId, chunk); continue; } catch (e) { if (SYSTEMIC.test(reason(e))) throw e; }
+    for (const r of chunk) {
+      try { saved += await insert(repId, [r]); }
+      catch (e) { if (SYSTEMIC.test(reason(e))) throw e; failed++; failure ??= reason(e).slice(-300); }
+    }
+  }
+  if (failed > 0 && failed === rows.length && rows.length >= 3) throw new Error(`None of the ${rows.length} emails could be saved: ${failure}`);
+  return { saved, failed, failure };
 }
 
 export async function syncRep(repId: string, opts: { now?: Date; maxNew?: number; backfillDays?: number } = {}): Promise<SyncResult> {
@@ -140,17 +174,19 @@ export async function syncRep(repId: string, opts: { now?: Date; maxNew?: number
   } catch (e) { problem = e; }
 
   // Keep whatever was done, even if Google stopped us part way.
+  let saveError: unknown = null;
   if (rows.length) {
-    const tuples = rows.map(r => Prisma.sql`(${repId}::uuid, ${r.accountId}::uuid, ${r.messageId}, ${r.threadId}, ${r.direction}, ${r.subject}, ${r.snippet}, ${r.from}, ${r.to}::text[], ${r.cc}::text[], ${r.counterparty}, ${r.occurredAt})`);
-    const saved = await prisma.$queryRaw<{ id: string }[]>`
-      insert into crm.email_log (rep_id, account_id, gmail_message_id, thread_id, direction, subject, snippet, from_addr, to_addrs, cc_addrs, counterparty, occurred_at)
-      values ${Prisma.join(tuples)} on conflict do nothing returning id`;
-    res.saved = saved.length;
+    try {
+      const s = await saveRows(repId, rows);
+      res.saved = s.saved;
+      if (s.failed) { res.failed = s.failed; res.failure = s.failure ?? undefined; }
+    } catch (e) { saveError = e; }
   }
-  if (processed.length) await prisma.$queryRaw`insert into crm.gmail_seen (rep_id, message_id) select ${repId}::uuid, unnest(${processed}::text[]) on conflict do nothing`;
+  // Only emails that were dealt with are marked as seen. If saving failed as a whole, none are, so they are looked at again.
+  if (processed.length && !saveError) await prisma.$queryRaw`insert into crm.gmail_seen (rep_id, message_id) select ${repId}::uuid, unnest(${processed}::text[]) on conflict do nothing`;
 
-  if (problem) {
-    const x = explain(problem); await finish(repId, x.status, x.message, now, null);
+  if (problem || saveError) {
+    const x = explain(problem ?? saveError); await finish(repId, x.status, x.message, now, null);
     return { ...res, status: x.status, error: x.message };
   }
   await finish(repId, 'ok', null, now, res.remaining === 0 ? now : null);   // a full pass is only recorded when nothing is left over

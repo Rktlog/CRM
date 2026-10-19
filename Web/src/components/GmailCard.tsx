@@ -64,7 +64,7 @@ export default function GmailCard({ go = (url: string) => window.location.assign
   const connect = () => run('connect', async () => { const r = await apiGet('/gmail/connect'); go(r.url); });
   const syncNow = () => run('sync', async () => {
     const r = await apiPost('/gmail/sync', {});
-    setMsg(r.status === 'ok' ? { ok: true, text: `Checked. ${r.saved === 1 ? '1 new email' : `${r.saved} new emails`} logged${r.removed ? `, ${r.removed === 1 ? '1 email' : `${r.removed} emails`} removed because you marked ${r.removed === 1 ? 'it' : 'them'} Private` : ''}${r.remaining ? `, ${r.remaining} more still to look through` : ''}.` }
+    setMsg(r.status === 'ok' ? { ok: true, text: `Checked. ${r.saved === 1 ? '1 new email' : `${r.saved} new emails`} logged${r.removed ? `, ${r.removed === 1 ? '1 email' : `${r.removed} emails`} removed because you marked ${r.removed === 1 ? 'it' : 'them'} Private` : ''}${r.failed ? `, ${r.failed} could not be saved and ${r.failed === 1 ? 'was' : 'were'} skipped` : ''}${r.remaining ? `, ${r.remaining} more still to look through` : ''}.` }
       : r.status === 'paused' ? { ok: false, text: 'Logging is paused. Switch it on first.' } : { ok: false, text: r.error ?? 'Could not check your email just now.' });
   });
   const setLogging = (on: boolean) => run('logging', async () => { await apiPatch('/gmail/settings', { loggingEnabled: on }); setMsg({ ok: true, text: on ? 'Logging is on.' : 'Logging is paused. Nothing new will be logged until you switch it back on.' }); });
