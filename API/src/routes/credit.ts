@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma';
 import { canSeeAccount, territoryWhere } from '../lib/territory';
 import { dearGet } from '../sync/dearClient';
 import { readDearPayments, type DearPayments } from '../lib/dearPayments';
+import { settleCents } from '../lib/receivables';
 
 // Credit.
 //   - Reservations: the team sets credit aside by hand: a name, an amount, the credit
@@ -278,7 +279,7 @@ export async function loadHeld(rep: Rep, f: CreditFilters, accountId?: string): 
     return {
       ...r, amount, finished, cancelled: isCancelled(r.status), completeInFull, reservable, reserved,
       orderTotal: r.orderTotal == null ? null : cents(r.orderTotal),
-      remaining: r.kind === 'Prepayment' && !noOrderLeft && r.remaining != null ? cents(r.remaining) : null,
+      remaining: r.kind === 'Prepayment' && !noOrderLeft && r.remaining != null ? settleCents(r.orderTotal ?? 0, cents(r.remaining)) : null,   // cents of GST rounding are not owed
       free: reservable ? cents(Math.max(0, amount - reserved)) : 0,
       orderDate: r.orderDate ? new Date(r.orderDate).toISOString().slice(0, 10) : null,
     };
