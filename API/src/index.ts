@@ -24,6 +24,8 @@ import { calendarRouter, calendarCronRouter, calendarCallbackRouter } from './ro
 import { customReportsRouter } from './routes/customReports';
 import { aiRouter } from './routes/ai';
 import { guardApp, errorHandler, keepRunning } from './lib/safeRouter';
+import { startGmailSchedule } from './sync/gmailJob';
+import { syncCronRouter } from './routes/syncCron';
 
 keepRunning();   // a mistake in one request is logged; it can no longer stop the whole API
 
@@ -62,10 +64,15 @@ app.use('/gmail', requireAuth, gmailRouter);
 app.use('/calendar/callback', calendarCallbackRouter);   // Google sends the rep back here: no login
 app.use('/calendar-cron', calendarCronRouter);           // secret header, no login
 app.use('/calendar', requireAuth, calendarRouter);       // was missing: without it every /calendar/... call was a 404
+app.use('/sync-cron', syncCronRouter);          // started by Supabase's scheduler, secret header, no login
 app.use('/ai', requireAuth, aiRouter);
 
 guardApp(app);          // from here every route hands its errors to Express instead of stopping the server
 app.use(errorHandler);  // and the person gets the reason as a normal error, with the CORS headers
 
 const port = process.env.PORT || 4000;
-app.listen(port, () => console.log(`API listening on :${port}`));
+app.listen(port, () => {
+  console.log(`API listening on :${port}`);
+  // Gmail is normally started by Supabase's scheduler (POST /gmail-cron). Set GMAIL_JOB=on to have this service do it itself instead.
+  startGmailSchedule();
+});

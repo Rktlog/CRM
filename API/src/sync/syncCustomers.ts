@@ -8,6 +8,10 @@
  * auto-creation from DEAR, that is a deliberate new decision, not a
  * bug to "fix" here.
  *
+ * DEAR's own creation date for each customer is saved too (crm.accounts.dear_created_at), when DEAR sends one. The CRM's own
+ * "created" date is the day the data was loaded for most customers, so Conversion uses the DEAR date to tell a customer set up
+ * in DEAR this period from one that has been there for years.
+ *
  * The moment a CRM customer is first linked to its DEAR record is saved (crm.accounts.dear_linked_at, added by
  * conversion-days.sql), so Conversion can tell how long a new prospect took to be set up in DEAR, and how long after that
  * to the first order.
@@ -15,6 +19,18 @@
 import { prisma } from '../lib/prisma';
 import { normalize } from '../lib/normalize';
 import { fetchAllCustomers } from './dearClient';
+
+// The date DEAR created the customer, if its record carries one. DEAR dates are UTC, written without a zone.
+export function createdFrom(c: any): Date | null {
+  for (const k of ['CreatedDate', 'CreatedOn', 'CreationDate', 'DateCreated', 'Created']) {
+    const v = c?.[k];
+    if (typeof v !== 'string' && !(v instanceof Date)) continue;
+    const text = typeof v === 'string' ? (/(Z|[+-]\d{2}:?\d{2})$/.test(v.trim()) ? v.trim() : `${v.trim()}Z`) : v;
+    const d = new Date(text);
+    if (!Number.isNaN(d.getTime()) && d.getUTCFullYear() >= 2000 && d.getTime() <= Date.now() + 86400000) return d;
+  }
+  return null;
+}
 
 /**
  * Only updates accounts already marked type: 'customer' — a prospect's
@@ -38,6 +54,7 @@ export async function syncCustomers() {
   let newlyLinked = 0;
   let unmatched = 0;
   let warnedNoColumn = false;
+  const created: { id: string; at: Date }[] = [];   // DEAR's creation date for each matched customer that has one
 
   for (const c of dearCustomers) {
     const dearId = String(c.ID ?? c.CustomerID ?? '');
@@ -73,6 +90,8 @@ export async function syncCustomers() {
       },
     });
     updated++;
+    const madeAt = createdFrom(c);
+    if (madeAt) created.push({ id: account.id, at: madeAt });
     if (linkedNow) {
       try { await prisma.$executeRaw`update crm.accounts set dear_linked_at = now() where id = ${account.id}::uuid and dear_linked_at is null`; }
       catch (e) {
@@ -81,6 +100,41 @@ export async function syncCustomers() {
     }
   }
 
+  // DEAR's creation dates, saved in batches, only where they differ from what is there.
+  if (created.length) {
+    try {
+      for (let i = 0; i < created.length; i += 1000) {
+        const batch = created.slice(i, i + 1000);
+        await prisma.$executeRaw`
+          update crm.accounts a set dear_created_at = v.at::timestamptz
+          from unnest(${batch.map(x => x.id)}::uuid[], ${batch.map(x => x.at.toISOString())}::text[]) as v(id, at)
+          where a.id = v.id and a.dear_created_at is distinct from v.at::timestamptz`;
+      }
+    } catch (e) {
+      if (!warnedNoColumn) console.warn('Could not save the DEAR creation dates (run conversion-days.sql to add the column):', (e as Error).message);
+    }
+  }
+  console.log(`DEAR creation dates: ${created.length} of ${updated} matched customers have one${created.length === 0 && updated > 0 ? ' (DEAR does not seem to send one, so the CRM relies on the moment a customer is first linked)' : ''}.`);
   console.log(`Accounts updated from DEAR: ${updated} (${newlyLinked} newly linked by name)`);
   console.log(`DEAR customers with no matching CRM account: ${unmatched}`);
+}
+
+// Fills in DEAR's creation date (crm.accounts.dear_created_at) for customers already linked to DEAR, and touches nothing else.
+// For when customers are synced somewhere else (a Supabase function, say) and this is only wanted for the dates. Safe to run
+// as often as wanted: it only writes a date that is different.
+export async function syncCustomerDates(): Promise<{ read: number; withDate: number; updated: number }> {
+  const customers = await fetchAllCustomers();
+  const pairs = customers.map(c => ({ id: c?.ID ? String(c.ID) : null, at: createdFrom(c) })).filter((x): x is { id: string; at: Date } => !!x.id && !!x.at);
+  let updated = 0;
+  for (let i = 0; i < pairs.length; i += 1000) {
+    const batch = pairs.slice(i, i + 1000);
+    const changed = await prisma.$queryRaw<{ n: number }[]>`
+      update crm.accounts a set dear_created_at = v.at::timestamptz
+      from unnest(${batch.map(x => x.id)}::text[], ${batch.map(x => x.at.toISOString())}::text[]) as v(dear_id, at)
+      where a.dear_customer_id = v.dear_id and a.dear_created_at is distinct from v.at::timestamptz
+      returning 1 as n`;
+    updated += changed.length;
+  }
+  console.log(`Customer dates: ${customers.length} customers read from DEAR, ${pairs.length} with a creation date, ${updated} saved or changed.`);
+  return { read: customers.length, withDate: pairs.length, updated };
 }

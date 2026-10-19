@@ -3,7 +3,8 @@ import { prisma } from '../lib/prisma';
 import { canSeeAccount } from '../lib/territory';
 import { authUrl, exchangeCode, getProfile, revoke, gmailConfigured, missingSetup } from '../lib/gmail/google';
 import { decrypt, encrypt, signState, verifyState } from '../lib/gmail/crypto';
-import { syncRep, syncAll } from '../lib/gmail/sync';
+import { syncRep } from '../lib/gmail/sync';
+import { runGmailJob, gmailJobRunning } from '../sync/gmailJob';
 
 // Gmail: each rep connects THEIR OWN mailbox (read only). Emails to or from a customer already in the CRM are
 // logged on that customer's account. Only the people, subject, date and a short preview: never the body.
@@ -82,8 +83,8 @@ gmailRouter.get('/account/:id/emails', async (req, res) => {
   if (!(await canSeeAccount(req.rep!, a as any))) return res.status(403).json({ error: 'This account is outside your states' });
   const rows = await prisma.$queryRaw<any[]>`
     select l.id, l.thread_id as "threadId", l.gmail_message_id as "messageId", l.direction, l.subject, l.snippet, l.occurred_at as "occurredAt",
-           l.rep_id as "repId", r.name as "repName", c.email as "ownerEmail"
-    from crm.email_log l join crm.reps r on r.id = l.rep_id left join crm.gmail_connections c on c.rep_id = l.rep_id
+           l.rep_id as "repId", coalesce(r.name, 'a teammate') as "repName", c.email as "ownerEmail"
+    from crm.email_log l left join crm.reps r on r.id = l.rep_id left join crm.gmail_connections c on c.rep_id = l.rep_id
     where l.account_id = ${req.params.id}::uuid order by l.occurred_at desc limit 300`;
   const threads = new Map<string, any>();
   for (const m of rows) {
@@ -133,8 +134,15 @@ gmailCallbackRouter.get('/', async (req, res) => {
 
 // ---- The scheduled job (every 15 minutes): no login, but the secret header the other syncs use ----
 export const gmailCronRouter = Router();
+// Started by Supabase's scheduler every 15 minutes. It answers at once (202) and the check carries on in the background; add
+// ?wait=1 to wait for the result, for testing. A check that is still running is not started a second time.
 gmailCronRouter.post('/', async (req, res) => {
   if (!process.env.SYNC_SECRET || req.headers['x-sync-secret'] !== process.env.SYNC_SECRET) return res.status(401).json({ error: 'Unauthorized' });
-  const results = await syncAll();
-  res.json({ reps: results.length, results });
+  if (req.query.wait === '1') {
+    const r = await runGmailJob();
+    return res.json({ reps: r.results?.length ?? 0, ran: r.ran, ...(r.reason ? { reason: r.reason } : {}), results: r.results ?? [] });
+  }
+  const already = gmailJobRunning();
+  if (!already) void runGmailJob();
+  res.status(202).json({ started: !already, running: already });
 });
