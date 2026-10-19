@@ -287,17 +287,21 @@ function ProductDetail({ product: p, canEdit, onSaved }: { product: Product; can
         </div>
       )}
 
-      {p.orderIncrement ? (
-        <div style={{ marginBottom: 12 }}>
-          <div className="stat-label">Order increment</div>
-          <div><b>{p.orderIncrement}</b> <span className="acct-region">customers order in multiples of {p.orderIncrement}</span></div>
-        </div>
-      ) : null}
-
-      {p.description && (
-        <div style={{ marginBottom: 12, maxWidth: 760 }}>
-          <div className="stat-label">Description</div>
-          <ProductDescription text={p.description} lines={4} />
+      {(p.orderIncrement || p.description) && (
+        <div className="pd-row" style={{ marginBottom: 12, ...(p.orderIncrement && p.description ? {} : { gridTemplateColumns: '1fr' }) }}>
+          {p.orderIncrement ? (
+            <div className="pd-box">
+              <div className="pd-box-title">Order increment</div>
+              <div className="pd-tile-value num" style={{ marginTop: 0 }}>{p.orderIncrement}</div>
+              <div className="pd-stat-l" style={{ fontSize: 13 }}>customers order in multiples of {p.orderIncrement}</div>
+            </div>
+          ) : null}
+          {p.description && (
+            <div className="pd-box">
+              <div className="pd-box-title">Description</div>
+              <ProductDescription text={p.description} lines={6} size="normal" />
+            </div>
+          )}
         </div>
       )}
 
