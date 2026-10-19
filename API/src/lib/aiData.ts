@@ -168,7 +168,7 @@ const DATASETS: Dataset[] = [
   },
   {
     key: 'open_quotes',
-    blurb: 'Quotes and unpaid orders: stay until paid and confirmed. Paid so far, still to pay, payment (unpaid, part, paid) and the next follow-up (1st, 2nd, your own date, done).',
+    blurb: 'Every quote or draft order, and every confirmed order that is not fully paid, whatever the customer\'s payment terms, until it is paid and confirmed. Metro Baby is left out. Paid so far, still to pay, payment (unpaid, part, paid) and the next follow-up (1st, 2nd, your own date, done).',
     args: 'state, customer, minAgeDays, payment (unpaid|part|paid), followUp (fu1|fu2|manual|done), overdueFollowUp (true)',
     async run(ctx, a) {
       let rows: any[] = (await helpers.openQuotes(ctx.rep, regionsFrom(a.state))).rows;

@@ -56,9 +56,10 @@ export function followUpState(orderDay: string, f: { manualOn: string | null; fu
 // ---------- Open quotes and unpaid orders ----------
 // Everything still waiting on the customer, oldest first:
 //   - every quote or draft order, paid or not, until it is confirmed in DEAR; and
-//   - every confirmed order (ordered, backordered, picking, shipped...) of a pay-first customer (no payment terms)
-//     until its money is in.
-// An order leaves only when it is BOTH paid and confirmed. Marketing and warranty orders never come in.
+//   - every confirmed order (ordered, backordered, picking, shipped...) that is not fully paid, whoever the customer is and
+//     whatever their payment terms, until its money is in. Money still owed on an invoice that is not yet due counts as unpaid.
+// An order leaves only when it is BOTH paid and confirmed. Marketing and warranty orders never come in, and neither does a
+// customer that has been set aside (Metro Baby).
 // Amounts are what the customer pays (inc GST, DEAR's order total).
 const nice = (s: string | null) => (s ? s.charAt(0) + s.slice(1).toLowerCase() : '');
 
@@ -66,6 +67,11 @@ const nice = (s: string | null) => (s ? s.charAt(0) + s.slice(1).toLowerCase() :
 // "held"), less any of that prepayment the team has reserved for another order (reservedPrepay): that money is
 // spoken for, so this order no longer counts it. An order that is fully invoiced with nothing due is settled, even if
 // part of it was a credit note.
+// "Fully paid" allows for GST rounding: DEAR's prepayment can fall a few cents short of the order total, and that is not money
+// owed. A balance under $1 counts as paid (under 1% of a very small order). Open Quotes, the order page and the Credit page all use it.
+export const paidTolerance = (total: number) => Math.min(1, Math.max(total, 0) * 0.01);
+export const settleCents = (total: number, remaining: number) => (remaining < paidTolerance(total) ? 0 : remaining);
+
 export function paymentState(q: { total: number | null; amount: number; amountPaid: number | null; unappliedCredit: number | null; amountDue: number | null; invoicedTotal: number | null; creditNotes: unknown }, reservedPrepay = 0) {
   const total = q.total ?? q.amount;
   const onAccount = Array.isArray(q.creditNotes) ? (q.creditNotes as any[]).reduce((s, c) => s + (Number(c?.onAccount) || 0), 0) : 0;
@@ -73,7 +79,8 @@ export function paymentState(q: { total: number | null; amount: number; amountPa
   const prepayment = Math.max(held - Math.max(reservedPrepay, 0), 0);                    // what still counts towards paying it
   let paid = (q.amountPaid ?? 0) + prepayment;
   if (q.amountDue != null && q.amountDue <= 0.005 && (q.invoicedTotal ?? 0) >= total - 0.005) paid = Math.max(paid, total);
-  const remaining = cents(Math.max(total - paid, 0));
+  const remaining = settleCents(total, cents(Math.max(total - paid, 0)));
+  if (remaining === 0) paid = Math.max(paid, total);   // within the tolerance: paid in full
   return { total: cents(total), paid: cents(paid), held: cents(held), remaining, payment: (remaining <= 0.005 ? 'paid' : paid > 0.005 ? 'part' : 'unpaid') as 'paid' | 'part' | 'unpaid' };
 }
 
@@ -89,9 +96,13 @@ export function filterFollowUp<T extends { followUp: { next: { kind: string; dat
 
 export async function openQuotes(rep: Rep, regions?: string[]) {
   const accounts = await scope(rep, regions);
+  // Customers set aside from Open Quotes altogether, quotes and orders (crm.accounts.skip_open_quotes: Metro Baby). Set by
+  // open-quotes-exempt.sql. Before that column is added nobody is set aside.
+  try { for (const r of await prisma.$queryRaw<{ id: string }[]>`select id from crm.accounts where skip_open_quotes`) accounts.delete(r.id); }
+  catch (e) { /* the column has not been added yet */ }
   const accountIds = [...accounts.keys()];
 
-  // Confirmed orders still owed money by a pay-first customer. Picked in the database so only those are read.
+  // Confirmed orders that are not fully paid, for any customer. Picked in the database so only those are read.
   const owing = accountIds.length
     ? await prisma.$queryRaw<{ id: string }[]>`
         select q.id from crm.quotes q join crm.accounts a on a.id = q.account_id
@@ -103,10 +114,10 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
         where q.account_id = any(${accountIds}::uuid[])
           and q.source <> 'rhino-history' and q.number not like 'Q%' and q.misc_type is null
           and upper(coalesce(q.fulfillment_status, '')) not in ('VOIDED', 'CREDITED', 'DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING')
-          and nullif(trim(coalesce(a.payment_terms, '')), '') is null
+          and not (q.amount_due is null and q.paid)   -- no invoice detail yet, and DEAR has it as paid (the same fallback isOwing uses)
           and coalesce(q.total, q.amount) - (coalesce(q.amount_paid, 0) + greatest(greatest(coalesce(q.unapplied_credit, 0)
                 - coalesce(case when jsonb_typeof(q.credit_notes) = 'array'
-                                then (select sum(nullif(c->>'onAccount', '')::numeric) from jsonb_array_elements(q.credit_notes) c) end, 0), 0) - rv.taken, 0)) > 0.005
+                                then (select sum(nullif(c->>'onAccount', '')::numeric) from jsonb_array_elements(q.credit_notes) c) end, 0), 0) - rv.taken, 0)) >= greatest(least(1, 0.01 * coalesce(q.total, q.amount)), 0.005)
           and not (q.amount_due is not null and q.amount_due <= 0.005 and coalesce(q.invoiced_total, 0) >= coalesce(q.total, q.amount) - 0.005)`
     : [];
   const quotes = await prisma.quote.findMany({
