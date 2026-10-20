@@ -6,6 +6,7 @@ import AddTaskModal from '../components/AddTaskModal';
 import { addDays, fromISO, localISO, startOfWeek } from '../lib/dates';
 import { STAGE_LABELS, fmtMoney, fmtDateWithYear } from '../lib/types';
 import DictationTextarea from '../components/DictationTextarea';
+import { GOOGLE_BLUE, GoogleDayList, GoogleNotice, TodayInGoogle, eventChip, eventsByDay, eventTime, useGoogleEvents } from '../components/GoogleEvents';
 
 type TaskAccount = { id: string; name: string; region: string; phone: string | null };
 type PlanAccount = TaskAccount & {
@@ -107,6 +108,8 @@ function TodayView({ refresh, onChanged }: { refresh: number; onChanged: () => v
             : 'No states assigned yet, so nothing is auto-planned. Ask a manager to assign you in Settings.'}
         </span>
       </div>
+
+      <TodayInGoogle />
 
       {SECTIONS.map(section => {
         const tasks = data.tasks.filter(section.match);
@@ -260,6 +263,10 @@ function CalendarView({ refresh, onChanged, onSchedule }: {
     return Array.from({ length: 42 }, (_, i) => addDays(start, i));
   }, [month]);
 
+  // Their own Google Calendar, over the same six weeks. If it cannot be read the tasks still show, with a note saying why.
+  const g = useGoogleEvents(localISO(days[0]), localISO(days[41]));
+  const gByDay = useMemo(() => eventsByDay(g.events), [g.events]);
+
   useEffect(() => {
     setError(null);
     apiGet(`/tasks/range?from=${localISO(days[0])}&to=${localISO(days[41])}`)
@@ -328,10 +335,12 @@ function CalendarView({ refresh, onChanged, onSchedule }: {
         <div className="cal-legend">
           <span><i className="cal-dot visit" /> F2F visit</span>
           <span><i className="cal-dot cold_call" /> Phone</span>
+          {g.connected && !g.hidden && !g.error && <span><i className="cal-dot" style={{ background: GOOGLE_BLUE }} /> Google Calendar</span>}
         </div>
       </div>
 
       {error && <div className="empty-state">Couldn't load the calendar: {error}</div>}
+      <GoogleNotice state={g} />
 
       <div className="cal-grid">
         {WEEKDAYS.map(d => <div className="cal-weekday" key={d}>{d}</div>)}
@@ -339,6 +348,8 @@ function CalendarView({ refresh, onChanged, onSchedule }: {
           const iso = localISO(d);
           const dayTasks = byDay.get(iso) ?? [];
           const open = dayTasks.filter(t => !t.completed);
+          const dayEvents = gByDay.get(iso) ?? [];
+          const room = Math.max(0, CHIPS_PER_DAY - dayTasks.length);   // Google events fill whatever room the tasks leave
           const classes = [
             'cal-day',
             d.getMonth() !== month.getMonth() ? 'other' : '',
@@ -371,8 +382,13 @@ function CalendarView({ refresh, onChanged, onSchedule }: {
                   {t.account.name}
                 </div>
               ))}
-              {dayTasks.length > CHIPS_PER_DAY && (
-                <div className="cal-more">+{dayTasks.length - CHIPS_PER_DAY} more</div>
+              {dayEvents.slice(0, room).map(e => (
+                <div key={e.id} className="cal-chip gcal" style={{ background: '#e8f0fe', borderColor: GOOGLE_BLUE, color: '#174ea6' }} title={`Google Calendar: ${eventTime(e)}, ${e.title}`}>
+                  {eventChip(e)}
+                </div>
+              ))}
+              {dayTasks.length + dayEvents.length > CHIPS_PER_DAY && (
+                <div className="cal-more">+{dayTasks.length + dayEvents.length - Math.min(dayTasks.length, CHIPS_PER_DAY) - Math.min(dayEvents.length, room)} more</div>
               )}
             </div>
           );
@@ -419,6 +435,7 @@ function CalendarView({ refresh, onChanged, onSchedule }: {
             ))}
           </div>
         )}
+        <GoogleDayList events={gByDay.get(selected) ?? []} state={g} />
       </div>
     </>
   );

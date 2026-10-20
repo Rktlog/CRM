@@ -15,7 +15,7 @@ calendarRouter.get('/status', async (req, res) => {
   const rep = await prisma.rep.findUnique({
     where: { id: req.rep!.id },
     select: { calendarSync: true, calendarShow: true, calendarSyncedAt: true, calendarError: true },
-  });
+  }).catch(() => null);   // those columns come from calendar-setup.sql: until it is run, show the defaults instead of failing
   const configured = calendarConfigured();
   const conn = configured ? await connectionOf(req.rep!.id) : null;
   res.json({
@@ -91,10 +91,10 @@ calendarRouter.get('/events', async (req, res) => {
   const to = isoDate(req.query.to);
   if (!from || !to) return res.status(400).json({ error: 'from and to (YYYY-MM-DD) are required' });
 
-  const rep = await prisma.rep.findUnique({ where: { id: req.rep!.id }, select: { calendarShow: true } });
+  const rep = await prisma.rep.findUnique({ where: { id: req.rep!.id }, select: { calendarShow: true } }).catch(() => null);   // column not added yet: show
   const conn = calendarConfigured() ? await connectionOf(req.rep!.id) : null;
   if (!conn || conn.status !== 'ok') return res.json({ connected: false, events: [] });
-  if (!rep?.calendarShow) return res.json({ connected: true, hidden: true, events: [] });
+  if (rep && !rep.calendarShow) return res.json({ connected: true, hidden: true, events: [] });
 
   const key = `${req.rep!.id}|${from}|${to}`;
   const hit = eventCache.get(key);
