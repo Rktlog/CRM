@@ -1,7 +1,7 @@
 import { prisma } from './prisma';
 import { territoryWhere, canSeeAccount } from './territory';
 import { helpers, DataError, visibleIds } from './aiData';
-import { paymentState, followUpState, melDay } from './receivables';
+import { paymentState, followUpState, followUpAnchor } from './receivables';
 
 // Everything saved about ONE customer or ONE order, in one go, so the assistant can answer "tell me about X" without
 // guessing which look-ups to make. It follows the same rules as the account and order screens: whoever can open the
@@ -80,7 +80,7 @@ export async function accountDetails(ctx: Ctx, ref: unknown): Promise<string> {
 
   const region = [a.region as string];
   const [open, invoices, held, creditNotes, reservations] = await Promise.all([
-    helpers.openQuotes(ctx.rep, region).then((x: any) => x.rows.filter((q: any) => q.accountId === id)),
+    helpers.openQuotes(ctx.rep, region, 'all').then((x: any) => x.rows.filter((q: any) => q.accountId === id)),   // this customer's own, whatever their terms
     helpers.unpaidInvoices(ctx.rep, region).then((x: any) => x.rows.filter((q: any) => q.accountId === id)),
     helpers.loadHeld(ctx.rep, {}, id) as Promise<any[]>,
     helpers.loadCreditNotes(ctx.rep, {}, id) as Promise<any[]>,
@@ -144,13 +144,13 @@ export async function orderDetails(ctx: Ctx, ref: unknown): Promise<string> {
   const reservations = ((await helpers.loadReservations(ctx.rep, { q: q.account_name })) as any[]).filter(x => x.orderRef === no || x.sourceOrder === no || String(x.orderRef ?? '').toUpperCase() === no);
   const docs = Array.isArray(q.invoices) ? q.invoices : [], cn = Array.isArray(q.credit_notes) ? q.credit_notes : [];
   const simple = (o: any) => Object.fromEntries(Object.entries(o ?? {}).filter(([, v]) => v == null || ['string', 'number', 'boolean'].includes(typeof v)));
-  const fu = followUpState(melDay(q.sent_at), { manualOn: day(q.follow_up_at), fu1DoneOn: day(q.fu1_done_on), fu2DoneOn: day(q.fu2_done_on) });
+  const fu = followUpState(followUpAnchor(q.sent_at, q.invoices), { manualOn: day(q.follow_up_at), fu1DoneOn: day(q.fu1_done_on), fu2DoneOn: day(q.fu2_done_on) });
 
   return fitObject({
     order: { number: q.number, customer: q.account_name, state: q.account_region, contact: q.account_contact, phone: q.account_phone, email: q.account_email, reference: q.reference, date: day(q.sent_at), status: q.fulfillment_status, shipping: q.shipping_status, picking: q.picking_status, kind: q.misc_type ?? (quoteStage ? 'Quote or draft order' : 'Sale'), invoiceNumber: q.invoice_number, invoiceDate: day(q.invoice_date) },
     money: { totalIncGst: pay.total, paidSoFar: pay.paid, stillToPay: pay.remaining, payment: pay.payment, invoiced: q.invoiced_total, creditedTotal: q.credited_total, dearBalanceDue: q.amount_due },
     leavesTheOpenQuotesListWhen: quoteStage ? 'it is confirmed in DEAR and paid' : pay.remaining > 0.005 ? 'it is paid' : 'it already has (paid and confirmed)',
-    followUp: { next: fu.next, manualDate: day(q.follow_up_at), firstDoneOn: day(q.fu1_done_on), secondDoneOn: day(q.fu2_done_on) },
+    followUp: { next: fu.next, firstDueOn: fu.fu1Due, secondSetFor: day(q.follow_up_at), firstDoneOn: day(q.fu1_done_on), secondDoneOn: day(q.fu2_done_on) },
     heldPrepayment: held.map(h => ({ kind: h.kind, amount: h.amount, reserved: h.reserved, freeToReserve: h.free, reservable: h.reservable, released: h.released })),
     creditReservations: reservations.map(x => ({ amount: x.amount, from: x.account, to: x.forAccount, creditNote: x.creditNo, status: x.status, note: clip(x.note, 200) })),
     invoices: docs.slice(0, 20).map(simple), creditNotes: cn.slice(0, 20).map(simple),

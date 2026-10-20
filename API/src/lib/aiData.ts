@@ -168,15 +168,17 @@ const DATASETS: Dataset[] = [
   },
   {
     key: 'open_quotes',
-    blurb: 'Every quote or draft order, and every confirmed order that is not fully paid, whatever the customer\'s payment terms, until it is paid and confirmed. Metro Baby is left out. Paid so far, still to pay, payment (unpaid, part, paid) and the next follow-up (1st, 2nd, your own date, done).',
-    args: 'state, customer, minAgeDays, payment (unpaid|part|paid), followUp (fu1|fu2|manual|done), overdueFollowUp (true)',
+    blurb: 'Quotes and draft orders, and confirmed orders that are not fully paid, until paid and confirmed. By default only PREPAYMENT customers (no payment terms, or Prepayment): that is what the screen shows. Set paymentTerms to \'all\', or to a term such as \'30 days\', to include customers on those terms. A customer set aside by hand (Metro Baby) never appears. Paid so far, still to pay, payment (unpaid, part, paid) and the next follow-up: the 1st is automatic, a week after payment was due; the 2nd is a date the sales team set; done when neither is left.',
+    args: 'state, customer, minAgeDays, payment (unpaid|part|paid), followUp (fu1|fu2|done), overdueFollowUp (true), followUpBy (a rep name: the rep chosen for the 2nd, otherwise the account rep), paymentTerms (default: Prepayment customers; \'all\', or terms such as \'30 days|30 Days EOM\')',
     async run(ctx, a) {
-      let rows: any[] = (await helpers.openQuotes(ctx.rep, regionsFrom(a.state))).rows;
-      rows = rows.filter(r => nameHas(r.customer, a.customer) && (!Number(a.minAgeDays) || r.ageDays >= Number(a.minAgeDays)) && (!text(a.payment) || r.payment === text(a.payment)));
+      const pt = text(a.paymentTerms);
+      const terms = !pt ? undefined : /^all$/i.test(pt) ? ('all' as const) : pt.split('|').map(t => t.trim()).filter(Boolean);
+      let rows: any[] = (await helpers.openQuotes(ctx.rep, regionsFrom(a.state), terms)).rows;
+      rows = rows.filter(r => nameHas(r.customer, a.customer) && (!Number(a.minAgeDays) || r.ageDays >= Number(a.minAgeDays)) && (!text(a.payment) || r.payment === text(a.payment)) && (!text(a.followUpBy) || nameHas(r.followUpBy?.name, a.followUpBy)));
       rows = filterFollowUp(rows, text(a.followUp) || undefined, a.overdueFollowUp === true, melDay());
-      const label: Record<string, string> = { fu1: '1st follow-up', fu2: '2nd follow-up', manual: 'Set date' };
-      const out = rows.map(r => ({ order: r.number, customer: r.customer, state: r.region, rep: r.repName, orderDate: day(r.date), ageDays: r.ageDays, stage: r.stage, total: r.amount, paid: r.paid, remaining: r.remaining, payment: r.payment, nextFollowUp: r.followUp.next ? `${label[r.followUp.next.kind] ?? r.followUp.next.kind} ${r.followUp.next.date}` : 'Done', lastNote: clip(r.lastNote, 200) }));
-      return { columns: cols('order:Order', 'customer:Customer', 'state:State', 'rep:Rep', 'orderDate:Order date', 'ageDays:Age (days)', 'stage:Stage', 'total:Total inc GST', 'paid:Paid', 'remaining:Still to pay', 'payment:Payment', 'nextFollowUp:Next follow-up', 'lastNote:Last note'), rows: out, summary: { count: out.length, total: sum(out, 'total'), stillToPay: sum(out, 'remaining'), byPayment: count(out, 'payment') } };
+      const label: Record<string, string> = { fu1: '1st follow-up', fu2: '2nd follow-up (set by the team)' };
+      const out = rows.map(r => ({ order: r.number, customer: r.customer, state: r.region, rep: r.repName, paymentTerms: r.terms, orderDate: day(r.date), ageDays: r.ageDays, stage: r.stage, total: r.amount, paid: r.paid, remaining: r.remaining, payment: r.payment, nextFollowUp: r.followUp.next ? `${label[r.followUp.next.kind] ?? r.followUp.next.kind} ${r.followUp.next.date}` : 'Done', followUpBy: r.followUp.next ? r.followUpBy?.name ?? null : null, lastNote: clip(r.lastNote, 200) }));
+      return { columns: cols('order:Order', 'customer:Customer', 'state:State', 'rep:Rep', 'paymentTerms:Payment terms', 'orderDate:Order date', 'ageDays:Age (days)', 'stage:Stage', 'total:Total inc GST', 'paid:Paid', 'remaining:Still to pay', 'payment:Payment', 'nextFollowUp:Next follow-up', 'followUpBy:Followed up by', 'lastNote:Last note'), rows: out, summary: { count: out.length, total: sum(out, 'total'), stillToPay: sum(out, 'remaining'), byPayment: count(out, 'payment') } };
     },
   },
   {

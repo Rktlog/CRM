@@ -22,7 +22,7 @@ const daysSince = (d: Date) => Math.floor((Date.now() - d.getTime()) / DAY);
 async function scope(rep: Rep, regions?: string[]) {
   const accounts = await prisma.account.findMany({
     where: { AND: [await territoryWhere(rep), regions?.length ? { region: { in: regions } } : {}] },
-    select: { id: true, name: true, region: true, paymentTerms: true, rep: { select: { name: true } } },
+    select: { id: true, name: true, region: true, paymentTerms: true, repId: true, rep: { select: { name: true } } },
   });
   return new Map(accounts.map(a => [a.id, a]));
 }
@@ -36,30 +36,62 @@ export const melDay = (d: Date | string = new Date()) =>
   new Date(d).toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' });
 const plusDays = (day: string, n: number) => new Date(Date.parse(day) + n * DAY).toISOString().slice(0, 10);
 
-// Follow-ups on an open quote: the 1st is 7 days after the order date, the 2nd is 14 days after the 1st was done.
-// A date someone sets by hand (manualOn) comes first until it is done or cleared.
+// Follow-ups on an open quote.
+//   - The 1st is automatic: a week after payment was due. For a customer who pays first that is the order date; for a customer on
+//     terms it is the due date of their unpaid invoice (followUpAnchor).
+//   - There is no automatic 2nd. The sales team sets it by choosing a date (secondOn), and it is shown as the 2nd.
+// The next follow-up shown is whichever pending one is earliest (the 1st wins a tie). Done ones drop out; none left is "done".
+// secondRep: the rep the sales team asked to follow up the 2nd (crm.quotes.follow_up_rep_id); null when nobody was chosen.
 export type FollowUp = {
-  fu1Due: string; fu1DoneOn: string | null; fu2Due: string | null; fu2DoneOn: string | null; manualOn: string | null;
-  next: { kind: 'fu1' | 'fu2' | 'manual'; date: string } | null;
+  fu1Due: string; fu1DoneOn: string | null; fu2DoneOn: string | null; secondOn: string | null;
+  secondRep: { id: string; name: string } | null;
+  next: { kind: 'fu1' | 'fu2'; date: string } | null;
 };
-export function followUpState(orderDay: string, f: { manualOn: string | null; fu1DoneOn: string | null; fu2DoneOn: string | null }): FollowUp {
-  const fu1Due = plusDays(orderDay, 7);
-  const fu2Due = f.fu1DoneOn ? plusDays(f.fu1DoneOn, 14) : null;
-  const next: FollowUp['next'] =
-    f.manualOn ? { kind: 'manual', date: f.manualOn }
-    : !f.fu1DoneOn ? { kind: 'fu1', date: fu1Due }
-    : !f.fu2DoneOn && fu2Due ? { kind: 'fu2', date: fu2Due }
-    : null;
-  return { fu1Due, fu1DoneOn: f.fu1DoneOn, fu2Due, fu2DoneOn: f.fu2DoneOn, manualOn: f.manualOn, next };
+export function followUpState(anchorDay: string, f: { manualOn: string | null; fu1DoneOn: string | null; fu2DoneOn: string | null }, secondRep: { id: string; name: string } | null = null): FollowUp {
+  const fu1Due = plusDays(anchorDay, 7);
+  const first = f.fu1DoneOn ? null : { kind: 'fu1' as const, date: fu1Due };
+  const second = f.manualOn ? { kind: 'fu2' as const, date: f.manualOn } : null;   // the date the team set: manualOn is the column's name
+  const next: FollowUp['next'] = first && second ? (second.date < first.date ? second : first) : first ?? second;
+  return { fu1Due, fu1DoneOn: f.fu1DoneOn, fu2DoneOn: f.fu2DoneOn, secondOn: f.manualOn, secondRep: f.manualOn ? secondRep : null, next };
+}
+
+// Who the sales team asked to follow up each order's 2nd (crm.quotes.follow_up_rep_id, added by follow-up-rep.sql). Before that
+// column is added nobody is assigned and everything else still works.
+export async function followUpReps(ids: string[]): Promise<Map<string, { id: string; name: string }>> {
+  if (!ids.length) return new Map();
+  try {
+    const rows = await prisma.$queryRaw<{ id: string; rep_id: string; name: string }[]>`
+      select q.id, r.id as rep_id, r.name from crm.quotes q join crm.reps r on r.id = q.follow_up_rep_id where q.id = any(${ids}::uuid[])`;
+    return new Map(rows.map((r): [string, { id: string; name: string }] => [r.id, { id: r.rep_id, name: r.name }]));
+  } catch (e) { return new Map(); }
+}
+
+// Keep only the orders a given rep has something to follow up on (row.involves): the rep the team gave the 2nd to, and the
+// customer's own rep while the 1st is still to do (or when nobody else was given the 2nd).
+export function filterFollowUpBy<T>(rows: T[], repId: string | undefined): T[] {
+  return repId ? rows.filter(r => ((r as { involves?: string[] }).involves ?? []).includes(repId)) : rows;
+}
+
+// The day payment was due, which the 1st follow-up counts a week from: the earliest due date among the order's unpaid invoices
+// (a draft, voided or cancelled invoice is ignored), otherwise the order date, because a customer who pays first owes it at once.
+const DEAD_INVOICE = /^(void|delet|cancel|draft)/i;
+export function followUpAnchor(sentAt: Date | string, invoices: unknown): string {
+  const due = (Array.isArray(invoices) ? invoices : [])
+    .filter((i: any) => !DEAD_INVOICE.test(String(i?.status ?? '').trim()) && Number(i?.due) > 0.005 && /^\d{4}-\d{2}-\d{2}/.test(String(i?.dueDate ?? '')))
+    .map((i: any) => String(i.dueDate).slice(0, 10))
+    .sort();
+  return due[0] ?? melDay(sentAt);
 }
 
 // ---------- Open quotes and unpaid orders ----------
 // Everything still waiting on the customer, oldest first:
 //   - every quote or draft order, paid or not, until it is confirmed in DEAR; and
-//   - every confirmed order (ordered, backordered, picking, shipped...) that is not fully paid, whoever the customer is and
-//     whatever their payment terms, until its money is in. Money still owed on an invoice that is not yet due counts as unpaid.
-// An order leaves only when it is BOTH paid and confirmed. Marketing and warranty orders never come in, and neither does a
-// customer that has been set aside (Metro Baby).
+//   - every confirmed order (ordered, backordered, picking, shipped...) that is not fully paid, until its money is in.
+// Which customers: by their payment terms, chosen with a filter. The default is the prepayment customers (no terms on record,
+// terms that say Prepayment, or an account set to pay before dispatch: all labelled "Prepayment", the same meaning as on the
+// account page and in Marketing). Ticking other terms (30 days, 30 Days EOM...) adds those customers. A customer can also be
+// set aside by hand (skip_open_quotes), whatever is ticked.
+// An order leaves only when it is BOTH paid and confirmed. Marketing and warranty orders never come in.
 // Amounts are what the customer pays (inc GST, DEAR's order total).
 const nice = (s: string | null) => (s ? s.charAt(0) + s.slice(1).toLowerCase() : '');
 
@@ -84,20 +116,39 @@ export function paymentState(q: { total: number | null; amount: number; amountPa
   return { total: cents(total), paid: cents(paid), held: cents(held), remaining, payment: (remaining <= 0.005 ? 'paid' : paid > 0.005 ? 'part' : 'unpaid') as 'paid' | 'part' | 'unpaid' };
 }
 
-// Keep only rows whose next follow-up is the 1st, the 2nd, a date someone set, or none left ("done"), and/or overdue.
+// Keep only rows whose next follow-up is the 1st, the 2nd, or none left ("done"), and/or overdue. 'manual' (what the 2nd was
+// once called) still works as the 2nd.
 export function filterFollowUp<T extends { followUp: { next: { kind: string; date: string } | null } }>(rows: T[], fu: string | undefined, overdue: boolean, today: string): T[] {
   return rows.filter(r => {
     const kind = r.followUp.next?.kind ?? 'done';
-    if (fu && ['fu1', 'fu2', 'manual', 'done'].includes(fu) && kind !== fu) return false;
+    const want = fu === 'manual' ? 'fu2' : fu;
+    if (want && ['fu1', 'fu2', 'done'].includes(want) && kind !== want) return false;
     if (overdue && !(r.followUp.next && r.followUp.next.date < today)) return false;
     return true;
   });
 }
 
-export async function openQuotes(rep: Rep, regions?: string[]) {
+export const PREPAYMENT = 'Prepayment';
+// A customer's payment-terms label: every pay-first customer is "Prepayment", the rest keep their own wording.
+export const termsLabel = (terms: string | null | undefined, credit: string | null | undefined) => {
+  const t = String(terms ?? '').trim();
+  return !t || /prepay/i.test(t) || credit === 'prepay' ? PREPAYMENT : t;
+};
+
+// terms: which customers to include by payment terms. Left out = the default, Prepayment customers only. 'all' = every customer.
+// Otherwise the list of labels to include (an empty list includes nobody).
+export async function openQuotes(rep: Rep, regions?: string[], terms?: string[] | 'all') {
   const accounts = await scope(rep, regions);
-  // Customers set aside from Open Quotes altogether, quotes and orders (crm.accounts.skip_open_quotes: Metro Baby). Set by
-  // open-quotes-exempt.sql. Before that column is added nobody is set aside.
+  const termsOf = accounts.size
+    ? await prisma.$queryRaw<{ id: string; payment_terms: string | null; credit: string | null }[]>`
+        select id, payment_terms, credit::text as credit from crm.accounts where id = any(${[...accounts.keys()]}::uuid[])`
+    : [];
+  const labelById = new Map<string, string>(termsOf.map((r): [string, string] => [r.id, termsLabel(r.payment_terms, r.credit)]));
+  const termOptions = [...new Set(labelById.values())].sort((x, y) => (x === PREPAYMENT ? -1 : y === PREPAYMENT ? 1 : x.localeCompare(y)));
+  const selected = terms === 'all' ? termOptions : terms ?? [PREPAYMENT];
+  for (const [id, label] of labelById) if (!selected.includes(label)) accounts.delete(id);
+  // Customers set aside by hand as well (crm.accounts.skip_open_quotes, added by open-quotes-exempt.sql), whatever is ticked.
+  // Before that column is added nobody is set aside this way.
   try { for (const r of await prisma.$queryRaw<{ id: string }[]>`select id from crm.accounts where skip_open_quotes`) accounts.delete(r.id); }
   catch (e) { /* the column has not been added yet */ }
   const accountIds = [...accounts.keys()];
@@ -139,15 +190,18 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
           and (status = 'reserved' or (status = 'used' and resolved_at > now() - interval '2 days'))
         group by source_order`).map((r): [string, number] => [r.number, r.taken])
     : []);
-  const [fuRows, notes] = await Promise.all([
+  const [fuRows, notes, repOf, repOptions] = await Promise.all([
     ids.length
-      ? prisma.$queryRaw<{ id: string; follow_up_at: Date | null; fu1_done_on: Date | null; fu2_done_on: Date | null }[]>`
-          select id, follow_up_at, fu1_done_on, fu2_done_on from crm.quotes where id = any(${ids}::uuid[])`
-      : Promise.resolve([] as { id: string; follow_up_at: Date | null; fu1_done_on: Date | null; fu2_done_on: Date | null }[]),
+      ? prisma.$queryRaw<{ id: string; follow_up_at: Date | null; fu1_done_on: Date | null; fu2_done_on: Date | null; invoices: unknown }[]>`
+          select id, follow_up_at, fu1_done_on, fu2_done_on, invoices from crm.quotes where id = any(${ids}::uuid[])`
+      : Promise.resolve([] as { id: string; follow_up_at: Date | null; fu1_done_on: Date | null; fu2_done_on: Date | null; invoices: unknown }[]),
     orderNoteSummary(ids),
+    followUpReps(ids),
+    prisma.$queryRaw<{ id: string; name: string }[]>`select id, name from crm.reps order by name`,   // for the "followed up by" choice
   ]);
   const day = (d: Date | null) => (d ? new Date(d).toISOString().slice(0, 10) : null);   // date columns come back as midnight UTC
   type FuState = { manualOn: string | null; fu1DoneOn: string | null; fu2DoneOn: string | null };
+  const invoicesById = new Map<string, unknown>(fuRows.map((r): [string, unknown] => [r.id, r.invoices]));
   const fuById = new Map<string, FuState>(fuRows.map((r): [string, FuState] => [r.id, { manualOn: day(r.follow_up_at), fu1DoneOn: day(r.fu1_done_on), fu2DoneOn: day(r.fu2_done_on) }]));
 
   const rows = quotes.map(q => {
@@ -155,6 +209,15 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
     const confirmed = !QUOTE_STATUSES.includes(status);
     const pay = paymentState(q, reservedBy.get(q.number) ?? 0);
     const n = notes.get(q.id);
+    const followUp = followUpState(followUpAnchor(q.sentAt, invoicesById.get(q.id)), fuById.get(q.id) ?? { manualOn: null, fu1DoneOn: null, fu2DoneOn: null }, repOf.get(q.id) ?? null);
+    const acct = accounts.get(q.accountId);
+    // Who is to follow it up: the rep the team chose for the 2nd, otherwise the customer's own rep.
+    const followUpBy = followUp.next?.kind === 'fu2' && followUp.secondRep ? { ...followUp.secondRep, set: true } : { id: acct?.repId ?? null, name: acct?.rep?.name ?? null, set: false };
+    // Everyone with something to do on it: the rep given the 2nd, and the account rep while the 1st is pending or when nobody else has it.
+    const involves = [...new Set([
+      ...(followUp.secondOn && followUp.secondRep ? [followUp.secondRep.id] : []),
+      ...(acct?.repId && (!followUp.fu1DoneOn || !(followUp.secondOn && followUp.secondRep)) ? [acct.repId] : []),
+    ])];
     return {
       id: q.id,
       number: q.number,
@@ -162,6 +225,7 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
       customer: accounts.get(q.accountId)?.name ?? 'Unknown',
       region: accounts.get(q.accountId)?.region ?? '',
       repName: accounts.get(q.accountId)?.rep?.name ?? null,
+      terms: labelById.get(q.accountId) ?? PREPAYMENT,               // the customer's payment terms (every pay-first customer is Prepayment)
       date: q.sentAt,
       ageDays: daysSince(q.sentAt),
       status,                                                       // DEAR's status
@@ -172,7 +236,10 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
       paid: pay.paid,                                               // paid so far, deposit and prepayments included
       remaining: pay.remaining,                                     // still to pay
       payment: pay.payment,                                         // unpaid, part (part paid) or paid
-      followUp: followUpState(melDay(q.sentAt), fuById.get(q.id) ?? { manualOn: null, fu1DoneOn: null, fu2DoneOn: null }),
+      followUp,
+      followUpBy,                                                   // who is to do the next one (the screen's column)
+      involves,                                                     // every rep with something to do on it (the screen's filter)
+      accountRepId: acct?.repId ?? null,
       noteCount: n?.noteCount ?? 0,
       lastNote: n?.lastNote ?? null,
     };
@@ -183,6 +250,42 @@ export async function openQuotes(rep: Rep, regions?: string[]) {
     rows, count: rows.length,
     total: cents(rows.reduce((s, r) => s + r.amount, 0)),
     remaining: cents(rows.reduce((s, r) => s + r.remaining, 0)),
+    terms: selected, termOptions,   // which payment terms are included, and every wording there is, for the filter
+    repOptions,                     // every rep, for choosing who follows up
+  };
+}
+
+// What one person is to chase, for their Dashboard: the orders whose next follow-up is overdue or due in the next `days` days and
+// that are theirs to do:
+//   - every follow-up the sales team gave them (the 2nd with their name on it), for any customer, wherever the customer is; and
+//   - the 1st follow-up on their own customers' prepayment orders (the same customers the Open quotes screen starts with).
+// A customer on terms only appears when it was given to them by name. Done ones are not listed. Most overdue first.
+export async function myFollowUps(rep: Rep, today: string = melDay(), days = 7) {
+  const all = await openQuotes({ ...rep, role: 'manager' } as Rep, undefined, 'all');   // not limited to their states: it was given to them
+  const limit = plusDays(today, days);
+  // What this person has to do on one order: the 2nd the team gave them (whatever else is pending), or the 1st on their own
+  // customer's prepayment order. If both, the earlier one.
+  const mineOn = (r: (typeof all.rows)[number]) => {
+    const items: { kind: 'fu1' | 'fu2'; date: string; assigned: boolean }[] = [];
+    if (r.followUp.secondOn && r.followUp.secondRep?.id === rep.id) items.push({ kind: 'fu2', date: r.followUp.secondOn, assigned: true });
+    if (!r.followUp.fu1DoneOn && r.accountRepId === rep.id && r.terms === PREPAYMENT) items.push({ kind: 'fu1', date: r.followUp.fu1Due, assigned: false });
+    return items.sort((a, b) => a.date.localeCompare(b.date) || Number(b.assigned) - Number(a.assigned))[0] ?? null;
+  };
+  const rows = all.rows
+    .map(r => ({ r, mine: mineOn(r) }))
+    .filter((x): x is { r: (typeof all.rows)[number]; mine: NonNullable<ReturnType<typeof mineOn>> } => !!x.mine && x.mine.date <= limit)
+    .sort((a, b) => a.mine.date.localeCompare(b.mine.date) || b.r.ageDays - a.r.ageDays)
+    .map(({ r, mine }) => ({
+      id: r.id, number: r.number, accountId: r.accountId, customer: r.customer, region: r.region, stage: r.stage, terms: r.terms,
+      amount: r.amount, remaining: r.remaining, payment: r.payment, ageDays: r.ageDays, noteCount: r.noteCount, lastNote: r.lastNote,
+      followUp: { next: { kind: mine.kind, date: mine.date }, secondRep: r.followUp.secondRep },
+      assigned: mine.assigned,   // true when the sales team gave it to this person by name
+    }));
+  return {
+    repId: rep.id, days, today, rows, count: rows.length,
+    overdue: rows.filter(r => r.followUp.next.date < today).length,
+    dueToday: rows.filter(r => r.followUp.next.date === today).length,
+    assigned: rows.filter(r => r.assigned).length,
   };
 }
 

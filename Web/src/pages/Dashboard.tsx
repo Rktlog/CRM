@@ -9,6 +9,7 @@ import BackorderCard from '../components/BackorderCard';
 import TeamActivityCard from '../components/TeamActivityCard';
 import TeamLogCard from '../components/TeamLogCard';
 import ConversionCard from '../components/ConversionCard';
+import MyOrderFollowUps from '../components/MyOrderFollowUps';
 
 export default function Dashboard() {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
@@ -156,6 +157,8 @@ export default function Dashboard() {
           </div>
         </>
       )}
+
+      <MyOrderFollowUps />
 
       <BackorderCard />
 

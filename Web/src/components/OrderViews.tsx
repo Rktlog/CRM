@@ -33,14 +33,22 @@ export default function OrderViews({ view }: { view: ViewKey }) {
   const [excludedTerms, setExcludedTerms] = useState<Set<string>>(new Set());
   const [termOptions, setTermOptions] = useState<string[]>([]);
   const included = termOptions.filter(t => !excludedTerms.has(t));
-  const termsParam = excludedTerms.size && (view === 'unpaid' || view === 'balances')
-    ? (included.length ? included.join('|') : '(none)') // all unticked: show nothing
-    : '';
+  // Open quotes: the payment terms to include. Not touched = the server's default, Prepayment customers only (it says which in
+  // data.terms); once the filter is used, the ticked list is sent.
+  const [qTerms, setQTerms] = useState<Set<string> | null>(null);
+  // Arriving from a link (the Dashboard's "Open all my follow-ups") with ?terms=all: start with every customer, not just Prepayment.
+  const [startAll] = useState(() => view === 'quotes' && new URLSearchParams(window.location.search).get('terms') === 'all');
+  const termsParam = view === 'quotes'
+    ? (qTerms ? ([...qTerms].join('|') || '(none)') : startAll ? 'all' : '')
+    : excludedTerms.size && (view === 'unpaid' || view === 'balances')
+      ? (included.length ? included.join('|') : '(none)') // all unticked: show nothing
+      : '';
   const [search, setSearch] = useState('');
   const [shown, setShown] = useState(PAGE);
-  // Open quotes: which follow-up to show (the 1st, the 2nd, a date someone set, or none left), and overdue only.
-  const [fu, setFu] = useState<'all' | 'fu1' | 'fu2' | 'manual' | 'done'>('all');
+  // Open quotes: which follow-up to show (the 1st, the 2nd the team set, or none left), and overdue only.
+  const [fu, setFu] = useState<'all' | 'fu1' | 'fu2' | 'done'>('all');
   const [overdueOnly, setOverdueOnly] = useState(false);
+  const [fuBy, setFuBy] = useState(() => (view === 'quotes' ? new URLSearchParams(window.location.search).get('fuBy') ?? '' : ''));   // Open quotes: only the orders this rep follows up (the rep chosen for the 2nd, else the account rep)
   const [downloading, setDownloading] = useState(false);
   const me = useMe();
   const stateOptions = stateOptionsFor(me);
@@ -65,23 +73,24 @@ export default function OrderViews({ view }: { view: ViewKey }) {
   const base: any[] = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!data) return [];
-    return q
+    const found = q
       ? data.rows.filter((r: any) => [r.customer, r.number, r.invoice, r.reference].some(v => v && String(v).toLowerCase().includes(q)))
       : data.rows;
-  }, [data, search]);
+    return view === 'quotes' && fuBy ? found.filter((r: any) => (r.involves ?? []).includes(fuBy)) : found;
+  }, [data, search, fuBy, view]);
 
   const today = todayLocal();
   const fuKind = (r: any): string => r.followUp?.next?.kind ?? 'done';
   const isLate = (r: any) => !!r.followUp?.next && r.followUp.next.date < today;
   const fuCounts = useMemo(() => view !== 'quotes' ? null : {
     all: base.length, fu1: base.filter(r => fuKind(r) === 'fu1').length, fu2: base.filter(r => fuKind(r) === 'fu2').length,
-    manual: base.filter(r => fuKind(r) === 'manual').length, done: base.filter(r => fuKind(r) === 'done').length, late: base.filter(isLate).length,
+    done: base.filter(r => fuKind(r) === 'done').length, late: base.filter(isLate).length,
   }, [base, view, today]);
   const rows: any[] = useMemo(
     () => view !== 'quotes' ? base : base.filter(r => (fu === 'all' || fuKind(r) === fu) && (!overdueOnly || isLate(r))),
     [base, view, fu, overdueOnly, today],
   );
-  useEffect(() => { setShown(PAGE); }, [fu, overdueOnly, search]);
+  useEffect(() => { setShown(PAGE); }, [fu, overdueOnly, search, fuBy]);
 
   async function download() {
     setDownloading(true);
@@ -89,7 +98,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
       const params = new URLSearchParams({ format: 'xlsx' });
       if (region) params.set('region', region);
       if (termsParam) params.set('terms', termsParam);
-      if (view === 'quotes') { if (fu !== 'all') params.set('fu', fu); if (overdueOnly) params.set('overdue', '1'); }
+      if (view === 'quotes') { if (fu !== 'all') params.set('fu', fu); if (overdueOnly) params.set('overdue', '1'); if (fuBy) params.set('fuBy', fuBy); }
       await apiDownload(`/orders/views/${view}?${params.toString()}`, `${view}-${new Date().toISOString().slice(0, 10)}.xlsx`);
     } finally {
       setDownloading(false);
@@ -110,35 +119,48 @@ export default function OrderViews({ view }: { view: ViewKey }) {
           <StateFilter value={region} onChange={setRegion} options={stateOptions}
             allLabel={me?.role === 'manager' ? 'All states' : 'All my states'} />
         )}
-        {(view === 'unpaid' || view === 'balances') && termOptions.length > 1 && (
-          <details className="terms-filter">
-            <summary>
-              {excludedTerms.size === 0 ? 'All payment terms'
-                : included.length === 0 ? 'No payment terms'
-                : excludedTerms.size === 1 ? `All terms except ${[...excludedTerms][0]}`
-                : `${included.length} of ${termOptions.length} payment terms`}
-            </summary>
-            <div className="terms-menu">
-              <div className="terms-menu-tools">
-                <button type="button" className="link-btn" onClick={() => setExcludedTerms(new Set())}>Tick all</button>
-                <button type="button" className="link-btn" onClick={() => setExcludedTerms(new Set(termOptions))}>Untick all</button>
+        {((view === 'unpaid' || view === 'balances') && termOptions.length > 1 || view === 'quotes' && (data?.termOptions?.length ?? 0) > 1) && (() => {
+          // Unpaid and balances remember the terms NOT ticked (so new terms show up); Open quotes remembers the ones ticked,
+          // starting from the server's default: Prepayment customers.
+          const isQ = view === 'quotes';
+          const options: string[] = isQ ? data.termOptions : termOptions;
+          const ticked = new Set<string>(isQ ? (qTerms ?? data.terms ?? []) : included);
+          const setTicked = (next: Set<string>) => (isQ ? setQTerms(next) : setExcludedTerms(new Set(options.filter(t => !next.has(t)))));
+          const only = isQ && ticked.size === 1 && ticked.has('Prepayment');
+          return (
+            <details className="terms-filter">
+              <summary>
+                {ticked.size === options.length ? 'All payment terms'
+                  : ticked.size === 0 ? 'No payment terms'
+                  : only ? 'Prepayment customers'
+                  : !isQ && excludedTerms.size === 1 ? `All terms except ${[...excludedTerms][0]}`
+                  : `${ticked.size} of ${options.length} payment terms`}
+              </summary>
+              <div className="terms-menu">
+                <div className="terms-menu-tools">
+                  <button type="button" className="link-btn" onClick={() => setTicked(new Set(options))}>Tick all</button>
+                  <button type="button" className="link-btn" onClick={() => setTicked(new Set())}>Untick all</button>
+                  {isQ && <button type="button" className="link-btn" onClick={() => setTicked(new Set(['Prepayment']))}>Prepayment only</button>}
+                </div>
+                {options.map(t => (
+                  <label key={t} className="pl-check">
+                    <input
+                      type="checkbox"
+                      checked={ticked.has(t)}
+                      onChange={() => { const next = new Set(ticked); next.has(t) ? next.delete(t) : next.add(t); setTicked(next); }}
+                    />
+                    <span>{t}</span>
+                  </label>
+                ))}
               </div>
-              {termOptions.map(t => (
-                <label key={t} className="pl-check">
-                  <input
-                    type="checkbox"
-                    checked={!excludedTerms.has(t)}
-                    onChange={() => setExcludedTerms(prev => {
-                      const next = new Set(prev);
-                      next.has(t) ? next.delete(t) : next.add(t);
-                      return next;
-                    })}
-                  />
-                  <span>{t}</span>
-                </label>
-              ))}
-            </div>
-          </details>
+            </details>
+          );
+        })()}
+        {view === 'quotes' && (data?.repOptions?.length ?? 0) > 1 && (
+          <select value={fuBy} onChange={e => setFuBy(e.target.value)} aria-label="Followed up by">
+            <option value="">Followed up by: anyone</option>
+            {data.repOptions.map((o: { id: string; name: string }) => <option key={o.id} value={o.id}>{o.name}{me?.id === o.id ? ' (me)' : ''}</option>)}
+          </select>
         )}
         <button className="btn secondary" onClick={download} disabled={downloading || !data}>
           {downloading ? 'Downloading…' : '⬇ Excel'}
@@ -147,7 +169,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
       {view === 'quotes' && fuCounts && data && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '4px 0 8px' }}>
           <span className="stat-label">Follow-up</span>
-          {([['all', 'All', 'neutral', fuCounts.all], ['fu1', '1st', 'amber', fuCounts.fu1], ['fu2', '2nd', 'rust', fuCounts.fu2], ['manual', 'Set', 'teal', fuCounts.manual], ['done', 'Done', 'neutral', fuCounts.done]] as const).map(([k, label, tone, count]) => (
+          {([['all', 'All', 'neutral', fuCounts.all], ['fu1', '1st', 'amber', fuCounts.fu1], ['fu2', '2nd', 'rust', fuCounts.fu2], ['done', 'Done', 'neutral', fuCounts.done]] as const).map(([k, label, tone, count]) => (
             <button key={k} type="button" className={`pill ${tone}`} onClick={() => setFu(k)} aria-pressed={fu === k}
               style={{ cursor: 'pointer', border: 'none', fontSize: 12.5, padding: '4px 11px', fontWeight: fu === k ? 700 : 500, outline: fu === k ? '2px solid currentColor' : 'none' }}>
               {label} {count}
@@ -247,7 +269,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
       )}
 
       {data && rows.length > 0 && view === 'quotes' && (
-        <OpenQuotesTable rows={rows.slice(0, shown)} showRep={me?.role === 'manager'} />
+        <OpenQuotesTable repOptions={data.repOptions ?? []} rows={rows.slice(0, shown)} showRep={me?.role === 'manager'} />
       )}
 
       {data && rows.length > 0 && view === 'to-ship' && (

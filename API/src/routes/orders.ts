@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma';
 import { isHistory } from '../lib/orderSource';
 import { searchWords } from './products';
 import * as XLSX from 'xlsx';
-import { openQuotes, toShip, unpaidInvoices, balances, AGE_BUCKETS, followUpState, filterFollowUp, melDay, paymentState } from '../lib/receivables';
+import { openQuotes, toShip, unpaidInvoices, balances, AGE_BUCKETS, followUpState, followUpAnchor, followUpReps, filterFollowUp, filterFollowUpBy, myFollowUps, melDay, paymentState } from '../lib/receivables';
 import { orderNoteSummary } from '../lib/orderNotes';
 
 export const ordersRouter = Router();
@@ -161,17 +161,24 @@ ordersRouter.get('/search', async (req, res) => {
   });
 });
 
+// GET /orders/my-follow-ups   what the signed-in person is to chase in the next 7 days (or is overdue on): the follow-ups the sales
+// team gave them, and the 1st on their own customers' prepayment orders. Shown on their Dashboard.
+ordersRouter.get('/my-follow-ups', async (req, res) => {
+  res.json(await myFollowUps(req.rep!));
+});
+
 // GET /orders/:id   full detail for one order
 // ---------- Order tracking views (tabs on the Orders page) ----------
 // ---------- Follow-ups on an open quote ----------
-// PATCH /orders/:id/follow-up        { date: '2026-10-20' }  your own next date ({ date: null } clears it)
-// POST  /orders/:id/follow-up/done   completes whatever is next: your date, else the 1st, else the 2nd
+// The 1st follow-up is automatic: a week after payment was due. The 2nd is set by the sales team.
+// PATCH /orders/:id/follow-up        { date: '2026-10-20' }  the 2nd follow-up date, set by the team ({ date: null } clears it)
+// POST  /orders/:id/follow-up/done   completes whichever is next, the 1st or the 2nd (a 2nd date that is done is cleared)
 // POST  /orders/:id/follow-up/undo   takes back the latest "done"
 // Each returns the order's follow-up as it now stands.
 async function followUpOrder(req: any, res: any) {
   if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) { res.status(400).json({ error: 'Bad order' }); return null; }
   const [o] = await prisma.$queryRaw<any[]>`
-    select q.id, q.sent_at as "sentAt", a.id as "accountId", a.region, a.rep_id as "repId"
+    select q.id, q.sent_at as "sentAt", q.invoices, a.id as "accountId", a.region, a.rep_id as "repId"
     from crm.quotes q join crm.accounts a on a.id = q.account_id where q.id = ${req.params.id}::uuid`;
   if (!o) { res.status(404).json({ error: 'Order not found' }); return null; }
   if (!(await canSeeAccount(req.rep!, { id: o.accountId, repId: o.repId, region: o.region } as any))) {
@@ -179,46 +186,67 @@ async function followUpOrder(req: any, res: any) {
   }
   return o;
 }
-async function followUpNow(o: { id: string; sentAt: Date }) {
+async function followUpNow(o: { id: string; sentAt: Date; invoices?: unknown }) {
   const [f] = await prisma.$queryRaw<any[]>`
     select follow_up_at::text as "manualOn", fu1_done_on::text as "fu1DoneOn", fu2_done_on::text as "fu2DoneOn"
     from crm.quotes where id = ${o.id}::uuid`;
-  return followUpState(melDay(o.sentAt), f);
+  const secondRep = (await followUpReps([o.id])).get(o.id) ?? null;
+  return followUpState(followUpAnchor(o.sentAt, o.invoices), f, secondRep);
 }
 
+// { date, repId? }: the 2nd date, and optionally which rep follows it up (repId: null = nobody). A null date clears both.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 ordersRouter.patch('/:id/follow-up', async (req, res) => {
   const date = req.body?.date;
   const valid = date === null || (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(Date.parse(date)));
   if (!valid) return res.status(400).json({ error: 'Use a date like 2026-10-20, or null to clear it' });
+  const hasRep = !!req.body && Object.prototype.hasOwnProperty.call(req.body, 'repId');
+  const repId = hasRep ? req.body.repId : undefined;
+  if (hasRep && repId !== null && !(typeof repId === 'string' && UUID.test(repId))) return res.status(400).json({ error: 'Pick a rep from the list, or none' });
+  if (hasRep && repId && date === null) return res.status(400).json({ error: 'Choose a date to give the follow-up to a rep' });
   const o = await followUpOrder(req, res); if (!o) return;
+  if (hasRep && repId) {
+    const [r] = await prisma.$queryRaw<{ id: string }[]>`select id from crm.reps where id = ${repId}::uuid`;
+    if (!r) return res.status(400).json({ error: 'That rep was not found' });
+  }
   await prisma.$executeRaw`update crm.quotes set follow_up_at = ${date}::date where id = ${o.id}::uuid`;
+  // Who follows it up: clearing the date clears the rep too; a repId in the request sets (or, when null, clears) it.
+  if (date === null || hasRep) {
+    const value = date === null ? null : repId ?? null;
+    try { await prisma.$executeRaw`update crm.quotes set follow_up_rep_id = ${value}::uuid where id = ${o.id}::uuid`; }
+    catch (e) { if (hasRep && repId) return res.status(503).json({ error: 'Choosing who follows up is not set up yet. Run follow-up-rep.sql in the database.' }); }
+  }
   res.json({ followUp: await followUpNow(o) });
 });
 
 ordersRouter.post('/:id/follow-up/done', async (req, res) => {
   const o = await followUpOrder(req, res); if (!o) return;
   const today = melDay();
-  await prisma.$executeRaw`
-    update crm.quotes set
-      follow_up_at = null,
-      fu1_done_on = case when follow_up_at is null and fu1_done_on is null then ${today}::date else fu1_done_on end,
-      fu2_done_on = case when follow_up_at is null and fu1_done_on is not null and fu2_done_on is null then ${today}::date else fu2_done_on end
-    where id = ${o.id}::uuid`;
+  const before = await followUpNow(o);
+  // Whichever is next is the one that is done. A 2nd date that is done is cleared, so the team can set the next one.
+  if (before.next?.kind === 'fu1') await prisma.$executeRaw`update crm.quotes set fu1_done_on = ${today}::date where id = ${o.id}::uuid and fu1_done_on is null`;
+  else if (before.next?.kind === 'fu2') {
+    await prisma.$executeRaw`update crm.quotes set fu2_done_on = ${today}::date, follow_up_at = null where id = ${o.id}::uuid`;
+    try { await prisma.$executeRaw`update crm.quotes set follow_up_rep_id = null where id = ${o.id}::uuid`; } catch (e) { /* not set up yet */ }
+  }
   res.json({ followUp: await followUpNow(o) });
 });
 
+// Takes back the latest "done": the 1st or the 2nd, whichever was done last (the 2nd on a tie). A cleared 2nd date is not
+// brought back: set it again.
 ordersRouter.post('/:id/follow-up/undo', async (req, res) => {
   const o = await followUpOrder(req, res); if (!o) return;
   await prisma.$executeRaw`
     update crm.quotes set
-      fu2_done_on = null,
-      fu1_done_on = case when fu2_done_on is null then null else fu1_done_on end
+      fu2_done_on = case when fu2_done_on is not null and (fu1_done_on is null or fu2_done_on >= fu1_done_on) then null else fu2_done_on end,
+      fu1_done_on = case when fu1_done_on is not null and (fu2_done_on is null or fu1_done_on > fu2_done_on) then null else fu1_done_on end
     where id = ${o.id}::uuid`;
   res.json({ followUp: await followUpNow(o) });
 });
 
 // GET /orders/views/quotes | to-ship | unpaid | balances
 //   ?region=VIC,NSW  &format=xlsx (download exactly what's on screen)
+//   quotes only: ?terms=Prepayment|30 days  the payment terms to include (left out: Prepayment customers only; all: everyone; (none): nobody)
 // Scoped by territory: reps see their states.
 const xlDate = (d: Date | null | undefined) => (d ? new Date(d).toISOString().slice(0, 10) : '');
 
@@ -231,14 +259,16 @@ ordersRouter.get('/views/:view', async (req, res) => {
 
   switch (req.params.view) {
     case 'quotes': {
-      data = await openQuotes(rep, regions);
+      const t = typeof req.query.terms === 'string' ? req.query.terms.trim() : '';
+      data = await openQuotes(rep, regions, !t ? undefined : t === '(none)' ? [] : t.toLowerCase() === 'all' ? 'all' : t.split('|').map(x => x.trim()).filter(Boolean));
       name = 'open-quotes';
       sheet = data.rows.map((r: any) => ({
-        Order: r.number, Customer: r.customer, State: r.region, 'Order date': xlDate(r.date), 'Age (days)': r.ageDays,
+        Order: r.number, Customer: r.customer, 'Payment terms': r.terms, State: r.region, 'Order date': xlDate(r.date), 'Age (days)': r.ageDays,
         'Total (inc GST)': r.amount, 'Paid so far': r.paid, Remaining: r.remaining,
         Payment: { unpaid: 'Unpaid', part: 'Part paid', paid: 'Paid, not confirmed yet' }[r.payment as 'unpaid' | 'part' | 'paid'],
         'Next follow-up': r.followUp.next?.date ?? 'Done',
-        'Follow-up type': r.followUp.next ? { fu1: '1st', fu2: '2nd', manual: 'Set' }[r.followUp.next.kind as 'fu1' | 'fu2' | 'manual'] : '',
+        'Follow-up type': r.followUp.next ? { fu1: '1st', fu2: '2nd' }[r.followUp.next.kind as 'fu1' | 'fu2'] : '',
+        'Followed up by': r.followUp.next ? r.followUpBy?.name ?? '' : '',
         'Last note': r.lastNote?.text ?? '', Rep: r.repName ?? '', Stage: r.stage, Reference: r.reference ?? '',
       }));
       break;
@@ -300,9 +330,10 @@ ordersRouter.get('/views/:view', async (req, res) => {
     }
   }
 
-  // ?fu=fu1|fu2|manual|done and ?overdue=1: open quotes only, by the next follow-up (the same filter as on screen)
-  if (req.params.view === 'quotes' && (typeof req.query.fu === 'string' || req.query.overdue === '1')) {
-    const keep = new Set(filterFollowUp(data.rows, typeof req.query.fu === 'string' ? req.query.fu : undefined, req.query.overdue === '1', melDay()));
+  // ?fu=fu1|fu2|done, ?overdue=1 and ?fuBy=<rep id>: open quotes only, by the next follow-up (the same filter as on screen)
+  if (req.params.view === 'quotes' && (typeof req.query.fu === 'string' || req.query.overdue === '1' || typeof req.query.fuBy === 'string')) {
+    const by = typeof req.query.fuBy === 'string' && req.query.fuBy ? req.query.fuBy : undefined;   // ?fuBy=<rep id>: the rep who follows it up
+    const keep = new Set(filterFollowUpBy(filterFollowUp(data.rows, typeof req.query.fu === 'string' ? req.query.fu : undefined, req.query.overdue === '1', melDay()), by));
     const keptIdx = data.rows.map((r: any, i: number) => (keep.has(r) ? i : -1)).filter((i: number) => i >= 0);
     sheet = keptIdx.map((i: number) => sheet[i]);
     const rows = keptIdx.map((i: number) => data.rows[i]);
