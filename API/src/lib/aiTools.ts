@@ -1,5 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from './prisma';
+import { decodeEntities } from './htmlText';
+import { fmtDimensions, fmtWeight } from './productSpecs';
 import { territoryWhere, canSeeAccount } from './territory';
 import { openQuotes } from './receivables';
 import { chooseEta, incomingFor } from './eta';
@@ -15,11 +17,21 @@ async function productIncrements(skus: string[]): Promise<Map<string, number>> {
   } catch { /* not there yet */ }
   return out;
 }
+// Weight (kg) and size (cm) from DEAR, if the sync has saved them. A separate read, so the lookup works before the columns exist.
+async function productSpecs(skus: string[]): Promise<Map<string, { weightKg: number | null; lengthCm: number | null; widthCm: number | null; heightCm: number | null }>> {
+  const out = new Map<string, { weightKg: number | null; lengthCm: number | null; widthCm: number | null; heightCm: number | null }>();
+  if (!skus.length) return out;
+  try {
+    const n = (v: number | null) => (v == null ? null : Number(v));
+    for (const r of await prisma.$queryRaw<{ sku: string; weight_kg: number | null; length_cm: number | null; width_cm: number | null; height_cm: number | null }[]>`select sku, weight_kg, length_cm, width_cm, height_cm from crm.products where sku = any(${skus}::text[])`) out.set(r.sku, { weightKg: n(r.weight_kg), lengthCm: n(r.length_cm), widthCm: n(r.width_cm), heightCm: n(r.height_cm) });
+  } catch { /* not there yet */ }
+  return out;
+}
 async function productDescriptions(skus: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   if (!skus.length) return out;
   try {
-    for (const r of await prisma.$queryRaw<{ sku: string; description: string | null }[]>`select sku, description from crm.products where sku = any(${skus}::text[]) and description is not null`) if (r.description) out.set(r.sku, r.description);
+    for (const r of await prisma.$queryRaw<{ sku: string; description: string | null }[]>`select sku, description from crm.products where sku = any(${skus}::text[]) and description is not null`) if (r.description) out.set(r.sku, decodeEntities(r.description));   // saved text may still hold codes like &rsquo;
   } catch { /* not there yet */ }
   return out;
 }
@@ -231,9 +243,10 @@ export async function runTool(name: string, input: any, ctx: Ctx): Promise<strin
         const incoming = await incomingFor(products.map(p => p.sku));
         const descriptions = await productDescriptions(products.map(p => p.sku));
         const increments = await productIncrements(products.map(p => p.sku));
+        const specs = await productSpecs(products.map(p => p.sku));
         return out({ showing: products.length, products: products.map(p => {
           const eta = chooseEta(p.eta, p.onOrder, incoming.get(p.sku) ?? [], ctx.today);
-          return { sku: p.sku, name: p.name, brand: p.brand, status: statusLabel(isStatusKey(p.lifecycle) ? p.lifecycle : null) || null, description: (descriptions.get(p.sku) ?? '').slice(0, 400) || null, orderIncrement: increments.get(p.sku) ?? null, available: p.available, onOrder: p.onOrder,
+          return { sku: p.sku, name: p.name, brand: p.brand, status: statusLabel(isStatusKey(p.lifecycle) ? p.lifecycle : null) || null, description: (descriptions.get(p.sku) ?? '').slice(0, 400) || null, orderIncrement: increments.get(p.sku) ?? null, size: fmtDimensions(specs.get(p.sku)?.lengthCm, specs.get(p.sku)?.widthCm, specs.get(p.sku)?.heightCm), weight: fmtWeight(specs.get(p.sku)?.weightKg), available: p.available, onOrder: p.onOrder,
             eta: eta ? { date: eta.date, late: eta.late, from: eta.source === 'manual' ? 'set by hand' : eta.ref ? `purchase order ${eta.ref}` : 'incoming purchase order' } : null, wholesaleExGst: wholesalePrice(p.prices as any) };
         }) });
       }

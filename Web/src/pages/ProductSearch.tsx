@@ -6,6 +6,7 @@ import ProductPhoto from '../components/ProductPhoto';
 import ProductStatusPill from '../components/ProductStatusPill';
 import EtaText, { Eta } from '../components/EtaText';
 import ProductDescription from '../components/ProductDescription';
+import { fmtDimensions, fmtWeight } from '../lib/productSpecs';
 import ProductImportModal from '../components/ProductImportModal';
 import { PRODUCT_STATUSES } from '../lib/productStatus';
 
@@ -31,6 +32,7 @@ type Product = {
   lifecycle?: string | null; // the stage (EOL, discontinued, pre-order, new, confirmed for ranging, ...); none if empty
   description?: string | null; // DEAR's description, plain text
   orderIncrement?: number | null; // customers order in multiples of this (from the DEAR description)
+  weightKg?: number | null; lengthCm?: number | null; widthCm?: number | null; heightCm?: number | null; // from DEAR: kilograms and centimetres
   eta?: Eta;                 // when the next delivery should arrive
   etaManual?: string | null; // the ETA set by hand, if any
   uom: string | null;
@@ -274,6 +276,8 @@ function ProductEdit({ product: p, onSaved }: { product: Product; onSaved: (sku:
 
 function ProductDetail({ product: p, canEdit, onSaved }: { product: Product; canEdit?: boolean; onSaved?: (sku: string, patch: Patch) => void }) {
   const unit = p.uom ? ` ${p.uom}` : '';
+  const dims = fmtDimensions(p.lengthCm, p.widthCm, p.heightCm);   // only when all three are known
+  const weight = fmtWeight(p.weightKg);
   const otherPrices = Object.entries(p.prices).filter(
     ([tier]) => tier !== p.wholesale?.tier && tier !== p.retail?.tier,
   );
@@ -287,15 +291,28 @@ function ProductDetail({ product: p, canEdit, onSaved }: { product: Product; can
         </div>
       )}
 
-      {(p.orderIncrement || p.description) && (
-        <div className="pd-row" style={{ marginBottom: 12, ...(p.orderIncrement && p.description ? {} : { gridTemplateColumns: '1fr' }) }}>
-          {p.orderIncrement ? (
-            <div className="pd-box">
-              <div className="pd-box-title">Order increment</div>
-              <div className="pd-tile-value num" style={{ marginTop: 0 }}>{p.orderIncrement}</div>
-              <div className="pd-stat-l" style={{ fontSize: 13 }}>customers order in multiples of {p.orderIncrement}</div>
+      {(p.orderIncrement || dims || weight || p.description) && (
+        <div className="pd-row" style={{ marginBottom: 12, ...((p.orderIncrement || dims || weight) && p.description ? {} : { gridTemplateColumns: '1fr' }) }}>
+          {(p.orderIncrement || dims || weight) && (
+            <div style={{ display: 'grid', gap: 12, alignContent: 'start' }}>
+              {p.orderIncrement ? (
+                <div className="pd-box">
+                  <div className="pd-box-title">Order increment</div>
+                  <div className="pd-tile-value num" style={{ marginTop: 0 }}>{p.orderIncrement}</div>
+                  <div className="pd-stat-l" style={{ fontSize: 13 }}>customers order in multiples of {p.orderIncrement}</div>
+                </div>
+              ) : null}
+              {(dims || weight) && (
+                <div className="pd-box">
+                  <div className="pd-box-title">Dimensions and weight</div>
+                  <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
+                    {dims && <div><div className="pd-stat-l">Size (L × W × H)</div><div className="num" style={{ fontSize: 16, fontWeight: 600 }}>{dims}</div></div>}
+                    {weight && <div><div className="pd-stat-l">Weight</div><div className="num" style={{ fontSize: 16, fontWeight: 600 }}>{weight}</div></div>}
+                  </div>
+                </div>
+              )}
             </div>
-          ) : null}
+          )}
           {p.description && (
             <div className="pd-box">
               <div className="pd-box-title">Description</div>

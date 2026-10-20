@@ -72,6 +72,22 @@ async function descriptionsFor(skus: string[]): Promise<Map<string, string>> {
   return out;
 }
 
+// Weight (kg) and size (cm) from DEAR, saved by the sync. A separate read, so the pages keep working before product-dimensions.sql
+// has added the columns.
+type Specs = { weightKg: number | null; lengthCm: number | null; widthCm: number | null; heightCm: number | null };
+async function specsFor(skus: string[]): Promise<Map<string, Specs>> {
+  const out = new Map<string, Specs>();
+  if (!skus.length) return out;
+  try {
+    const rows = await prisma.$queryRaw<{ sku: string; weight_kg: number | null; length_cm: number | null; width_cm: number | null; height_cm: number | null }[]>`
+      select sku, weight_kg, length_cm, width_cm, height_cm from crm.products where sku = any(${skus}::text[])
+        and (weight_kg is not null or length_cm is not null or width_cm is not null or height_cm is not null)`;
+    const n = (v: number | null) => (v == null ? null : Number(v));
+    for (const r of rows) out.set(r.sku, { weightKg: n(r.weight_kg), lengthCm: n(r.length_cm), widthCm: n(r.width_cm), heightCm: n(r.height_cm) });
+  } catch (e) { console.error('product weights and sizes unavailable:', (e as Error).message); }
+  return out;
+}
+
 // The order increment from the DEAR description ("ORDER INCREMENT: 4"): customers order in multiples of it. Saved by the
 // sync. A separate read, so the pages keep working before the column has been added.
 async function incrementsFor(skus: string[]): Promise<Map<string, number>> {
@@ -394,6 +410,7 @@ productsRouter.get('/search', async (req, res) => {
 
   const descriptions = await descriptionsFor(skus);
   const increments = await incrementsFor(skus);
+  const specs = await specsFor(skus);
   const results = products.map((p, idx) => {
     const prices = (p.prices as Record<string, number>) ?? {};
     const totals = totalsBySku.get(p.sku);
@@ -508,6 +525,10 @@ productsRouter.get('/search', async (req, res) => {
       lifecycle: p.lifecycle, // one of the stages (EOL, discontinued, pre-order, new, confirmed for ranging, ...); null = none
       description: descriptions.get(p.sku) ?? null,   // DEAR's description, plain text
       orderIncrement: increments.get(p.sku) ?? null,  // customers order in multiples of this
+      weightKg: specs.get(p.sku)?.weightKg ?? null,   // from DEAR: weight in kilograms, size in centimetres
+      lengthCm: specs.get(p.sku)?.lengthCm ?? null,
+      widthCm: specs.get(p.sku)?.widthCm ?? null,
+      heightCm: specs.get(p.sku)?.heightCm ?? null,
       eta: chooseEta(p.eta, p.onOrder, purchaseOrders, melDay()),   // when the next delivery should arrive
       etaManual: dayOf(p.eta),                                       // the date set by hand, if any
       uom: p.uom,
