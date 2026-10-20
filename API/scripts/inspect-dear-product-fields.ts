@@ -8,7 +8,7 @@
  */
 import 'dotenv/config';
 import { dearGet } from '../src/sync/dearClient';
-import { descriptionOf, saysEndOfLine, specsOf, SPEC_FIELDS } from '../src/sync/syncProductDetails';
+import { descriptionOf, saysEndOfLine, specsOf, tagsOf, SPEC_FIELDS } from '../src/sync/syncProductDetails';
 
 async function main() {
   const products = (await dearGet('/product', { Page: 1, Limit: 100 })).Products ?? [];
@@ -21,6 +21,10 @@ async function main() {
   const units = (names: string[]) => { const c: Record<string, number> = {}; for (const p of products) { const u = names.map(n => p?.[n]).find(v => typeof v === 'string' && v.trim()) ?? '(none)'; c[u] = (c[u] ?? 0) + 1; } return JSON.stringify(c); };
   console.log(`  weight units seen: ${units(['WeightUnits', 'WeightUnit'])}   size units seen: ${units(['DimensionsUnits', 'DimensionUnits', 'DimensionsUnit', 'DimensionUnit', 'LengthUnits'])}`);
   for (const p of products.filter((x: any) => Number(x?.Weight) > 0 || Number(x?.Length) > 0).slice(0, 3)) console.log(`  ${p.SKU}: Weight ${p.Weight} ${p.WeightUnits ?? ''}, ${p.Length} x ${p.Width} x ${p.Height} ${p.DimensionsUnits ?? ''}  ->  saved as ${JSON.stringify(specsOf(p))}`);
+  // Tags: is the field there, and how does DEAR write it (comma-separated?), and what does each come out as?
+  const tagged = products.filter((p: any) => tagsOf(p).length);
+  console.log(`\nTags: the field ${'Tags' in (products[0] ?? {}) ? 'is there' : 'is MISSING'}; ${tagged.length} of ${products.length} products have some`);
+  for (const p of tagged.slice(0, 5)) console.log(`  ${p.SKU}: ${JSON.stringify(p.Tags)}  ->  ${JSON.stringify(tagsOf(p))}`);
   for (const p of withText.slice(0, 3)) console.log(`\n${p.SKU} (${p.Name})\n  Description: ${JSON.stringify(p.Description)}\n  -> saved as: ${JSON.stringify(descriptionOf(p))}${saysEndOfLine(descriptionOf(p)) ? '\n  -> says end of line: would be set to EOL' : ''}`);
 
   const purchases = (await dearGet('/purchaseList', { Page: 1, Limit: 20 })).PurchaseList ?? [];

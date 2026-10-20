@@ -21,6 +21,7 @@ async function main() {
   const details = await syncProductDetails(undefined, { dryRun, catchUpEol });
   if (details.skipped) console.log(`\nProduct details skipped: ${details.skipped}`);
   if (details.specsUpdated !== undefined) console.log(`Weights and sizes updated: ${details.specsUpdated}`);
+  if (details.tagsUpdated !== undefined) console.log(`Tag lists updated: ${details.tagsUpdated}`);
   if (dates.skipped) console.log(`Purchase dates skipped: ${dates.skipped}`);
   if (dryRun && details.examples?.length) {
     console.log(`\nProducts that would move to EOL (first ${details.examples.length} of ${details.markedEol}):`);

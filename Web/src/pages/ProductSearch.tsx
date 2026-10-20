@@ -7,6 +7,7 @@ import ProductStatusPill from '../components/ProductStatusPill';
 import EtaText, { Eta } from '../components/EtaText';
 import ProductDescription from '../components/ProductDescription';
 import { fmtDimensions, fmtWeight } from '../lib/productSpecs';
+import { PRODUCT_PAGE } from '../lib/productPage';
 import ProductImportModal from '../components/ProductImportModal';
 import { PRODUCT_STATUSES } from '../lib/productStatus';
 
@@ -278,6 +279,8 @@ function ProductDetail({ product: p, canEdit, onSaved }: { product: Product; can
   const unit = p.uom ? ` ${p.uom}` : '';
   const dims = fmtDimensions(p.lengthCm, p.widthCm, p.heightCm);   // only when all three are known
   const weight = fmtWeight(p.weightKg);
+  const showSize = PRODUCT_PAGE.showSizeWeight && !!(dims || weight);   // saved from DEAR, kept hidden for now (lib/productPage.ts)
+  const showDesc = PRODUCT_PAGE.showDescription && !!p.description;
   const otherPrices = Object.entries(p.prices).filter(
     ([tier]) => tier !== p.wholesale?.tier && tier !== p.retail?.tier,
   );
@@ -291,9 +294,9 @@ function ProductDetail({ product: p, canEdit, onSaved }: { product: Product; can
         </div>
       )}
 
-      {(p.orderIncrement || dims || weight || p.description) && (
-        <div className="pd-row" style={{ marginBottom: 12, ...((p.orderIncrement || dims || weight) && p.description ? {} : { gridTemplateColumns: '1fr' }) }}>
-          {(p.orderIncrement || dims || weight) && (
+      {(p.orderIncrement || showSize || showDesc) && (
+        <div className="pd-row" style={{ marginBottom: 12, ...((p.orderIncrement || showSize) && showDesc ? {} : { gridTemplateColumns: '1fr' }) }}>
+          {(p.orderIncrement || showSize) && (
             <div style={{ display: 'grid', gap: 12, alignContent: 'start' }}>
               {p.orderIncrement ? (
                 <div className="pd-box">
@@ -302,7 +305,7 @@ function ProductDetail({ product: p, canEdit, onSaved }: { product: Product; can
                   <div className="pd-stat-l" style={{ fontSize: 13 }}>customers order in multiples of {p.orderIncrement}</div>
                 </div>
               ) : null}
-              {(dims || weight) && (
+              {showSize && (
                 <div className="pd-box">
                   <div className="pd-box-title">Dimensions and weight</div>
                   <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
@@ -313,10 +316,10 @@ function ProductDetail({ product: p, canEdit, onSaved }: { product: Product; can
               )}
             </div>
           )}
-          {p.description && (
+          {showDesc && (
             <div className="pd-box">
               <div className="pd-box-title">Description</div>
-              <ProductDescription text={p.description} lines={6} size="normal" />
+              <ProductDescription text={p.description ?? ''} lines={6} size="normal" />
             </div>
           )}
         </div>

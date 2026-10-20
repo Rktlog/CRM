@@ -14,7 +14,7 @@ type Cart = {
   abandonedAt: string;
   contact: string;
   email: string;
-  account: { id: string; name: string; rep: string | null } | null;
+  account: { id: string; name: string; rep: string | null; region: string | null } | null;   // region: the customer's state
   itemCount: number;
   units: number;
   value: number;
@@ -32,7 +32,7 @@ type Data = {
   carts: Cart[];
 };
 
-const COLS = '1fr 2.2fr 0.7fr 0.9fr 1.3fr';
+const COLS = '1fr 2.2fr 0.6fr 0.7fr 0.9fr 1.3fr';
 const money = (n: number) => '$' + n.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const qty = (n: number) => n.toLocaleString('en-AU', { maximumFractionDigits: 2 });
 const STATUS_WORDS: Record<string, string> = { VOIDED: 'voided', CREDITED: 'credited', DRAFT: 'draft quote', ESTIMATING: 'quote being prepared', ESTIMATED: 'quote', ORDERING: 'being ordered', ORDERED: 'ordered', BACKORDERED: 'backordered', SHIPPING: 'shipping', SHIPPED: 'shipped', COMPLETED: 'completed' };
@@ -139,7 +139,7 @@ export default function AbandonedCarts() {
       {!error && data && data.carts.length > 0 && (
         <div className="manifest">
           <div className="m-row head" style={{ gridTemplateColumns: COLS }}>
-            <div>Abandoned</div><div>Customer</div><div className="num">Items</div><div className="num">Value</div><div>Status</div>
+            <div>Abandoned</div><div>Customer</div><div>State</div><div className="num">Items</div><div className="num">Value</div><div>Status</div>
           </div>
           {data.carts.map(c => {
             const open = openId === c.id;
@@ -158,6 +158,7 @@ export default function AbandonedCarts() {
                       {c.account ? (c.account.rep ? `Rep: ${c.account.rep}` : c.email) : `${c.email}, not in the CRM`}
                     </div>
                   </div>
+                  <div>{c.account?.region ?? <span className="acct-region" title="Not matched to a customer in the CRM, so no state">-</span>}</div>
                   <div className="num">{c.itemCount}</div>
                   <div className="num">{money(c.value)}</div>
                   <div>

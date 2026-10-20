@@ -47,6 +47,23 @@ export function specsOf(p: any): Specs {
   return { weightKg: r(POSITIVE(p?.Weight) * kg, 3), lengthCm: r(POSITIVE(p?.Length) * cm, 2), widthCm: r(POSITIVE(p?.Width) * cm, 2), heightCm: r(POSITIVE(p?.Height) * cm, 2) };
 }
 
+// DEAR's tags: one line, separated by commas ("Pantone, Sleeve, 13 inch"). Each is tidied (HTML codes decoded, stray spaces and control
+// characters removed), a tag that repeats (in any case) is kept once, a tag is cut at 100 characters and a product at 50 tags.
+export const MAX_TAGS = 50, MAX_TAG_LENGTH = 100;
+export function tagsOf(p: any): string[] {
+  const v = p?.Tags;
+  const parts: unknown[] = Array.isArray(v) ? v : typeof v === 'string' ? v.split(',') : [];
+  const seen = new Set<string>(), out: string[] = [];
+  for (const raw of parts) {
+    if (typeof raw !== 'string') continue;
+    const tag = decodeEntities(raw).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_TAG_LENGTH).trim();
+    if (!tag || seen.has(tag.toLowerCase())) continue;
+    seen.add(tag.toLowerCase()); out.push(tag);
+    if (out.length >= MAX_TAGS) break;
+  }
+  return out;
+}
+
 // DEAR's Description. The short one is not used.
 export const descriptionOf = (p: any): string | null => cleanDescription(p?.Description);
 
@@ -65,14 +82,15 @@ export function orderIncrementOf(text: string | null | undefined): number | null
 export const incrementField = () => process.env.ORDER_INCREMENT_FIELD || 'AdditionalAttribute1';
 // The attribute if it has a whole number in it, otherwise the line in the description.
 export const orderIncrementFrom = (p: any): number | null => wholeNumber(p?.[incrementField()]) ?? orderIncrementOf(descriptionOf(p));
+let noTagColumn = false;         // the column is added by product-tags.sql; until then, the rest is still saved
 let noSpecColumns = false;       // the columns are added by product-dimensions.sql; until then, the rest is still saved
 let noIncrementColumn = false;   // the column is added by product-increment.sql; until then, descriptions are still saved
 
 export type Preview = { sku: string; from: string | null };
 // dryRun: work out what would change and change nothing. `examples` are the first products that would move to EOL.
-export async function syncProductDetails(products?: any[], o: { dryRun?: boolean; catchUpEol?: boolean } = {}): Promise<{ checked: number; updated: number; markedEol: number; specsUpdated?: number; skipped?: string; examples?: Preview[]; fromStages?: Record<string, number> }> {
+export async function syncProductDetails(products?: any[], o: { dryRun?: boolean; catchUpEol?: boolean } = {}): Promise<{ checked: number; updated: number; markedEol: number; specsUpdated?: number; tagsUpdated?: number; skipped?: string; examples?: Preview[]; fromStages?: Record<string, number> }> {
   const list = products ?? await fetchAllProducts();
-  const rows = list.filter(p => p && p.SKU != null && String(p.SKU).trim() !== '').map(p => ({ sku: String(p.SKU).trim(), text: descriptionOf(p) ?? '', inc: orderIncrementFrom(p) ?? 0, specs: specsOf(p) }));
+  const rows = list.filter(p => p && p.SKU != null && String(p.SKU).trim() !== '').map(p => ({ sku: String(p.SKU).trim(), text: descriptionOf(p) ?? '', inc: orderIncrementFrom(p) ?? 0, specs: specsOf(p), tags: tagsOf(p) }));
   // If DEAR's answer carries no Description field at all, something is different about it: leave what we have, never wipe it.
   if (!list.some(p => p && 'Description' in p)) {
     console.warn('Product details: DEAR\'s product list has no Description field, so descriptions were left as they are.');
@@ -84,7 +102,10 @@ export async function syncProductDetails(products?: any[], o: { dryRun?: boolean
   // If DEAR's answer carries none of the weight and size fields at all, they are left as they are, never wiped.
   const specsPresent = list.some(p => p && SPEC_FIELDS.some(f => f in p));
   if (!specsPresent) console.warn('Product details: DEAR\'s product list has no Weight, Length, Width or Height fields, so weights and sizes were left as they are.');
-  let updated = 0, markedEol = 0, specsUpdated = 0;
+  // If DEAR's answer carries no Tags field at all, tags are left as they are, never wiped.
+  const tagsPresent = list.some(p => p && 'Tags' in p);
+  if (!tagsPresent) console.warn('Product details: DEAR\'s product list has no Tags field, so tags were left as they are.');
+  let updated = 0, markedEol = 0, specsUpdated = 0, tagsUpdated = 0;
   const examples: Preview[] = [];
   const fromStages: Record<string, number> = {};   // preview: the stage these products are in now
   for (let i = 0; i < rows.length; i += 1000) {
@@ -139,6 +160,23 @@ export async function syncProductDetails(products?: any[], o: { dryRun?: boolean
       }
     }
 
+    if (!o.dryRun && tagsPresent && !noTagColumn) {
+      try {
+        // One line per product, the tags joined by an unprintable separator (chr(31), which a tag can never hold), cut apart again in SQL.
+        const sk = batch.map(r => r.sku), joined = batch.map(r => r.tags.join('\u001f'));
+        const changedTags = await prisma.$queryRaw<{ n: number }[]>`
+          update crm.products p set tags = case when v.t = '' then null else string_to_array(v.t, chr(31)) end
+          from unnest(${sk}::text[], ${joined}::text[]) as v(sku, t)
+          where p.sku = v.sku and p.tags is distinct from (case when v.t = '' then null else string_to_array(v.t, chr(31)) end)
+          returning 1 as n`;
+        tagsUpdated += changedTags.length;
+      } catch (e) {
+        if (!/\btags\b/.test(String((e as Error).message))) throw e;
+        console.warn('Product details: crm.products has no tags column yet (run product-tags.sql). Everything else was saved.');
+        noTagColumn = true;
+      }
+    }
+
     const toEol = batch.filter(r => { const b = before.get(r.sku); return !!b && saysEndOfLine(r.text) && (o.catchUpEol || !saysEndOfLine(b.description)) && b.lifecycle !== 'eol' && b.lifecycle !== 'discontinued'; });
     if (o.dryRun) { markedEol += toEol.length; for (const r of toEol) { const from = before.get(r.sku)!.lifecycle; fromStages[from ?? '(no stage)'] = (fromStages[from ?? '(no stage)'] ?? 0) + 1; if (examples.length < 25) examples.push({ sku: r.sku, from }); } continue; }
     if (toEol.length) {
@@ -156,6 +194,6 @@ export async function syncProductDetails(products?: any[], o: { dryRun?: boolean
       markedEol += moved.length;
     }
   }
-  console.log(`Product details${o.dryRun ? ' (preview, nothing changed)' : ''}: ${rows.length} products read from DEAR (${rows.filter(r => r.inc).length} with an order increment, ${rows.filter(r => r.specs.weightKg).length} with a weight, ${rows.filter(r => r.specs.lengthCm && r.specs.widthCm && r.specs.heightCm).length} with a full size${o.dryRun ? '' : `; ${specsUpdated} weights and sizes updated`}, ${updated} ${o.dryRun ? 'would be' : ''} updated, ${markedEol} ${o.dryRun ? 'would be' : ''} moved to EOL because the description says end of line.`);
-  return { checked: rows.length, updated, markedEol, ...(o.dryRun ? { examples, fromStages } : { specsUpdated }) };
+  console.log(`Product details${o.dryRun ? ' (preview, nothing changed)' : ''}: ${rows.length} products read from DEAR (${rows.filter(r => r.inc).length} with an order increment, ${rows.filter(r => r.specs.weightKg).length} with a weight, ${rows.filter(r => r.specs.lengthCm && r.specs.widthCm && r.specs.heightCm).length} with a full size, ${rows.filter(r => r.tags.length).length} with tags${o.dryRun ? '' : `; ${specsUpdated} weights and sizes and ${tagsUpdated} tag lists updated`}, ${updated} ${o.dryRun ? 'would be' : ''} updated, ${markedEol} ${o.dryRun ? 'would be' : ''} moved to EOL because the description says end of line.`);
+  return { checked: rows.length, updated, markedEol, ...(o.dryRun ? { examples, fromStages } : { specsUpdated, tagsUpdated }) };
 }

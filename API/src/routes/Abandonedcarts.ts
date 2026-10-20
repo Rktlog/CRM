@@ -227,7 +227,7 @@ export async function loadCarts(rep: { id: string; role: string }, days: string)
       abandonedAt: c.abandonedAt,
       contact: c.contact,
       email: c.email,
-      account: c.account ? { id: c.account.id, name: c.account.name, rep: c.account.rep?.name ?? null } : null,
+      account: c.account ? { id: c.account.id, name: c.account.name, rep: c.account.rep?.name ?? null, region: c.account.region ?? null } : null,   // region is the customer's state
       itemCount: items.length,
       units: items.reduce((s, i) => s + i.quantity, 0),
       value: Math.round(items.reduce((s, i) => s + i.total, 0) * 100) / 100,
