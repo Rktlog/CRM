@@ -46,7 +46,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
   const [search, setSearch] = useState('');
   const [shown, setShown] = useState(PAGE);
   // Open quotes: which follow-up to show (the 1st, the 2nd the team set, or none left), and overdue only.
-  const [fu, setFu] = useState<'all' | 'fu1' | 'fu2' | 'done'>('all');
+  const [fu, setFu] = useState<'all' | 'fu1' | 'fu2'>('all');
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [fuBy, setFuBy] = useState(() => (view === 'quotes' ? new URLSearchParams(window.location.search).get('fuBy') ?? '' : ''));   // Open quotes: only the orders this rep follows up (the rep chosen for the 2nd, else the account rep)
   const [downloading, setDownloading] = useState(false);
@@ -80,11 +80,11 @@ export default function OrderViews({ view }: { view: ViewKey }) {
   }, [data, search, fuBy, view]);
 
   const today = todayLocal();
-  const fuKind = (r: any): string => r.followUp?.next?.kind ?? 'done';
+  const fuKind = (r: any): string => r.followUp?.next?.kind ?? 'fu2';   // nothing left means the 2nd is still to be set
   const isLate = (r: any) => !!r.followUp?.next && r.followUp.next.date < today;
   const fuCounts = useMemo(() => view !== 'quotes' ? null : {
     all: base.length, fu1: base.filter(r => fuKind(r) === 'fu1').length, fu2: base.filter(r => fuKind(r) === 'fu2').length,
-    done: base.filter(r => fuKind(r) === 'done').length, late: base.filter(isLate).length,
+    late: base.filter(isLate).length,
   }, [base, view, today]);
   const rows: any[] = useMemo(
     () => view !== 'quotes' ? base : base.filter(r => (fu === 'all' || fuKind(r) === fu) && (!overdueOnly || isLate(r))),
@@ -169,7 +169,7 @@ export default function OrderViews({ view }: { view: ViewKey }) {
       {view === 'quotes' && fuCounts && data && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '4px 0 8px' }}>
           <span className="stat-label">Follow-up</span>
-          {([['all', 'All', 'neutral', fuCounts.all], ['fu1', '1st', 'amber', fuCounts.fu1], ['fu2', '2nd', 'rust', fuCounts.fu2], ['done', 'Done', 'neutral', fuCounts.done]] as const).map(([k, label, tone, count]) => (
+          {([['all', 'All', 'neutral', fuCounts.all], ['fu1', '1st', 'amber', fuCounts.fu1], ['fu2', '2nd', 'rust', fuCounts.fu2]] as const).map(([k, label, tone, count]) => (
             <button key={k} type="button" className={`pill ${tone}`} onClick={() => setFu(k)} aria-pressed={fu === k}
               style={{ cursor: 'pointer', border: 'none', fontSize: 12.5, padding: '4px 11px', fontWeight: fu === k ? 700 : 500, outline: fu === k ? '2px solid currentColor' : 'none' }}>
               {label} {count}

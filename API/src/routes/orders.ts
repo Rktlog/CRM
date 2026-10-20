@@ -266,9 +266,9 @@ ordersRouter.get('/views/:view', async (req, res) => {
         Order: r.number, Customer: r.customer, 'Payment terms': r.terms, State: r.region, 'Order date': xlDate(r.date), 'Age (days)': r.ageDays,
         'Total (inc GST)': r.amount, 'Paid so far': r.paid, Remaining: r.remaining,
         Payment: { unpaid: 'Unpaid', part: 'Part paid', paid: 'Paid, not confirmed yet' }[r.payment as 'unpaid' | 'part' | 'paid'],
-        'Next follow-up': r.followUp.next?.date ?? 'Done',
-        'Follow-up type': r.followUp.next ? { fu1: '1st', fu2: '2nd' }[r.followUp.next.kind as 'fu1' | 'fu2'] : '',
-        'Followed up by': r.followUp.next ? r.followUpBy?.name ?? '' : '',
+        'Next follow-up': r.followUp.next?.date ?? '',
+        'Follow-up type': r.followUp.next ? { fu1: '1st', fu2: '2nd' }[r.followUp.next.kind as 'fu1' | 'fu2'] : '2nd (date not set)',
+        'Followed up by': r.followUpBy?.name ?? '',
         'Last note': r.lastNote?.text ?? '', Rep: r.repName ?? '', Stage: r.stage, Reference: r.reference ?? '',
       }));
       break;
@@ -330,7 +330,7 @@ ordersRouter.get('/views/:view', async (req, res) => {
     }
   }
 
-  // ?fu=fu1|fu2|done, ?overdue=1 and ?fuBy=<rep id>: open quotes only, by the next follow-up (the same filter as on screen)
+  // ?fu=fu1|fu2, ?overdue=1 and ?fuBy=<rep id>: open quotes only, by the next follow-up (the same filter as on screen)
   if (req.params.view === 'quotes' && (typeof req.query.fu === 'string' || req.query.overdue === '1' || typeof req.query.fuBy === 'string')) {
     const by = typeof req.query.fuBy === 'string' && req.query.fuBy ? req.query.fuBy : undefined;   // ?fuBy=<rep id>: the rep who follows it up
     const keep = new Set(filterFollowUpBy(filterFollowUp(data.rows, typeof req.query.fu === 'string' ? req.query.fu : undefined, req.query.overdue === '1', melDay()), by));

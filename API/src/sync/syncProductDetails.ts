@@ -1,3 +1,4 @@
+import { decodeEntities } from '../lib/htmlText';
 import { prisma } from '../lib/prisma';
 import { fetchAllProducts } from './dearClient';
 import { wholeNumber } from './incrementFields';
@@ -16,16 +17,14 @@ import { wholeNumber } from './incrementFields';
 // EOL or Discontinued are left alone. (An EOL product with no stock left then becomes Discontinued by the database rule.)
 // Descriptions that were saved BEFORE this rule existed never "begin" to say it, so for those there is a one-off catch-up
 // (catchUpEol): it treats every description that says it as new, once.
-const ENTITIES: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&apos;': "'", '&nbsp;': ' ' };
 export const MAX_DESCRIPTION = 4000;
 
 export function cleanDescription(v: unknown): string | null {
   if (typeof v !== 'string') return null;
-  const text = v
+  const text = decodeEntities(v
     .replace(/\r\n?/g, '\n')                                          // DEAR's Windows line endings
     .replace(/<\s*(br|\/p|\/div|\/li|\/h[1-6])\s*\/?>/gi, '\n')       // line breaks and the end of a paragraph
-    .replace(/<[^>]*>/g, '')                                          // every other tag
-    .replace(/&(amp|lt|gt|quot|apos|nbsp|#39);/g, m => ENTITIES[m] ?? m)
+    .replace(/<[^>]*>/g, ''))                                         // every other tag; then &rsquo; &bull; &amp; and the rest become real characters
     .replace(/[ \t\u00a0]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   return text ? text.slice(0, MAX_DESCRIPTION) : null;
 }

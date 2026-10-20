@@ -12,7 +12,8 @@ import OrderLog from './OrderLog';
 //
 // Follow-ups: the 1st is automatic, a week after payment was due (the order date for a customer who pays first, the invoice
 // due date for a customer on terms). There is no automatic 2nd: the sales team sets it by choosing a date. Whichever is
-// earliest is shown as next. Colours: 1st amber, 2nd rust, nothing left to chase grey.
+// earliest is shown as next. Once the 1st is done and no 2nd date is set, the order is shown as a 2nd waiting for its date. Only the 1st
+// and the 2nd exist: there is no "done" group. Colours: 1st amber, 2nd rust.
 
 type FollowUp = {
   fu1Due: string; fu1DoneOn: string | null; fu2DoneOn: string | null; secondOn: string | null;   // secondOn: the 2nd date the team set
@@ -72,8 +73,7 @@ export default function OpenQuotesTable({ rows, showRep, repOptions = [] }: { ro
     <div className="ledger-table-scroll tall">
       <div className="acct-region" style={{ margin: '0 0 8px', display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
         <span><span className="pill amber">1st</span> follow-up, a week after payment was due</span>
-        <span><span className="pill rust">2nd</span> follow-up, a date the sales team sets</span>
-        <span><span className="pill neutral">Done</span> nothing left to chase</span>
+        <span><span className="pill rust">2nd</span> follow-up, a date the sales team sets (it waits for a date once the 1st is done)</span>
       </div>
       {error && <div className="save-msg err" style={{ margin: '0 0 8px' }}>{error}</div>}
       <table className="ov-table">
@@ -113,7 +113,12 @@ export default function OpenQuotesTable({ rows, showRep, repOptions = [] }: { ro
                           <div className="cust-meta">by {fu.next.kind === 'fu2' && fu.secondRep ? fu.secondRep.name : r.repName}</div>
                         )}
                       </>
-                    ) : <span className="pill neutral">Done</span>}
+                    ) : (
+                      <>
+                        <span className="pill rust">2nd</span> <span className="acct-region">date not set</span>
+                        {r.repName && <div className="cust-meta">by {r.repName}</div>}
+                      </>
+                    )}
                   </td>
                 </tr>
                 {isOpen && (
@@ -152,13 +157,15 @@ export default function OpenQuotesTable({ rows, showRep, repOptions = [] }: { ro
                                 {repOptions.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                               </select>
                             </div>
-                            {!fu.next && <div className="acct-region">Nothing left to chase. Choose a date if it needs another call.</div>}
+                            {!fu.next && <div className="acct-region">The 1st is done. Choose a date for the 2nd follow-up.</div>}
                           </Detail>
 
                           <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                            <button type="button" className="btn secondary" disabled={busy === r.id || !fu.next} onClick={() => markDone(r)}>
-                              {fu.next ? `Mark ${KIND[fu.next.kind].name.toLowerCase()} done` : 'All follow-ups done'}
-                            </button>
+                            {fu.next && (
+                              <button type="button" className="btn secondary" disabled={busy === r.id} onClick={() => markDone(r)}>
+                                Mark {KIND[fu.next.kind].name.toLowerCase()} done
+                              </button>
+                            )}
                             {(fu.fu1DoneOn || fu.fu2DoneOn) && (
                               <button type="button" className="link-btn" disabled={busy === r.id} onClick={() => undo(r)}>Undo last</button>
                             )}

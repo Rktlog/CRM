@@ -40,7 +40,7 @@ const plusDays = (day: string, n: number) => new Date(Date.parse(day) + n * DAY)
 //   - The 1st is automatic: a week after payment was due. For a customer who pays first that is the order date; for a customer on
 //     terms it is the due date of their unpaid invoice (followUpAnchor).
 //   - There is no automatic 2nd. The sales team sets it by choosing a date (secondOn), and it is shown as the 2nd.
-// The next follow-up shown is whichever pending one is earliest (the 1st wins a tie). Done ones drop out; none left is "done".
+// The next follow-up shown is whichever pending one is earliest (the 1st wins a tie). Done ones drop out; when none is left, the 2nd is still to be set.
 // secondRep: the rep the sales team asked to follow up the 2nd (crm.quotes.follow_up_rep_id); null when nobody was chosen.
 export type FollowUp = {
   fu1Due: string; fu1DoneOn: string | null; fu2DoneOn: string | null; secondOn: string | null;
@@ -116,13 +116,13 @@ export function paymentState(q: { total: number | null; amount: number; amountPa
   return { total: cents(total), paid: cents(paid), held: cents(held), remaining, payment: (remaining <= 0.005 ? 'paid' : paid > 0.005 ? 'part' : 'unpaid') as 'paid' | 'part' | 'unpaid' };
 }
 
-// Keep only rows whose next follow-up is the 1st, the 2nd, or none left ("done"), and/or overdue. 'manual' (what the 2nd was
-// once called) still works as the 2nd.
+// Keep only rows whose next follow-up is the 1st or the 2nd, and/or overdue. An order with nothing left (the 1st is done and no 2nd
+// date is set) is waiting for its 2nd, so it counts as the 2nd. 'manual' (what the 2nd was once called) still works as the 2nd.
 export function filterFollowUp<T extends { followUp: { next: { kind: string; date: string } | null } }>(rows: T[], fu: string | undefined, overdue: boolean, today: string): T[] {
   return rows.filter(r => {
-    const kind = r.followUp.next?.kind ?? 'done';
+    const kind = r.followUp.next?.kind ?? 'fu2';
     const want = fu === 'manual' ? 'fu2' : fu;
-    if (want && ['fu1', 'fu2', 'done'].includes(want) && kind !== want) return false;
+    if (want && ['fu1', 'fu2'].includes(want) && kind !== want) return false;
     if (overdue && !(r.followUp.next && r.followUp.next.date < today)) return false;
     return true;
   });

@@ -1,9 +1,12 @@
 import { useState } from 'react';
+import { decodeEntities } from '../lib/htmlText';
 
 // DEAR's description of a product, as plain text. A long one shows its first lines, with a link to read the rest.
 // With expandable off (the catalogue tiles) it just shows the first lines, and the full text on hover.
-export default function ProductDescription({ text, lines = 3, expandable = true, size = 'small' }: { text: string; lines?: number; expandable?: boolean; size?: 'small' | 'normal' }) {
+export default function ProductDescription({ text: raw, lines = 3, expandable = true, size = 'small' }: { text: string; lines?: number; expandable?: boolean; size?: 'small' | 'normal' }) {
   const [open, setOpen] = useState(false);
+  // Descriptions saved before the sync decoded them still hold codes like &rsquo; and &bull;: shown as the characters they stand for.
+  const text = decodeEntities(raw);
   const long = text.length > lines * 70 || text.split('\n').length > lines;
   const clamp = !open && long;
   return (
