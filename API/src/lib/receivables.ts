@@ -165,7 +165,9 @@ export async function openQuotes(rep: Rep, regions?: string[], terms?: string[] 
         where q.account_id = any(${accountIds}::uuid[])
           and q.source <> 'rhino-history' and q.number not like 'Q%' and q.misc_type is null
           and upper(coalesce(q.fulfillment_status, '')) not in ('VOIDED', 'CREDITED', 'DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING')
-          and not (q.amount_due is null and q.paid)   -- no invoice detail yet, and DEAR has it as paid (the same fallback isOwing uses)
+          -- No invoice detail yet and DEAR has it as paid: believed only when there is no money on record to check it against. DEAR
+          -- switches the flag on for a part-paid deposit order too, so when a payment or held prepayment is on record the amounts decide.
+          and not (q.amount_due is null and q.paid and coalesce(q.amount_paid, 0) <= 0.005 and coalesce(q.unapplied_credit, 0) <= 0.005)
           and coalesce(q.total, q.amount) - (coalesce(q.amount_paid, 0) + greatest(greatest(coalesce(q.unapplied_credit, 0)
                 - coalesce(case when jsonb_typeof(q.credit_notes) = 'array'
                                 then (select sum(nullif(c->>'onAccount', '')::numeric) from jsonb_array_elements(q.credit_notes) c) end, 0), 0) - rv.taken, 0)) >= greatest(least(1, 0.01 * coalesce(q.total, q.amount)), 0.005)
