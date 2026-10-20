@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from './prisma';
 import { decodeEntities } from './htmlText';
 import { fmtDimensions, fmtWeight } from './productSpecs';
+import { freightQuote } from './aiFreight';
 import { territoryWhere, canSeeAccount } from './territory';
 import { openQuotes } from './receivables';
 import { chooseEta, incomingFor } from './eta';
@@ -89,6 +90,20 @@ export const TOOLS: Anthropic.Tool[] = [
         query: { type: 'string', description: 'SKU, part of the name, or the brand' },
         status: { type: 'string', enum: PRODUCT_STATUSES.map(s => s.key) },
         inStockOnly: { type: 'boolean' },
+      },
+    },
+  },
+  {
+    name: 'freight_quote',
+    description: "Australia Post freight quote for an order or a list of products, using the weight and size DEAR holds for each product. It packs everything into 60 x 40 x 30 cm cartons (the height cut down to fit; a further carton if it does not fit or goes over 15 kg each) and prices each carton, for an international country (most often New Zealand) or an Australian postcode. Give the order number (the customer's country comes from the order), or the SKUs and quantities with a country. If it says a product has no weight or size, ASK the person for them (kg, and length, width, height in cm, for ONE unit), then call again with the same order or items plus `overrides`. Never guess a weight or size. Show the cartons (size, weight, what is in each), then the services cheapest first with each carton's price and the total, and state the notes (these are Australia Post's published rates, not the contract rates).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        order: { type: 'string', description: 'An order number such as SQ37604. Its lines are what gets packed.' },
+        items: { type: 'array', description: 'Products to send, when there is no order', items: { type: 'object', properties: { sku: { type: 'string' }, quantity: { type: 'number' } }, required: ['sku', 'quantity'] } },
+        country: { type: 'string', description: 'Where to send it, such as New Zealand or NZ. Left out, an order for a New Zealand customer goes to New Zealand.' },
+        postcode: { type: 'string', description: 'A 4-digit Australian postcode, for a parcel within Australia' },
+        overrides: { type: 'array', description: 'Weight and size the person has given for products DEAR is missing them for (for ONE unit)', items: { type: 'object', properties: { sku: { type: 'string' }, weightKg: { type: 'number' }, lengthCm: { type: 'number' }, widthCm: { type: 'number' }, heightCm: { type: 'number' } }, required: ['sku'] } },
       },
     },
   },
@@ -230,6 +245,10 @@ export async function runTool(name: string, input: any, ctx: Ctx): Promise<strin
         const rows = r.rows.filter(x => !Number.isFinite(min) || x.ageDays >= min).slice(0, 25);
         return out({ count: r.count, showing: rows.length, totalIncGst: r.total, stillToPay: r.remaining,
           quotes: rows.map(x => ({ number: x.number, customer: x.customer, state: x.region, date: day(x.date), ageDays: x.ageDays, totalIncGst: x.amount, paidSoFar: x.paid, remaining: x.remaining, payment: x.payment, stage: x.stage, nextFollowUp: x.followUp.next })) });
+      }
+      case 'freight_quote': {
+        try { return await freightQuote(ctx, input); }
+        catch (e) { if (e instanceof DataError) return out({ error: e.message }); throw e; }
       }
       case 'product_lookup': {
         const q = String(input?.query ?? '').trim();
