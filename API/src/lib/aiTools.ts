@@ -7,7 +7,7 @@ import { territoryWhere, canSeeAccount } from './territory';
 import { openQuotes } from './receivables';
 import { chooseEta, incomingFor } from './eta';
 import { wholesalePrice } from './pricing';
-import { PRODUCT_STATUSES, isStatusKey, statusLabel } from './productImport';
+import { listStatuses, matchStatus } from './productStatuses';
 
 // DEAR's description of each product, plain text, if the sync has saved one. A separate read so the lookup works before the column exists.
 async function productIncrements(skus: string[]): Promise<Map<string, number>> {
@@ -88,7 +88,7 @@ export const TOOLS: Anthropic.Tool[] = [
       type: 'object',
       properties: {
         query: { type: 'string', description: 'SKU, part of the name, or the brand' },
-        status: { type: 'string', enum: PRODUCT_STATUSES.map(s => s.key) },
+        status: { type: 'string', description: 'Only products with this status, by name (for example Preorder Only, Phasing Out or EOL)' },
         inStockOnly: { type: 'boolean' },
       },
     },
@@ -252,7 +252,10 @@ export async function runTool(name: string, input: any, ctx: Ctx): Promise<strin
       }
       case 'product_lookup': {
         const q = String(input?.query ?? '').trim();
-        const status = isStatusKey(input?.status) ? input.status : null;
+        const statusList = await listStatuses();
+        const asked = input?.status == null || input.status === '' ? null : matchStatus(statusList, input.status);
+        if (input?.status != null && input.status !== '' && !asked) return out({ error: `"${input.status}" is not a product status. The statuses are: ${statusList.map(s => s.label).join(', ')}` });
+        const status = asked?.key ?? null;
         if (!q && !status) return out({ error: 'Give a SKU, a name, a brand or a status' });
         const where: any[] = [{ OR: [{ status: null }, { status: { not: 'Deprecated' } }] }];
         if (q) where.push({ OR: [{ sku: { contains: q, mode: 'insensitive' } }, { name: { contains: q, mode: 'insensitive' } }, { brand: { contains: q, mode: 'insensitive' } }] });
@@ -265,7 +268,7 @@ export async function runTool(name: string, input: any, ctx: Ctx): Promise<strin
         const specs = await productSpecs(products.map(p => p.sku));
         return out({ showing: products.length, products: products.map(p => {
           const eta = chooseEta(p.eta, p.onOrder, incoming.get(p.sku) ?? [], ctx.today);
-          return { sku: p.sku, name: p.name, brand: p.brand, status: statusLabel(isStatusKey(p.lifecycle) ? p.lifecycle : null) || null, description: (descriptions.get(p.sku) ?? '').slice(0, 400) || null, orderIncrement: increments.get(p.sku) ?? null, size: fmtDimensions(specs.get(p.sku)?.lengthCm, specs.get(p.sku)?.widthCm, specs.get(p.sku)?.heightCm), weight: fmtWeight(specs.get(p.sku)?.weightKg), available: p.available, onOrder: p.onOrder,
+          return { sku: p.sku, name: p.name, brand: p.brand, status: statusList.find(s => s.key === p.lifecycle)?.label ?? null, description: (descriptions.get(p.sku) ?? '').slice(0, 400) || null, orderIncrement: increments.get(p.sku) ?? null, size: fmtDimensions(specs.get(p.sku)?.lengthCm, specs.get(p.sku)?.widthCm, specs.get(p.sku)?.heightCm), weight: fmtWeight(specs.get(p.sku)?.weightKg), available: p.available, onOrder: p.onOrder,
             eta: eta ? { date: eta.date, late: eta.late, from: eta.source === 'manual' ? 'set by hand' : eta.ref ? `purchase order ${eta.ref}` : 'incoming purchase order' } : null, wholesaleExGst: wholesalePrice(p.prices as any) };
         }) });
       }

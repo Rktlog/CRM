@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
 import { territoryWhere } from './territory';
 import { chooseEta, incomingFor } from './eta';
-import { PRODUCT_STATUSES, statusLabel, isStatusKey } from './productImport';
+import { listStatuses } from './productStatuses';
 
 // Custom reports: pick a dataset, the columns, filters, and (optionally) how to add it up. Nothing the browser sends
 // goes into SQL as text: datasets, columns and filters are checked against the lists below, and values are parameters.
@@ -108,8 +108,9 @@ export function parseDefinition(raw: unknown): Definition {
   if (filters.from && filters.to && filters.from > filters.to) throw new ReportInputError('The "from" date is after the "to" date');
   for (const k of ['brands', 'states', 'categories', 'reps'] as const) if (ds.filters.includes(k) && strings(f[k]).length) filters[k] = strings(f[k]);
   if (ds.filters.includes('statuses') && strings(f.statuses).length) {
-    const ok = o.dataset === 'products' ? [...PRODUCT_STATUSES.map(s => s.key as string), 'none'] : CUSTOMER_STATUSES;
-    filters.statuses = strings(f.statuses).filter(s => ok.includes(s));
+    // Product statuses are managers' to add and remove, so a key is only checked for being shaped like one here; one that no longer
+    // exists simply matches nothing when the report runs.
+    filters.statuses = o.dataset === 'products' ? strings(f.statuses).filter(s => s === 'none' || /^[a-z0-9_]{1,40}$/.test(s)) : strings(f.statuses).filter(s => CUSTOMER_STATUSES.includes(s));
   }
   for (const k of ['realOrdersOnly', 'inStockOnly', 'includeArchived'] as const) if (ds.filters.includes(k) && typeof f[k] === 'boolean') filters[k] = f[k];
   const sort = o.sort && keys.includes(o.sort.key) ? { key: String(o.sort.key), dir: (o.sort.dir === 'desc' ? 'desc' : 'asc') as 'asc' | 'desc' } : undefined;
@@ -162,8 +163,9 @@ async function loadProducts(f: Filters, today: string): Promise<Row[]> {
   if (f.brands?.length) w.push({ brand: { in: f.brands } });
   if (f.categories?.length) w.push({ category: { in: f.categories } });
   if (f.inStockOnly) w.push({ available: { gt: 0 } });
+  const statusList = await listStatuses();
   if (f.statuses?.length) {
-    const keys = f.statuses.filter(isStatusKey);
+    const keys = f.statuses.filter(k => statusList.some(s => s.key === k));
     w.push({ OR: [...(keys.length ? [{ lifecycle: { in: keys } }] : []), ...(f.statuses.includes('none') ? [{ lifecycle: null }] : [])] });
   }
   const products = await prisma.product.findMany({ where: { AND: w }, orderBy: [{ brand: 'asc' }, { sku: 'asc' }], take: MAX_ROWS + 1 });
@@ -173,7 +175,7 @@ async function loadProducts(f: Filters, today: string): Promise<Row[]> {
     const eta = chooseEta(p.eta, p.onOrder, incoming.get(p.sku) ?? [], today);
     const wholesale = price(p.prices, /^wholesale$/i);
     return {
-      sku: p.sku, name: p.name, brand: p.brand ?? '', category: p.category ?? '', status: statusLabel(isStatusKey(p.lifecycle) ? p.lifecycle : null),
+      sku: p.sku, name: p.name, brand: p.brand ?? '', category: p.category ?? '', status: statusList.find(s => s.key === p.lifecycle)?.label ?? '',
       onHand: p.onHand, allocated: p.allocated, available: p.available, onOrder: p.onOrder,
       eta: eta?.date ?? null, etaSource: eta ? (eta.source === 'manual' ? 'Set by hand' : eta.ref ? `PO ${eta.ref}` : 'Incoming order') : '',
       wholesale, rrp: price(p.prices, /retail|rrp/i), stockValue: wholesale != null ? r2(p.available * wholesale) : null, photo: p.imageUrl ?? '',
@@ -255,6 +257,7 @@ export async function runReport(def: Definition, rep: Rep, today: string): Promi
 
 // What the builder needs to offer: the datasets, and the choices for each filter.
 export async function reportMeta(rep: Rep) {
+  const statusList = await listStatuses();
   const [brands, productCategories, accountCategories, reps] = await Promise.all([
     prisma.product.findMany({ where: { brand: { not: null } }, select: { brand: true }, distinct: ['brand'], orderBy: { brand: 'asc' } }),
     prisma.product.findMany({ where: { category: { not: null } }, select: { category: true }, distinct: ['category'], orderBy: { category: 'asc' } }),
@@ -268,7 +271,7 @@ export async function reportMeta(rep: Rep) {
       productCategories: productCategories.map(c => c.category as string),
       accountCategories: [...new Set([...accountCategories.map(c => c.category as string).filter(Boolean), 'Uncategorized'])].sort(),
       states: ['NSW', 'ACT', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'NT', 'NZ', 'NSW/HO', 'VIC/HO', 'INTL', 'Unknown'],
-      productStatuses: [...PRODUCT_STATUSES.map(s => ({ key: s.key as string, label: s.label })), { key: 'none', label: 'No status' }],
+      productStatuses: [...statusList.map(s => ({ key: s.key as string, label: s.label })), { key: 'none', label: 'No status' }],
       customerStatuses: CUSTOMER_STATUSES,
       reps: rep.role === 'manager' ? reps.map(r => r.name) : [],
     },

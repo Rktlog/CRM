@@ -2,7 +2,8 @@ import express, { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { HISTORY_SOURCE, LIVE_ORDER, isHistory } from '../lib/orderSource';
 import { pickPrice, WHOLESALE, RETAIL } from '../lib/pricing';
-import { isStatusKey, parseDay, parseFile, planImport, productTemplate, PRODUCT_STATUSES, MAX_IMPORT_CHANGES } from '../lib/productImport';
+import { parseDay, parseFile, planImport, productTemplate, MAX_IMPORT_CHANGES } from '../lib/productImport';
+import { loadStatuses, listStatuses, matchStatus, normName, clearStatusCache, labelProblem, slugKey, TONES, SYSTEM_KEYS, MAX_STATUSES } from '../lib/productStatuses';
 import { chooseEta, incomingFor } from '../lib/eta';
 import { melDay } from '../lib/receivables';
 
@@ -118,7 +119,7 @@ productsRouter.get('/template', async (req, res) => {
     select: { sku: true, name: true, brand: true, imageUrl: true, lifecycle: true, eta: true },
     orderBy: [{ brand: 'asc' }, { sku: 'asc' }],
   });
-  const buffer = await productTemplate(products.map(p => ({ ...p, eta: dayOf(p.eta) })), blank);
+  const buffer = await productTemplate(products.map(p => ({ ...p, eta: dayOf(p.eta) })), blank, await listStatuses());
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="product-import-${blank ? 'blank-' : ''}template.xlsx"`);
   res.send(buffer);
@@ -132,7 +133,7 @@ productsRouter.post('/import', express.text({ type: '*/*', limit: '20mb' }), asy
   try {
     const file = parseFile(String(req.body ?? ''));
     const products = (await prisma.product.findMany({ select: { sku: true, name: true, imageUrl: true, lifecycle: true, eta: true } })).map(p => ({ ...p, eta: dayOf(p.eta) }));
-    const plan = planImport(file, products);
+    const plan = planImport(file, products, await listStatuses());
     if (req.query.apply !== '1') return res.json({ applied: false, ...plan });
 
     if (plan.changes.length > MAX_IMPORT_CHANGES) return res.status(400).json({ error: `That would change ${plan.changes.length} products. The most in one import is ${MAX_IMPORT_CHANGES}.` });
@@ -158,7 +159,141 @@ productsRouter.post('/import', express.text({ type: '*/*', limit: '20mb' }), asy
   }
 });
 
-// PATCH /products/:sku   { lifecycle: one of the stages (eol, discontinued, preorder, new, ranging, customer_only, preorder_only) | null, imageUrl: 'https://...' | null, eta: '2026-12-01' | null }
+// ---- The statuses themselves. Anyone signed in can read them; managers add and remove them. ----
+// EOL and Discontinued cannot be removed (the automatic EOL rule uses them). Removing a status that products have clears it on
+// them, but only when asked to (?clear=1), after being told how many there are; each one is written to the stage log.
+async function statusCounts(): Promise<Map<string, number>> {
+  const rows = await prisma.$queryRaw<{ lifecycle: string; n: number }[]>`select lifecycle, count(*)::int as n from crm.products where lifecycle is not null group by lifecycle`;
+  return new Map(rows.map(r => [r.lifecycle, r.n]));
+}
+async function statusReply() {
+  const { list, fromDb } = await loadStatuses();
+  const counts = await statusCounts();
+  return { tableReady: fromDb, statuses: list.map(s => ({ ...s, count: counts.get(s.key) ?? 0 })) };
+}
+
+// GET /products/statuses -> every status, in order, with how many products have it
+productsRouter.get('/statuses', async (_req, res) => {
+  try { res.json(await statusReply()); }
+  catch (e) { console.error('statuses failed:', (e as Error).message); res.status(500).json({ error: 'Could not load the statuses' }); }
+});
+
+// POST /products/statuses   { label, meaning?, tone? }   managers only
+productsRouter.post('/statuses', async (req, res) => {
+  if (!managersOnly(req, res)) return;
+  try {
+    const { list, fromDb } = await loadStatuses();
+    if (!fromDb) return res.status(503).json({ error: 'Statuses cannot be added yet: run product-statuses.sql in the database first.' });
+    const label = typeof req.body?.label === 'string' ? req.body.label.trim().replace(/\s+/g, ' ') : '';
+    const problem = labelProblem(label);
+    if (problem) return res.status(400).json({ error: problem });
+    if (list.length >= MAX_STATUSES) return res.status(400).json({ error: `There can be at most ${MAX_STATUSES} statuses` });
+    if (list.some(s => normName(s.label) === normName(label))) return res.status(409).json({ error: `There is already a status called "${list.find(s => normName(s.label) === normName(label))!.label}"` });
+    const meaning = typeof req.body?.meaning === 'string' && req.body.meaning.trim() ? req.body.meaning.trim().replace(/\s+/g, ' ') : null;
+    if (meaning && meaning.length > 120) return res.status(400).json({ error: 'The description can be at most 120 characters' });
+    const tone = req.body?.tone ?? 'neutral';
+    if (!(TONES as readonly string[]).includes(tone)) return res.status(400).json({ error: `Colour must be one of ${TONES.join(', ')}` });
+    let key = slugKey(label);
+    if (key === 'none') return res.status(400).json({ error: '"None" is reserved for products with no status. Choose another name' });
+    const base = key; let n = 2;
+    while (list.some(s => s.key === key)) key = `${base.slice(0, 36)}_${n++}`;
+    const sort = Math.max(0, ...list.map(s => s.sortOrder)) + 10;
+    await prisma.$executeRaw`insert into crm.product_statuses (key, label, meaning, tone, system, sort_order) values (${key}, ${label}, ${meaning}, ${tone}, false, ${sort})`;
+    clearStatusCache();
+    res.status(201).json({ added: key, ...(await statusReply()) });
+  } catch (e) {
+    clearStatusCache();
+    if (/duplicate key|unique/i.test((e as Error).message)) return res.status(409).json({ error: 'There is already a status with that name' });
+    console.error('add status failed:', (e as Error).message);
+    res.status(500).json({ error: 'Could not add the status' });
+  }
+});
+
+// PATCH /products/statuses/:key   { label?, meaning?, tone? }   managers only. Only what is sent is changed. The key never changes, so
+// products, saved reports and imports keep working; the new name shows everywhere at once. EOL and Discontinued can be renamed,
+// recoloured and described like any other (the EOL rule goes by their keys, not their names).
+productsRouter.patch('/statuses/:key', async (req, res) => {
+  if (!managersOnly(req, res)) return;
+  try {
+    const { list, fromDb } = await loadStatuses();
+    if (!fromDb) return res.status(503).json({ error: 'Statuses cannot be edited yet: run product-statuses.sql in the database first.' });
+    const st = list.find(s => s.key === req.params.key);
+    if (!st) return res.status(404).json({ error: 'There is no such status' });
+    const b = req.body ?? {};
+    const has = (k: string) => Object.prototype.hasOwnProperty.call(b, k);
+    if (!has('label') && !has('meaning') && !has('tone')) return res.status(400).json({ error: 'Say what to change: the name, the description or the colour' });
+    let label = st.label, meaning = st.meaning, tone = st.tone;
+    if (has('label')) {
+      const l = typeof b.label === 'string' ? b.label.trim().replace(/\s+/g, ' ') : '';
+      const problem = labelProblem(l);
+      if (problem) return res.status(400).json({ error: problem });
+      const clash = list.find(s => s.key !== st.key && normName(s.label) === normName(l));
+      if (clash) return res.status(409).json({ error: `There is already a status called "${clash.label}"` });
+      label = l;
+    }
+    if (has('meaning')) {
+      const m = b.meaning === null || b.meaning === undefined ? '' : typeof b.meaning === 'string' ? b.meaning.trim().replace(/\s+/g, ' ') : null;
+      if (m === null) return res.status(400).json({ error: 'The description must be text' });
+      if (m.length > 120) return res.status(400).json({ error: 'The description can be at most 120 characters' });
+      meaning = m || null;
+    }
+    if (has('tone')) {
+      if (!(TONES as readonly string[]).includes(b.tone)) return res.status(400).json({ error: `Colour must be one of ${TONES.join(', ')}` });
+      tone = b.tone;
+    }
+    if (label === st.label && meaning === st.meaning && tone === st.tone) return res.json({ updated: st.key, changed: false, ...(await statusReply()) });
+    await prisma.$executeRaw`update crm.product_statuses set label = ${label}, meaning = ${meaning}, tone = ${tone} where key = ${st.key}`;
+    clearStatusCache();
+    res.json({ updated: st.key, changed: true, ...(await statusReply()) });
+  } catch (e) {
+    clearStatusCache();
+    if (/duplicate key|unique/i.test((e as Error).message)) return res.status(409).json({ error: 'There is already a status with that name' });
+    console.error('edit status failed:', (e as Error).message);
+    res.status(500).json({ error: 'Could not save the change' });
+  }
+});
+
+// DELETE /products/statuses/:key                    refused (409, with how many) if products have it
+// DELETE /products/statuses/:key?clear=1            removes it and clears the status on those products
+// DELETE /products/statuses/:key?moveTo=<status>    removes it and gives those products another status instead
+productsRouter.delete('/statuses/:key', async (req, res) => {
+  if (!managersOnly(req, res)) return;
+  try {
+    const { list, fromDb } = await loadStatuses();
+    if (!fromDb) return res.status(503).json({ error: 'Statuses cannot be removed yet: run product-statuses.sql in the database first.' });
+    const key = req.params.key;
+    const st = list.find(s => s.key === key);
+    if (!st) return res.status(404).json({ error: 'There is no such status' });
+    if (st.system || (SYSTEM_KEYS as readonly string[]).includes(key)) return res.status(400).json({ error: `${st.label} cannot be removed: the automatic EOL rule depends on it` });
+    const clear = req.query.clear === '1';
+    const moveToKey = typeof req.query.moveTo === 'string' && req.query.moveTo ? req.query.moveTo : null;
+    if (clear && moveToKey) return res.status(400).json({ error: 'Choose either to clear the status or to move the products to another one, not both' });
+    const target = moveToKey ? list.find(s => s.key === moveToKey) : null;
+    if (moveToKey && !target) return res.status(400).json({ error: 'There is no such status to move the products to' });
+    if (moveToKey && moveToKey === key) return res.status(400).json({ error: 'Choose a different status to move the products to' });
+    const used = (await statusCounts()).get(key) ?? 0;
+    if (used > 0 && !clear && !target) return res.status(409).json({ error: `${used} product${used === 1 ? ' has' : 's have'} the status "${st.label}". Removing it clears the status on ${used === 1 ? 'it' : 'them'}, or ${used === 1 ? 'it' : 'they'} can be moved to another status.`, inUse: used });
+    if (used > 0) {
+      const who = String((req.rep as any)?.name ?? 'a manager');
+      const reason = target ? `Status "${st.label}" was removed by ${who}: moved to "${target.label}"` : `Status "${st.label}" was removed by ${who}`;
+      try {
+        await prisma.$executeRaw`insert into crm.product_stage_log (sku, from_stage, to_stage, reason) select sku, lifecycle, ${target ? target.key : 'none'}, ${reason} from crm.products where lifecycle = ${key}`;
+      } catch { /* the log is a courtesy: never the reason a removal fails */ }
+    }
+    await prisma.$transaction([
+      target ? prisma.$executeRaw`update crm.products set lifecycle = ${target.key} where lifecycle = ${key}` : prisma.$executeRaw`update crm.products set lifecycle = null where lifecycle = ${key}`,
+      prisma.$executeRaw`delete from crm.product_statuses where key = ${key}`,
+    ]);
+    clearStatusCache();
+    res.json({ removed: key, cleared: target ? 0 : used, moved: target ? used : 0, movedTo: target?.key ?? null, ...(await statusReply()) });
+  } catch (e) {
+    clearStatusCache();
+    console.error('remove status failed:', (e as Error).message);
+    res.status(500).json({ error: 'Could not remove the status' });
+  }
+});
+
+// PATCH /products/:sku   { lifecycle: the key (or name) of one of the statuses in crm.product_statuses | null, imageUrl: 'https://...' | null, eta: '2026-12-01' | null }
 // An EOL product with no stock anywhere (none available, on hand, on order, or in any location) for 24 hours is moved to
 // Discontinued by the database itself, whichever job changed the stock. The reply says (note) when that has just happened,
 // or when it is about to because there is none left now.
@@ -168,8 +303,12 @@ productsRouter.patch('/:sku', async (req, res) => {
   if ('lifecycle' in (req.body ?? {})) {
     const v = req.body.lifecycle;
     if (v === null || v === '') data.lifecycle = null;
-    else if (isStatusKey(v)) data.lifecycle = v;
-    else return res.status(400).json({ error: `Status must be one of ${PRODUCT_STATUSES.map(s => s.key).join(', ')}, or empty` });
+    else {
+      const list = await listStatuses();
+      const st = matchStatus(list, v);   // its key, or its name
+      if (!st) return res.status(400).json({ error: `Status must be one of ${list.map(s => s.key).join(', ')}, or empty` });
+      data.lifecycle = st.key;
+    }
   }
   if ('imageUrl' in (req.body ?? {})) {
     const v = typeof req.body.imageUrl === 'string' ? req.body.imageUrl.trim() : '';
@@ -224,7 +363,8 @@ productsRouter.get('/catalogue', async (req, res) => {
     if (req.query.withPhoto === '1') common.push({ AND: [{ imageUrl: { not: null } }, { imageUrl: { not: '' } }] });
     const byBrand = brands.length ? [{ brand: { in: brands } }] : [];
     const byCategory = category ? [{ category }] : [];
-    const keys = statuses.filter(isStatusKey);
+    const statusList = await listStatuses();
+    const keys = statuses.filter(k => statusList.some(s => s.key === k));
     const byStatus = statuses.length ? [{ OR: [...(keys.length ? [{ lifecycle: { in: keys } }] : []), ...(statuses.includes('none') ? [{ lifecycle: null }] : [])] }] : [];
 
     const [total, rows, brandRows, categoryRows, statusRows] = await Promise.all([
@@ -263,7 +403,7 @@ productsRouter.get('/catalogue', async (req, res) => {
       categories: facet(categoryRows, 'category'),
       // how many products have each status (brand and category filters applied), for the status filter
       statuses: [
-        ...PRODUCT_STATUSES.map(st => ({ key: st.key as string, label: st.label, count: (statusRows as any[]).find(r => r.lifecycle === st.key)?._count._all ?? 0 })),
+        ...statusList.map(st => ({ key: st.key as string, label: st.label, count: (statusRows as any[]).find(r => r.lifecycle === st.key)?._count._all ?? 0 })),
         { key: 'none', label: 'No status', count: (statusRows as any[]).find(r => r.lifecycle == null)?._count._all ?? 0 },
       ],
     });

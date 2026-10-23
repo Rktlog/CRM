@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { apiDownload, apiPostText } from '../lib/api';
-import { statusInfo } from '../lib/productStatus';
+import { statusInfo, useProductStatuses } from '../lib/productStatus';
 
 // Products > Import. Download the template, fill in SKU, image link and status, upload it. It shows what would change
 // first; nothing is saved until you press Apply. Name, brand, stock and prices stay as DEAR has them.
@@ -22,6 +22,7 @@ function toBase64(buf: ArrayBuffer): string {
 const label = (s: string | null | undefined) => statusInfo(s)?.label ?? 'none';
 
 export default function ProductImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  useProductStatuses();   // so the status names below follow the list, which managers can change
   const [file, setFile] = useState<File | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -57,7 +58,7 @@ export default function ProductImportModal({ onClose, onDone }: { onClose: () =>
       <div className="modal-card" style={{ maxWidth: 780, width: '94vw', maxHeight: '90vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
         <h2 style={{ marginTop: 0 }}>Import products</h2>
         <div className="acct-region" style={{ marginBottom: 12, maxWidth: 640 }}>
-          Set each product's status (EOL, Discontinued, Pre-order, New), ETA and photo link from a spreadsheet.
+          Set each product's status (EOL, Discontinued, Pre-order, New, Confirmed for Ranging, For Customer Only Then Cease, Preorder Only), ETA and photo link from a spreadsheet.
           Everything else (name, brand, stock, prices) stays as DEAR has it.
         </div>
 

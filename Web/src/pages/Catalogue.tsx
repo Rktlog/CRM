@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { apiGet } from '../lib/api';
 import ProductPhoto from '../components/ProductPhoto';
 import ProductStatusPill from '../components/ProductStatusPill';
+import ProductStatusManager from '../components/ProductStatusManager';
+import { useMe } from '../lib/useMe';
 import EtaText, { Eta } from '../components/EtaText';
 
 // Catalogue: product photos by brand, with stock and price. Built for scrolling on a
@@ -27,6 +29,9 @@ export default function Catalogue() {
   const [withPhoto, setWithPhoto] = useState(true);
   const [status, setStatus] = useState<Set<string>>(new Set());   // none ticked = every status
   const [statuses, setStatuses] = useState<StatusFacet[]>([]);
+  const me = useMe();
+  const [managing, setManaging] = useState(false);   // managers: the panel to add and remove statuses
+  const [bump, setBump] = useState(0);              // changed when the statuses change, to load the list and filter again
   const toggleStatus = (k: string) => setStatus(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
 
   const [items, setItems] = useState<Item[]>([]);
@@ -71,7 +76,7 @@ export default function Catalogue() {
   useEffect(() => {
     const t = setTimeout(() => load(0, false), search ? 300 : 0);
     return () => clearTimeout(t);
-  }, [search, brand, category, inStock, withPhoto, status]);
+  }, [search, brand, category, inStock, withPhoto, status, bump]);
 
   const control: React.CSSProperties = { padding: '7px 10px', border: '1px solid var(--line)', borderRadius: 6, font: 'inherit', fontSize: 13, background: 'var(--panel)' };
 
@@ -84,6 +89,8 @@ export default function Catalogue() {
 
       <div className="controls" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', margin: '12px 0' }}>
         <input type="search" placeholder="Search name, SKU or brand" value={search} onChange={e => setSearch(e.target.value)} style={{ ...control, flex: '1 1 220px', minWidth: 180 }} />
+        {me?.role === 'manager' && <button type="button" className="btn secondary" style={{ fontSize: 13 }} onClick={() => setManaging(true)}>Manage statuses</button>}
+        {managing && <ProductStatusManager onClose={() => setManaging(false)} onChanged={() => setBump(b => b + 1)} />}
         <select value={brand} onChange={e => setBrand(e.target.value)} aria-label="Brand" style={control}>
           <option value="">All brands</option>
           {brands.map(b => <option key={b.name} value={b.name}>{b.name} ({b.count})</option>)}

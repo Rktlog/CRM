@@ -1,3 +1,4 @@
+import { normName } from './productStatuses';
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 
@@ -13,32 +14,22 @@ import ExcelJS from 'exceljs';
 //                 in DEAR; a date here shows only when no incoming order has one. Blank = no ETA of your own. If the file
 //                 has no ETA column at all, ETAs are left alone.
 
-export const PRODUCT_STATUSES = [
-  { key: 'eol', label: 'EOL', meaning: 'End of line: being cleared, will not be reordered' },
-  { key: 'discontinued', label: 'Discontinued', meaning: 'No longer available' },
-  { key: 'preorder', label: 'Pre-order', meaning: 'Not in stock yet, taking orders' },
-  { key: 'new', label: 'New', meaning: 'New to the range' },
-  { key: 'ranging', label: 'Confirmed for Ranging', meaning: 'Confirmed to be ranged' },
-  { key: 'customer_only', label: 'For Customer Only Then Cease', meaning: 'Only for customer orders, then the product ceases' },
-  { key: 'preorder_only', label: 'Preorder Only', meaning: 'Only available to pre-order' },
-] as const;
-export type ProductStatus = (typeof PRODUCT_STATUSES)[number]['key'];
-export const isStatusKey = (v: unknown): v is ProductStatus => PRODUCT_STATUSES.some(s => s.key === v);
-export const statusLabel = (k: ProductStatus | null) => PRODUCT_STATUSES.find(s => s.key === k)?.label ?? '';
+export type ProductStatus = string;   // a key from crm.product_statuses
 export const MAX_IMPORT_CHANGES = 5000;
-const STATUS_WORDS = PRODUCT_STATUSES.map(s => s.label).join(', ');
 
-// What someone typed -> a status key, null for blank, 'invalid' for anything else.
-export function parseStatus(text: string): ProductStatus | null | 'invalid' {
-  const n = text.toLowerCase().replace(/[^a-z]/g, '');
+// What someone typed -> a status key from `statuses`, null for blank, 'invalid' for anything else. The name is matched in any case, and
+// whatever is between the words (spaces, dashes, none) does not matter: "New-SS27" and "new ss27" are the same. A name is tried before a key. The shorter ways the
+// original statuses have always been written ("end of line", "disc...", "confirmed for...") still work.
+export function parseStatus(text: string, statuses: { key: string; label: string }[]): ProductStatus | null | 'invalid' {
+  const n = normName(text);
   if (!n) return null;
-  if (n.startsWith('eol') || n.startsWith('endofl')) return 'eol';
-  if (n.startsWith('disc')) return 'discontinued';
-  if (n.startsWith('preorderonly')) return 'preorder_only';   // before "preorder", which it also starts with
-  if (n.startsWith('preorder')) return 'preorder';
-  if (n === 'new') return 'new';
-  if (n.startsWith('confirmedfor') || n === 'ranging' || n.startsWith('ranging')) return 'ranging';
-  if (n.startsWith('forcustomer') || n.startsWith('customeronly')) return 'customer_only';
+  const exact = statuses.find(s => normName(s.label) === n) ?? statuses.find(s => normName(s.key) === n);   // a name always wins over a loosely written key
+  if (exact) return exact.key;
+  const has = (k: string) => statuses.some(s => s.key === k);
+  if (has('eol') && (n.startsWith('eol') || n.startsWith('endofl'))) return 'eol';
+  if (has('discontinued') && n.startsWith('disc')) return 'discontinued';
+  if (has('ranging') && (n.startsWith('confirmedfor') || n.startsWith('ranging'))) return 'ranging';
+  if (has('customer_only') && (n.startsWith('forcustomer') || n.startsWith('customeronly'))) return 'customer_only';
   return 'invalid';
 }
 
@@ -122,7 +113,7 @@ export type Plan = {
 };
 
 // What the file would change, without changing anything.
-export function planImport(file: ParsedFile, products: CurrentProduct[]): Plan {
+export function planImport(file: ParsedFile, products: CurrentProduct[], statuses: { key: string; label: string }[]): Plan {
   const exact = new Map(products.map(p => [p.sku, p]));
   const lower = new Map(products.map(p => [p.sku.toLowerCase(), p]));
   const seen = new Map<string, number>();
@@ -147,8 +138,8 @@ export function planImport(file: ParsedFile, products: CurrentProduct[]): Plan {
       else if (r.image !== (p.imageUrl ?? '')) change.image = { from: p.imageUrl, to: r.image };
     }
     if (file.hasStatus) {
-      const s = parseStatus(r.status);
-      if (s === 'invalid') problem(r.row, p.sku, `"${r.status}" is not a status. Use ${STATUS_WORDS}, or leave it blank`);
+      const s = parseStatus(r.status, statuses);
+      if (s === 'invalid') problem(r.row, p.sku, `"${r.status}" is not a status. Use ${statuses.map(x => x.label).join(', ')}, or leave it blank`);
       else if (s !== ((p.lifecycle as ProductStatus | null) ?? null)) change.status = { from: (p.lifecycle as ProductStatus | null) ?? null, to: s };
     }
     if (file.hasEta) {
@@ -171,7 +162,10 @@ const FONT = { name: 'Arial', size: 10 };
 export async function productTemplate(
   products: { sku: string; name: string; brand: string | null; imageUrl: string | null; lifecycle: string | null; eta: string | null }[],
   blank: boolean,
+  statuses: { key: string; label: string; meaning: string | null }[],
 ): Promise<Buffer> {
+  const labelOf = (k: string | null) => statuses.find(s => s.key === k)?.label ?? '';
+  const listFormula = statuses.map(s => s.label).join(',');   // Excel drop-down lists stop at 255 characters: past that the Status help sheet is the guide
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Products', { views: [{ state: 'frozen', ySplit: 1 }] });
   ws.columns = [
@@ -185,7 +179,7 @@ export async function productTemplate(
   const day = (s: string | null) => (s ? new Date(`${s}T00:00:00Z`) : null);
   const rows = blank
     ? [{ sku: 'EXAMPLE-SKU', name: 'Example product (delete this row)', image: 'https://www.dropbox.com/s/abc123/photo.jpg?dl=0', status: 'EOL', eta: day('2026-12-01'), brand: '' }]
-    : products.map(p => ({ sku: p.sku, name: p.name, image: p.imageUrl ?? '', status: statusLabel(isStatusKey(p.lifecycle) ? p.lifecycle : null), eta: day(p.eta), brand: p.brand ?? '' }));
+    : products.map(p => ({ sku: p.sku, name: p.name, image: p.imageUrl ?? '', status: labelOf(p.lifecycle), eta: day(p.eta), brand: p.brand ?? '' }));
   rows.forEach(r => ws.addRow(r));
 
   const last = Math.max(rows.length + 1, 2) + (blank ? 499 : 200);   // dropdown and date format also on the empty rows below, for new entries
@@ -194,8 +188,8 @@ export async function productTemplate(
     ws.getCell(r, 1).numFmt = '@';
     ws.getCell(r, 5).numFmt = 'dd mmm yyyy';
     for (let c = 1; c <= 6; c++) ws.getCell(r, c).font = c === 2 || c === 6 ? { ...FONT, color: { argb: 'FF7F7F7F' } } : FONT;
-    ws.getCell(r, 4).dataValidation = {
-      type: 'list', allowBlank: true, formulae: [`"${PRODUCT_STATUSES.map(s => s.label).join(',')}"`],
+    if (listFormula.length <= 250) ws.getCell(r, 4).dataValidation = {
+      type: 'list', allowBlank: true, formulae: [`"${listFormula}"`],
       showErrorMessage: true, errorTitle: 'Status', error: 'Pick a status from the list, or leave it blank.',
     };
     ws.getCell(r, 5).dataValidation = {
@@ -216,7 +210,7 @@ export async function productTemplate(
     ['ETA', 'The ETA is the "required by" date on the incoming purchase order in DEAR. A date here only shows when no incoming order has a date. Leave blank for no date of your own. If you delete the whole ETA column, ETAs are not touched.'],
     ['Brand', 'Only there so you can filter the sheet. Not imported.'],
     ['', ''],
-    ...PRODUCT_STATUSES.map(s => [s.label, s.meaning] as [string, string]),
+    ...statuses.map(s => [s.label, s.meaning ?? ''] as [string, string]),
     ['', ''],
     ['Before it changes anything', 'The import shows what it would change first, and you confirm. Rows it cannot use are listed and skipped.'],
   ];

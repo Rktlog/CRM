@@ -52,9 +52,9 @@ const TRADE = /^trade\b/i;   // the price tier called Trade (or "Trade Price"), 
 export const isDiscontinued = (status: string | null | undefined, lifecycle: string | null | undefined): boolean => status === 'Deprecated' || lifecycle === 'discontinued';
 
 // Available/PreOrder: "Available" when there is stock; "PreOrder" when it is not in stock but stock is on order, or when its stage here
-// is Pre-order (or Preorder Only); otherwise blank, meaning it can be neither bought now nor ordered ahead.
+// is Preorder Only; otherwise blank, meaning it can be neither bought now nor ordered ahead.
 export function availabilityOf(lifecycle: string | null | undefined, available: number | null | undefined, incoming: number | null | undefined): '' | 'Available' | 'PreOrder' {
-  if (lifecycle === 'preorder' || lifecycle === 'preorder_only') return 'PreOrder';
+  if (lifecycle === 'preorder_only') return 'PreOrder';
   if (Number(available) > 0) return 'Available';
   if (Number(incoming) > 0) return 'PreOrder';
   return '';

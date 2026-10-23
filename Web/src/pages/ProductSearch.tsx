@@ -9,7 +9,8 @@ import ProductDescription from '../components/ProductDescription';
 import { fmtDimensions, fmtWeight } from '../lib/productSpecs';
 import { PRODUCT_PAGE } from '../lib/productPage';
 import ProductImportModal from '../components/ProductImportModal';
-import { PRODUCT_STATUSES } from '../lib/productStatus';
+import { useProductStatuses } from '../lib/productStatus';
+import ProductStatusManager from '../components/ProductStatusManager';
 
 type Location = { location: string; onHand: number; allocated: number; available: number; onOrder: number };
 type OrderRef = {
@@ -219,6 +220,10 @@ type Patch = { lifecycle?: string | null; imageUrl?: string | null; eta?: Eta; e
 // Set this product's status and photo link by hand. Managers only.
 function ProductEdit({ product: p, onSaved }: { product: Product; onSaved: (sku: string, patch: Patch) => void }) {
   const [status, setStatus] = useState(p.lifecycle ?? '');
+  const statuses = useProductStatuses();
+  const [managing, setManaging] = useState(false);   // the panel where managers add and remove statuses
+  // If the status this product had has just been removed, the box goes back to None.
+  useEffect(() => { if (status && !statuses.some(x => x.key === status)) setStatus(''); }, [statuses]);
   const [image, setImage] = useState(p.imageUrl ?? '');
   const [eta, setEta] = useState(p.etaManual ?? '');
   const [saving, setSaving] = useState(false);
@@ -253,9 +258,11 @@ function ProductEdit({ product: p, onSaved }: { product: Product; onSaved: (sku:
           Status
           <select value={status} onChange={e => setStatus(e.target.value)}>
             <option value="">None</option>
-            {PRODUCT_STATUSES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+            {statuses.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
           </select>
         </label>
+        <button type="button" className="link-btn" style={{ alignSelf: 'center' }} onClick={() => setManaging(true)}>Manage statuses</button>
+        {managing && <ProductStatusManager onClose={() => setManaging(false)} />}
         <label className="modal-field" style={{ minWidth: 150 }}>
           ETA (next delivery)
           <input type="date" value={eta} onChange={e => setEta(e.target.value)} />
