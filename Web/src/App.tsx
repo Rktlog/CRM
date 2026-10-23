@@ -6,12 +6,13 @@ import Dashboard from './pages/Dashboard';
 import Pipeline from './pages/Pipeline';
 import Accounts from './pages/Accounts';
 import AccountDetail from './pages/AccountDetail';
+import CouncilStores from './pages/CouncilStores';
 import SalesData from './pages/SalesData';
 import Settings from './pages/Settings';
 import ActivityLog from './pages/ActivityLog';
 import Planner from './pages/Planner';
 import Reports from './pages/Reports';
-import Assistant from './pages/Assistant';
+import ReportBuilder from './pages/ReportBuilder';
 import Misc from './pages/Misc';
 import ProductSearch from './pages/ProductSearch';
 import Orders from './pages/Orders';
@@ -56,9 +57,10 @@ function Routed() {
         <Route path="pipeline" element={<Pipeline />} />
         <Route path="accounts" element={<Accounts />} />
         <Route path="accounts/:id" element={<AccountDetail />} />
+        <Route path="council/:name" element={<CouncilStores />} />
         <Route path="sales-data" element={<SalesData />} />
         <Route path="reports" element={<Reports />} />
-        <Route path="assistant" element={<Assistant />} />
+        <Route path="reports/builder" element={<ReportBuilder />} />
         <Route path="misc" element={<Misc />} />
         <Route path="products" element={<ProductSearch />} />
         <Route path="catalogue" element={<Catalogue />} />

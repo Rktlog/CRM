@@ -14,6 +14,9 @@ import { todayLocal, dateInputValue, isoForDay } from '../lib/logDate';
 import AccountGmail from '../components/AccountGmail';
 import DictationTextarea from '../components/DictationTextarea';
 
+// The council worked out from the postcode in the address (the API sends it with the account).
+const councilOf = (a: unknown): string | null => (a as { council?: string | null }).council ?? null;
+
 export default function AccountDetail() {
   const { id } = useParams<{ id: string }>();
   const [account, setAccount] = useState<AccountDetailType | null>(null);
@@ -400,7 +403,7 @@ export default function AccountDetail() {
         </div>
 
         <div>
-          {(account.contactName || account.phone || account.email || account.address) && (
+          {(account.contactName || account.phone || account.email || account.address || councilOf(account)) && (
             <div className="card">
               <h3 className="contact-head">
                 <span>Contact</span>
@@ -415,6 +418,7 @@ export default function AccountDetail() {
               {account.phone && <div className="kv"><span className="k">Phone</span><span><a href={`tel:${account.phone}`} className="order-link">{account.phone}</a></span></div>}
               {account.email && <div className="kv"><span className="k">Email</span><span><a href={`mailto:${account.email}`} className="order-link">{account.email}</a></span></div>}
               {account.address && <div className="kv"><span className="k">Address</span><span>{account.address}</span></div>}
+              {councilOf(account) && <div className="kv"><span className="k">Council</span><span><Link to={`/council/${encodeURIComponent(councilOf(account)!)}`} className="order-link" title="See the other stores in this council">{councilOf(account)}</Link></span></div>}
             </div>
           )}
 

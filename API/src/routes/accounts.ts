@@ -5,6 +5,7 @@ import { territoryWhere, canSeeAccount } from '../lib/territory';
 import { priceListOptions } from '../lib/priceList';
 import { LIVE_ORDER } from '../lib/orderSource';
 import { orderNoteSummary } from '../lib/orderNotes';
+import { councilsFor } from '../lib/council';
 
 export const accountsRouter = Router();
 
@@ -84,8 +85,11 @@ accountsRouter.get('/', async (req, res) => {
 
   // Flatten rep.name onto repName, matching the rest of the API's flat shape.
   const statuses = await statusFor(accounts.map(a => a.id));
+  const councils = await councilsFor(accounts.map(a => a.id));   // from the postcode in the address (council.sql)
   const flattened = accounts.map(({ rep, quotes, ...a }) => ({
     ...a,
+    council: councils.get(a.id)?.council ?? null,
+    postcode: councils.get(a.id)?.postcode ?? null,
     repName: rep?.name ?? null,
     hasHistoricalOrders: quotes.length > 0,
     status: statuses.get(a.id) ?? 'Prospect',
@@ -251,8 +255,12 @@ accountsRouter.get('/:id', async (req, res) => {
 
   const notes = await orderNoteSummary(rest.quotes.map(q => q.id));   // what the team has said about each order
 
+  const council = (await councilsFor([rest.id])).get(rest.id);   // the council worked out from its postcode (council.sql)
+
   const flattened = {
     ...rest,
+    council: council?.council ?? null,
+    postcode: council?.postcode ?? null,
     quotes: rest.quotes.map(q => ({ ...q, ...(notes.get(q.id) ?? {}) })),
     repName: rep?.name ?? null,
     activity: activity.map(({ rep: activityRep, quote, ...a }) => ({ ...a, repName: activityRep?.name ?? null, orderId: quote?.id ?? null, orderNumber: quote?.number ?? null })),

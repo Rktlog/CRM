@@ -3,6 +3,7 @@ import { prisma } from './prisma';
 import { territoryWhere } from './territory';
 import { chooseEta, incomingFor } from './eta';
 import { listStatuses } from './productStatuses';
+import { councilReady } from './council';
 
 // Custom reports: pick a dataset, the columns, filters, and (optionally) how to add it up. Nothing the browser sends
 // goes into SQL as text: datasets, columns and filters are checked against the lists below, and values are parameters.
@@ -30,6 +31,8 @@ export const DATASETS: Record<DatasetKey, { label: string; blurb: string; filter
       { key: 'status', label: 'Order status', type: 'text', dim: true },
       { key: 'customer', label: 'Customer', type: 'text', dim: true },
       { key: 'state', label: 'State', type: 'text', dim: true },
+      { key: 'council', label: 'Customer council', type: 'text', dim: true },
+      { key: 'postcode', label: 'Customer postcode', type: 'text', dim: true },
       { key: 'category', label: 'Customer category', type: 'text', dim: true },
       { key: 'rep', label: 'Rep', type: 'text', dim: true },
       { key: 'brand', label: 'Brand', type: 'text', dim: true },
@@ -70,6 +73,8 @@ export const DATASETS: Record<DatasetKey, { label: string; blurb: string; filter
     columns: [
       { key: 'name', label: 'Account', type: 'text', dim: true },
       { key: 'state', label: 'State', type: 'text', dim: true },
+      { key: 'council', label: 'Council', type: 'text', dim: true },
+      { key: 'postcode', label: 'Postcode', type: 'text', dim: true },
       { key: 'category', label: 'Category', type: 'text', dim: true },
       { key: 'rep', label: 'Rep', type: 'text', dim: true },
       { key: 'status', label: 'Status', type: 'text', dim: true },
@@ -137,10 +142,12 @@ async function loadSales(f: Filters, rep: Rep): Promise<Row[]> {
   if (f.brands?.length) w.push(Prisma.sql`l.brand = any(${f.brands}::text[])`);
   if (f.states?.length) w.push(Prisma.sql`a.region = any(${f.states}::text[])`);
   if (f.categories?.length) w.push(Prisma.sql`coalesce(nullif(a.category, ''), 'Uncategorized') = any(${f.categories}::text[])`);
+  // Council and postcode come from the account (council.sql). Until that has been run the columns are simply empty.
+  const councilCols = (await councilReady()) ? Prisma.sql`a.council, a.postcode` : Prisma.sql`null::text as council, null::text as postcode`;
   if (f.realOrdersOnly !== false) w.push(Prisma.sql`upper(coalesce(q.fulfillment_status, '')) not in ('DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING', 'VOIDED', 'CREDITED')`);
   const rows = await prisma.$queryRaw<any[]>(Prisma.sql`
     select (q.sent_at at time zone 'Australia/Melbourne')::date::text as order_date, q.number as order_no,
-           coalesce(q.fulfillment_status, '') as status, a.name as customer, a.region as state,
+           coalesce(q.fulfillment_status, '') as status, a.name as customer, a.region as state, ${councilCols},
            coalesce(nullif(a.category, ''), 'Uncategorized') as category, rp.name as rep,
            l.brand, l.sku, l.product_name as product, l.quantity::float8 as qty, l.unit_price::float8 as unit_price,
            l.discount::float8 as discount, l.line_total::float8 as line_total
@@ -153,7 +160,7 @@ async function loadSales(f: Filters, rep: Rep): Promise<Row[]> {
     limit ${MAX_ROWS + 1}`);
   return rows.map(r => ({
     orderDate: r.order_date, orderMonth: String(r.order_date).slice(0, 7), orderNo: r.order_no, status: r.status.charAt(0) + r.status.slice(1).toLowerCase(),
-    customer: r.customer, state: r.state, category: r.category, rep: r.rep ?? '', brand: r.brand ?? '', sku: r.sku, product: r.product,
+    customer: r.customer, state: r.state, council: r.council ?? '', postcode: r.postcode ?? '', category: r.category, rep: r.rep ?? '', brand: r.brand ?? '', sku: r.sku, product: r.product,
     qty: r.qty, unitPrice: r.unit_price, discount: r.discount, lineTotal: r.line_total,
   }));
 }
@@ -190,10 +197,11 @@ async function loadCustomers(f: Filters, rep: Rep): Promise<Row[]> {
   if (!f.includeArchived) w.push(Prisma.sql`a.archived = false and a.misc = false`);
   if (f.states?.length) w.push(Prisma.sql`a.region = any(${f.states}::text[])`);
   if (f.categories?.length) w.push(Prisma.sql`coalesce(nullif(a.category, ''), 'Uncategorized') = any(${f.categories}::text[])`);
+  const councilCols = (await councilReady()) ? Prisma.sql`a.council, a.postcode` : Prisma.sql`null::text as council, null::text as postcode`;
   if (f.statuses?.length) w.push(Prisma.sql`s.status = any(${f.statuses}::text[])`);
   if (f.reps?.length) w.push(Prisma.sql`rp.name = any(${f.reps}::text[])`);
   const rows = await prisma.$queryRaw<any[]>(Prisma.sql`
-    select a.name, a.region as state, coalesce(nullif(a.category, ''), 'Uncategorized') as category, rp.name as rep, s.status,
+    select a.name, a.region as state, ${councilCols}, coalesce(nullif(a.category, ''), 'Uncategorized') as category, rp.name as rep, s.status,
            a.contact_name as contact, a.phone, a.email, a.spend_30::float8 as spend30, a.spend_90::float8 as spend90,
            a.spend_365::float8 as spend365, (s.last_order at time zone 'Australia/Melbourne')::date::text as last_order
     from crm.accounts a
@@ -203,7 +211,7 @@ async function loadCustomers(f: Filters, rep: Rep): Promise<Row[]> {
     order by a.name
     limit ${MAX_ROWS + 1}`);
   return rows.map(r => ({
-    name: r.name, state: r.state, category: r.category, rep: r.rep ?? '', status: r.status ?? '', contact: r.contact ?? '', phone: r.phone ?? '', email: r.email ?? '',
+    name: r.name, state: r.state, council: r.council ?? '', postcode: r.postcode ?? '', category: r.category, rep: r.rep ?? '', status: r.status ?? '', contact: r.contact ?? '', phone: r.phone ?? '', email: r.email ?? '',
     spend30: r.spend30, spend90: r.spend90, spend365: r.spend365, lastOrder: r.last_order ?? null,
   }));
 }
