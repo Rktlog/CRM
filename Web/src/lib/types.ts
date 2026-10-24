@@ -90,7 +90,7 @@ export type Quote = {
 
 export type Activity = {
   id: string;
-  type: 'call' | 'email' | 'visit';
+  type: 'call' | 'email' | 'visit' | 'remark';
   note: string;
   photoUrl: string | null;
   occurredAt: string;

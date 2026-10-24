@@ -183,12 +183,12 @@ const DATASETS: Dataset[] = [
   },
   {
     key: 'team_log',
-    blurb: "The team log: calls, emails and visits logged on customers, with the notes. Reps see their own territory; managers see everyone.",
-    args: 'days (1-365, default 7), rep (part of the name), type (call|email|visit), customer, text (words in the note)',
+    blurb: "The team log: calls, emails, visits and remarks (comments and feedback) logged on customers, with the notes. Reps see their own territory; managers see everyone.",
+    args: 'days (1-365, default 7), rep (part of the name), type (call|email|visit|remark), customer, text (words in the note)',
     async run(ctx, a) {
       const days = Math.min(365, Math.max(1, Math.floor(Number(a.days)) || 7));
       const type = lc(a.type);
-      if (type && !['call', 'email', 'visit'].includes(type)) throw new DataError('type must be call, email or visit');
+      if (type && !['call', 'email', 'visit', 'remark'].includes(type)) throw new DataError('type must be call, email, visit or remark');
       const accountFilters: any[] = [await territoryWhere(ctx.rep as any)];
       if (text(a.customer)) accountFilters.push({ name: { contains: text(a.customer), mode: 'insensitive' } });
       const CAP = 3000;

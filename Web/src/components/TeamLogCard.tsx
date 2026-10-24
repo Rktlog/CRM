@@ -6,7 +6,7 @@ import { apiGet } from '../lib/api';
 // manager doesn't have to open each account. Refreshes itself every minute.
 
 type LogRow = {
-  id: string; type: 'call' | 'email' | 'visit'; note: string; photoUrl: string | null; orderId?: string | null; orderNumber?: string | null;
+  id: string; type: 'call' | 'email' | 'visit' | 'remark'; note: string; photoUrl: string | null; orderId?: string | null; orderNumber?: string | null;
   occurredAt: string; createdAt: string; updatedAt: string | null; sortAt: string; edited: boolean;
   accountId: string; accountName: string; accountRegion: string; repId: string; repName: string;
 };
@@ -16,6 +16,7 @@ const TYPES = [
   { key: 'call', label: 'Phone' },
   { key: 'email', label: 'Email' },
   { key: 'visit', label: 'F2F visits' },
+  { key: 'remark', label: 'Remarks' },
 ] as const;
 const PERIODS = [
   { days: 1, label: 'Today' },
@@ -23,9 +24,8 @@ const PERIODS = [
   { days: 30, label: '30 days' },
   { days: 90, label: '90 days' },
 ];
-const TYPE_LABEL = { call: 'Phone', email: 'Email', visit: 'F2F visit' } as const;
+const TYPE_LABEL = { call: 'Phone', email: 'Email', visit: 'F2F visit', remark: 'Remark' } as const;
 const REFRESH_MS = 60_000;
-const PREVIEW = 3; // entries shown until "Show all" is clicked
 
 function when(iso: string): string {
   const d = new Date(iso);
@@ -50,7 +50,6 @@ export default function TeamLogCard() {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [loadingMore, setLoadingMore] = useState(false);
-  const [showAll, setShowAll] = useState(false);
   const pagedRef = useRef(false); // stop auto-refresh replacing pages already loaded
 
   const query = (before?: string) => {
@@ -131,7 +130,7 @@ export default function TeamLogCard() {
 
       {rows && rows.length > 0 && (
         <div className="team-log-list">
-          {(showAll ? rows : rows.slice(0, PREVIEW)).map(r => {
+          {rows.map(r => {
             const long = r.note.length > 220 || r.note.split('\n').length > 3;
             const expanded = open.has(r.id);
             return (
@@ -142,7 +141,7 @@ export default function TeamLogCard() {
                 </div>
                 <div className="team-log-body">
                   <div className="team-log-title">
-                    <span className={`pill ${r.type === 'visit' ? 'teal' : r.type === 'email' ? 'neutral' : 'amber'}`}>{TYPE_LABEL[r.type]}</span>
+                    <span className={`pill ${r.type === 'visit' ? 'teal' : r.type === 'email' || r.type === 'remark' ? 'neutral' : 'amber'}`}>{TYPE_LABEL[r.type]}</span>
                     <Link to={`/accounts/${r.accountId}`} className="acct-name">{r.accountName}</Link>
                     <span className="acct-region">{r.accountRegion}</span>
                     {r.orderNumber && r.orderId && <Link to={`/orders/${r.orderId}`} className="order-link">on {r.orderNumber}</Link>}
@@ -167,16 +166,11 @@ export default function TeamLogCard() {
         </div>
       )}
 
-      {rows && rows.length > PREVIEW && (
-  <button className="btn secondary" style={{ marginTop: 10, marginRight: 8 }} onClick={() => setShowAll(v => !v)}>
-    {showAll ? 'Show fewer' : `Show all ${rows.length}${hasMore ? '+' : ''}`}
-  </button>
-)}
-{rows && showAll && hasMore && (
-  <button className="btn secondary" style={{ marginTop: 10 }} onClick={loadMore} disabled={loadingMore}>
-    {loadingMore ? 'Loading…' : 'Load more'}
-  </button>
-)}
+      {rows && hasMore && (
+        <button className="btn secondary" style={{ marginTop: 10 }} onClick={loadMore} disabled={loadingMore}>
+          {loadingMore ? 'Loading…' : 'Load more'}
+        </button>
+      )}
     </div>
   );
 }

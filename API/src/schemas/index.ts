@@ -13,7 +13,7 @@ export const createAccountSchema = z.object({
 
 export const createActivitySchema = z.object({
   accountId: z.string().uuid(),
-  type: z.enum(['call', 'email', 'visit']),
+  type: z.enum(['call', 'email', 'visit', 'remark']),   // a remark is a comment or feedback, logged like the others
   note: z.string().min(1),
   photoUrl: z.string().url().optional(),
   // The order this log is about, if any. It has to be one of this account's orders.
@@ -22,7 +22,7 @@ export const createActivitySchema = z.object({
 });
 
 export const updateActivitySchema = z.object({
-  type: z.enum(['call', 'email', 'visit']).optional(),
+  type: z.enum(['call', 'email', 'visit', 'remark']).optional(),
   note: z.string().min(1).optional(),
     occurredAt: z.string().datetime().optional(),
 });

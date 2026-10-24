@@ -1,24 +1,25 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { apiGet, apiPost } from '../lib/api';
-import { ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
+import { ACTIVITY_ICON, ACTIVITY_KINDS, ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
 import { todayLocal, dateInputValue, isoForDay } from '../lib/logDate';
 import { fmtDate } from '../lib/types';
 import EditActivityModal from './EditActivityModal';
 import DictationTextarea from './DictationTextarea';
 
-// The team's log for ONE order: a call, email or visit about it (chasing payment, a follow-up). Everyone who can see the
+// The team's log for ONE order: a call, email, visit or remark about it (chasing payment, a follow-up, any comment or feedback). Everyone who can see the
 // account sees it, and every entry also shows in the account's own activity log (it is the same record, linked to the order).
 type Entry = { id: string; type: ActivityKind; note: string; occurredAt: string; repName: string | null; mine: boolean; canEdit: boolean; edited: boolean };
 
-const KINDS: ActivityKind[] = ['call', 'email', 'visit'];
+const KINDS: ActivityKind[] = ACTIVITY_KINDS;
 const PLACEHOLDER: Record<string, string> = {
   call: 'e.g. Rang accounts, they will pay on Friday',
   email: 'e.g. Emailed the invoice again, asked for a payment date',
   visit: 'What happened at the visit?',
+  remark: 'Your remark, comment or feedback on this order',
 };
 // One tap to start the usual ones. "Follow up in 3 days" is read by the CRM and sets the reminder on the account.
 const PHRASES = ['Chasing payment:', 'Customer promised to pay by', 'Waiting on stock:', 'Follow up in 3 days:'];
-const ICON: Record<string, string> = { visit: '◎', call: '☎', email: '✉' };
+const ICON: Record<string, string> = ACTIVITY_ICON;
 
 export default function OrderLog({ orderId, accountId, accountName, onChange }: { orderId: string; accountId: string; accountName: string; onChange?: () => void }) {
   const [entries, setEntries] = useState<Entry[] | null>(null);
@@ -47,7 +48,7 @@ export default function OrderLog({ orderId, accountId, accountName, onChange }: 
   return (
     <div className="card" id="order-log">
       <h3>Team log for this order</h3>
-      <div className="acct-region" style={{ marginBottom: 10 }}>Log a call, email or visit about this order, such as chasing payment or a follow-up. Everyone who can see this account sees it, and each one also shows in the account's activity log.</div>
+      <div className="acct-region" style={{ marginBottom: 10 }}>Log a call, email, visit or remark about this order, such as chasing payment, a follow-up or any comment or feedback. Everyone who can see this account sees it, and each one also shows in the account's activity log.</div>
 
       <form onSubmit={add}>
         <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }} role="group" aria-label="Kind of log">

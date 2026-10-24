@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
 import { Account } from '../lib/types';
 import { useMe } from '../lib/useMe';
 import AccountPicker, { AccountSelection, resolveSelection } from './AccountPicker';
-import { ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
+import { ACTIVITY_KINDS, ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
 import { todayLocal, isoForDay } from '../lib/logDate';
 import DictationTextarea from './DictationTextarea';
 
@@ -15,11 +15,12 @@ type Props = {
 };
 
 // What each kind of log is called once saved, and what the notes box asks.
-const SAVED: Record<ActivityKind, string> = { call: 'Phone call logged', email: 'Email logged', visit: 'F2F visit logged' };
+const SAVED: Record<ActivityKind, string> = { call: 'Phone call logged', email: 'Email logged', visit: 'F2F visit logged', remark: 'Remark logged' };
 const PROMPT: Record<ActivityKind, string> = {
   call: 'What was said on the call?',
   email: 'What was the email about?',
   visit: 'What happened at the F2F visit?',
+  remark: 'Your remark, comment or feedback',
 };
 
 // Resizes to a max dimension and re-encodes as JPEG at reduced quality,
@@ -179,7 +180,7 @@ export default function LogVisitModal({ onCreated, onClose, defaultType }: Props
         <h3 style={{ marginBottom: 12 }}>Log activity</h3>
 
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }} role="group" aria-label="Kind of activity">
-          {(['call', 'email', 'visit'] as const).map(k => (
+          {ACTIVITY_KINDS.map(k => (
             <button
               key={k}
               type="button"

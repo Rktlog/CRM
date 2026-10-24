@@ -91,13 +91,15 @@ activityRouter.post('/', async (req, res) => {
   // The one manual stage transition: logging any activity against a
   // brand-new lead is what "approached" means. Every stage after this
   // is driven by Cin7 sync data once that job exists, not by this route.
-  if (account.stage === 'new_lead') {
+  // A remark (a comment or feedback) is not a contact with the customer, so it does not count as approaching them.
+  const isRemark = parsed.data.type === 'remark';
+  if (!isRemark && account.stage === 'new_lead') {
     updates.stage = 'approached';
   }
 
   // Read the note for a follow-up phrase ("follow up in 3 weeks") and
   // set the reminder automatically if one's found.
-  const followUpDate = parseFollowUp(activity.note, activity.occurredAt);
+  const followUpDate = isRemark ? null : parseFollowUp(activity.note, activity.occurredAt);
   if (followUpDate) {
     updates.nextFollowUpAt = followUpDate;
   }
@@ -116,13 +118,13 @@ activityRouter.post('/', async (req, res) => {
 // was written is editable.
 // ---------- GET /activity/feed (managers) ----------
 // Every log the team adds or edits, newest first, without opening each
-// account. ?rep=<repId> ?type=call|email|visit ?days=1|7|30|90 ?q=<text>
+// account. ?rep=<repId> ?type=call|email|visit|remark ?days=1|7|30|90 ?q=<text>
 // ?before=<ISO time> for the next page (pass the last row's sortAt).
 activityRouter.get('/feed', async (req, res) => {
   if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Managers only' });
 
   const repId = typeof req.query.rep === 'string' && req.query.rep ? req.query.rep : null;
-  const type = ['call', 'email', 'visit'].includes(String(req.query.type)) ? String(req.query.type) : null;
+  const type = ['call', 'email', 'visit', 'remark'].includes(String(req.query.type)) ? String(req.query.type) : null;
   const days = Math.min(365, Math.max(1, Number(req.query.days) || 7));
   const since = new Date(Date.now() - days * 86400000);
   const q = typeof req.query.q === 'string' && req.query.q.trim() ? `%${req.query.q.trim()}%` : null;

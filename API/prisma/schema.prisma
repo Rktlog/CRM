@@ -51,6 +51,7 @@ enum ActivityType {
   call
   email
   visit
+  remark   // a comment or feedback, logged like the others but not a contact with the customer
 
   @@schema("crm")
 }

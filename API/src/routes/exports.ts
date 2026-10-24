@@ -731,7 +731,7 @@ exportsRouter.get('/:type', async (req, res) => {
           orderBy: { occurredAt: 'desc' },
         });
         const rows = activities.map(a => ({
-          Date: a.occurredAt.toISOString().slice(0, 10), Rep: a.rep?.name ?? 'Unknown', Type: ({ call: 'Phone', email: 'Email', visit: 'F2F visit' } as Record<string, string>)[a.type] ?? a.type,
+          Date: a.occurredAt.toISOString().slice(0, 10), Rep: a.rep?.name ?? 'Unknown', Type: ({ call: 'Phone', email: 'Email', visit: 'F2F visit', remark: 'Remark' } as Record<string, string>)[a.type] ?? a.type,
           Account: a.account?.name ?? 'Unknown', Region: a.account?.region ?? '', Order: a.quote?.number ?? '', Note: a.note,
         }));
         return sendWorkbook(res, 'rep-activity.xlsx', [{ name: 'Rep Activity', rows }]);

@@ -153,7 +153,7 @@ tasksRouter.get('/today', async (req, res) => {
           select: {
             id: true, name: true, region: true, phone: true, email: true, contactName: true,
             lastOrderAt: true, spend365: true, stage: true, type: true,
-            activity: { orderBy: { occurredAt: 'desc' }, take: 1, select: { type: true, note: true, occurredAt: true } },
+            activity: { where: { type: { not: 'remark' } }, orderBy: { occurredAt: 'desc' }, take: 1, select: { type: true, note: true, occurredAt: true } },   // a remark is not a contact
           },
         },
       },

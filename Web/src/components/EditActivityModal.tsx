@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { apiPatch } from '../lib/api';
-import { ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
+import { ACTIVITY_KINDS, ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
 import { todayLocal, dateInputValue, isoForDay } from '../lib/logDate';
 import DictationTextarea from './DictationTextarea';
 
@@ -51,7 +51,7 @@ export default function EditActivityModal({ activity, onSaved, onClose }: Props)
         <div className="acct-region" style={{ marginBottom: 12 }}>{activity.accountName}</div>
 
         <div style={{ display: 'flex', gap: 8, marginBottom: 14 }} role="group" aria-label="Kind of activity">
-          {(['call', 'email', 'visit'] as const).map(k => (
+          {ACTIVITY_KINDS.map(k => (
             <button key={k} type="button" className="btn secondary" aria-pressed={type === k}
               style={{ fontWeight: type === k ? 700 : 400, opacity: type === k ? 1 : 0.65 }} onClick={() => setType(k)}>
               {ACTIVITY_LABEL[k]}

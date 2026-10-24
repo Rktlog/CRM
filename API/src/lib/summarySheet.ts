@@ -1,14 +1,16 @@
 import { prisma } from './prisma';
 import { hiddenAccountIds, assignedRegions } from './territory';
-import { NOT_A_SALE, isHistoryOrder, salesOf } from './salesRules';
-import { isOwing } from './orderSource';
+import { asSales, salesOf } from './salesRules';
+import { openQuotes } from './receivables';
 
 // The rep's "Summary" sheet, as the team's Summary_Rhonda sheet lays it out: a financial year in two halves (July to December, January
 // to June) with budget, percentage to budget, invoiced sales this year and last, variance, quotes awaiting payment and new and
 // reactivated stockists; the quarter table; and the unpaid quotes. Shown to reps on Sales Data and downloadable by managers from Reports.
 //
 // The numbers are the ones Sales Data counts, by the same rules (salesRules.ts): invoiced sales on the tax invoice date, goods ex GST,
-// the rep's states, accounts a manager hid or marked marketing/warranty left out. The cells are worked out here, with the sheet's own
+// the rep's states, accounts a manager hid or marked marketing/warranty left out. Quotes awaiting payment are the Open Quotes page's
+// (pay-first customers, what is still to pay). New and reactivated stockists are counted on the order date, from orders that were
+// really invoiced or paid. The cells are worked out here, with the sheet's own
 // formulas, so the page and the Excel file show exactly the same thing.
 
 export type SheetMonth = { key: string; label: string; budget: number; prior: number; current: number; awaiting: number; newReactivated: number };
@@ -57,9 +59,8 @@ export async function loadSheetRaw(opts: { repId: string; regions: string[]; fy:
     const hidden = await hiddenAccountIds(repId);
     const accounts = await prisma.account.findMany({
       where: { region: { in: regions }, misc: false, ...(hidden.length ? { id: { notIn: hidden } } : {}) },
-      select: { id: true, name: true },
+      select: { id: true },
     });
-    const nameOf = new Map(accounts.map(a => [a.id, a.name]));
     const quotes = accounts.length
       ? await prisma.quote.findMany({ where: { accountId: { in: accounts.map(a => a.id) }, miscType: null }, orderBy: { sentAt: 'desc' } })
       : [];
@@ -67,17 +68,21 @@ export async function loadSheetRaw(opts: { repId: string; regions: string[]; fy:
     // Invoiced sales, by the tax invoice's month (goods ex GST, credit notes taken off), as on Sales Data.
     for (const s of salesOf(quotes)) current.set(monthKey(s.sentAt), (current.get(monthKey(s.sentAt)) ?? 0) + s.amount);
 
-    // Unpaid quotes (live orders with a balance), by order date. The sheet adds them up by the month's name, whatever the year.
-    unpaid = quotes.filter(q => isOwing(q)).map(q => {
-      const date = q.sentAt.toISOString().slice(0, 10);
-      return { order: q.number, orderId: q.id, accountId: q.accountId, date, stockist: nameOf.get(q.accountId) ?? 'Unknown', total: r2(q.amountDue ?? q.amount), month: MONTHS3[Number(date.slice(5, 7)) - 1] };
+    // Quotes awaiting payment: the Open Quotes page's list for this rep's states (pay-first customers, orders not yet paid), showing what is
+    // still to pay, by order date. The sheet adds them up by the month's name, whatever the year.
+    const open = await openQuotes({ id: repId, role: 'rep' }, regions);
+    unpaid = open.rows.filter(r => r.remaining > 0.005).map(r => {
+      const date = new Date(r.date).toISOString().slice(0, 10);
+      return { order: r.number, orderId: r.id, accountId: r.accountId, date, stockist: r.customer, total: r2(r.remaining), month: MONTHS3[Number(date.slice(5, 7)) - 1] };
     }).sort((a, b) => a.date.localeCompare(b.date) || a.order.localeCompare(b.order));
     for (const u of unpaid) awaiting.set(u.month.toUpperCase(), (awaiting.get(u.month.toUpperCase()) ?? 0) + u.total);
 
-    // New and reactivated stockists, on the order date: an account's first order ever, or its first after more than 12 months without one.
-    const real = quotes.filter(q => isHistoryOrder(q) || !NOT_A_SALE.includes((q.fulfillmentStatus ?? '').toUpperCase()));
+    // New and reactivated stockists, on the order date: an account's first purchase ever, or its first after more than 12 months without
+    // one. A purchase is an order that was really invoiced (or a paid spreadsheet-history order): a quote still waiting to be paid or
+    // invoiced is not one yet, the same as the team's "placed and paid for a new order".
     const days = new Map<string, Map<string, Date>>();
-    for (const q of real) {
+    for (const q of quotes) {
+      if (!asSales(q).some(s => !s.isCredit && s.amount > 0)) continue;
       const m = days.get(q.accountId) ?? new Map<string, Date>();
       if (!m.has(dayKey(q.sentAt))) m.set(dayKey(q.sentAt), q.sentAt);
       days.set(q.accountId, m);

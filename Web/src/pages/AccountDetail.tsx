@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, FormEvent } from 'react';
 import { useMe, ALL_STATES } from '../lib/useMe';
 import { useParams, Link } from 'react-router-dom';
-import { ACTIVITY_LABEL } from '../lib/activityLabels';
+import { ACTIVITY_ICON, ACTIVITY_KINDS, ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
 import OrderNoteChip from '../components/OrderNoteChip';
 import { apiGet, apiPost, apiPatch, apiDownload } from '../lib/api';
 import { orderStatusPills, stageTag, paymentTag } from '../lib/orderStatus';
@@ -13,7 +13,6 @@ import { pickCurrentOrder } from '../lib/currentOrder';
 import { todayLocal, dateInputValue, isoForDay } from '../lib/logDate';
 import AccountGmail from '../components/AccountGmail';
 import DictationTextarea from '../components/DictationTextarea';
-import RemarksThread from '../components/RemarksThread';
 
 // The council worked out from the postcode in the address (the API sends it with the account).
 const councilOf = (a: unknown): string | null => (a as { council?: string | null }).council ?? null;
@@ -30,7 +29,7 @@ export default function AccountDetail() {
   const [exportingOrders, setExportingOrders] = useState(false);
   const [showPriceList, setShowPriceList] = useState(false);
   const [showDue, setShowDue] = useState(false);
-  const [type, setType] = useState<'call' | 'email' | 'visit'>('call');
+  const [type, setType] = useState<ActivityKind>('call');
   const [orderId, setOrderId] = useState('');   // optional: the order this log is about
   const [saving, setSaving] = useState(false);
   const [editingActivityId, setEditingActivityId] = useState<string | null>(null);
@@ -63,7 +62,7 @@ export default function AccountDetail() {
       .sort((a, b) => b.total - a.total);
   }, [account, productYear]);
   const [editNote, setEditNote] = useState('');
-  const [editType, setEditType] = useState<'call' | 'email' | 'visit'>('call');
+  const [editType, setEditType] = useState<ActivityKind>('call');
   const [editSaving, setEditSaving] = useState(false);
   const [logDay, setLogDay] = useState(todayLocal());   // the date of a new log: today unless changed
   const [editDay, setEditDay] = useState('');
@@ -292,14 +291,10 @@ export default function AccountDetail() {
               <AccountGmail accountId={account.id} />
  
           <div className="card">
-            <RemarksThread kind="account" id={account.id} heading />
-          </div>
-
-          <div className="card">
-            <h3>Log a phone call, email, or F2F visit</h3>
+            <h3>Log a phone call, email, F2F visit or remark</h3>
             <form onSubmit={handleLog}>
               <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                {(['call', 'email', 'visit'] as const).map(t => (
+                {ACTIVITY_KINDS.map(t => (
                   <button
                     key={t}
                     type="button"
@@ -320,13 +315,13 @@ export default function AccountDetail() {
               <DictationTextarea
                 value={note}
                 onChange={setNote}
-                placeholder="What happened?"
+                placeholder={type === 'remark' ? 'Your remark, comment or feedback' : 'What happened?'}
                 rows={3}
                 style={{ marginBottom: 8 }}
               />
               <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
                 <button className="btn" type="submit" disabled={saving || logDay > todayLocal()}>
-                  {saving ? 'Saving…' : 'Log activity'}
+                  {saving ? 'Saving…' : type === 'remark' ? 'Log remark' : 'Log activity'}
                 </button>
                 <label className="acct-region" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   Date
@@ -341,12 +336,12 @@ export default function AccountDetail() {
             {account.activity.length === 0 && <div style={{ color: 'var(--muted)', fontSize: 13 }}>No activity logged yet.</div>}
             {account.activity.map(t => (
               <div className="timeline-item" key={t.id}>
-                <div className="ti-icon">{t.type === 'visit' ? '◎' : t.type === 'call' ? '☎' : '✉'}</div>
+                <div className="ti-icon">{ACTIVITY_ICON[t.type] ?? '✉'}</div>
                 <div className="ti-body">
                   {editingActivityId === t.id ? (
                     <div>
                       <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
-                        {(['call', 'email', 'visit'] as const).map(ty => (
+                        {ACTIVITY_KINDS.map(ty => (
                           <button
                             key={ty}
                             type="button"
