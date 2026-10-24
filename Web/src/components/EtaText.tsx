@@ -1,5 +1,5 @@
 // When the next delivery should arrive, for reps to tell customers.
-// Set by hand wins over the date on the incoming order in DEAR. Late (past its date, still on order) shows in red.
+// The date on the incoming order in DEAR wins; a date set by hand is used only when no order has a date. Late (past its date, still on order) shows in red.
 export type Eta = { date: string | null; source: 'manual' | 'po'; ref: string | null; qty: number; late: boolean } | null | undefined;
 
 const fmt = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: new Date(`${iso}T00:00:00`).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });

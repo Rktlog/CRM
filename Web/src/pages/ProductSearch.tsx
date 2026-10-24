@@ -231,6 +231,10 @@ function ProductEdit({ product: p, onSaved }: { product: Product; onSaved: (sku:
   const statusChanged = status !== (p.lifecycle ?? '');
   const imageChanged = image.trim() !== (p.imageUrl ?? '');
   const etaChanged = eta !== (p.etaManual ?? '');
+  // The date reps are given. An incoming purchase order's date always wins over one typed here, so when there is one the box shows that
+  // date and is locked (it is changed on the order in DEAR); a typed date is only used when no purchase order has a date.
+  const poDate = p.eta?.source === 'po' && p.eta.date ? p.eta.date : null;
+  const poRef = p.eta?.ref ?? 'the incoming purchase order';
 
   async function save() {
     setSaving(true); setMsg(null);
@@ -265,7 +269,7 @@ function ProductEdit({ product: p, onSaved }: { product: Product; onSaved: (sku:
         {managing && <ProductStatusManager onClose={() => setManaging(false)} />}
         <label className="modal-field" style={{ minWidth: 150 }}>
           ETA (next delivery)
-          <input type="date" value={eta} onChange={e => setEta(e.target.value)} />
+          <input type="date" value={poDate ?? eta} disabled={!!poDate} title={poDate ? `Set by ${poRef} in DEAR` : undefined} onChange={e => setEta(e.target.value)} />
         </label>
         <label className="modal-field" style={{ flex: 1, minWidth: 260 }}>
           Photo link
@@ -275,7 +279,11 @@ function ProductEdit({ product: p, onSaved }: { product: Product; onSaved: (sku:
       </div>
       <div className="acct-region" style={{ marginTop: 6 }}>
         {p.eta ? <>Reps see: <EtaText eta={p.eta} /> . </> : 'No ETA to show yet. '}
-        The ETA is the required-by date on the incoming purchase order in DEAR. A date here is only used when no purchase order has a date.
+        {poDate
+          ? <>This is the required-by date on {poRef} in DEAR, so it is changed there. A date typed here is only used when no purchase order has a date.</>
+          : p.eta?.source === 'po'
+            ? <>{poRef} has no required-by date yet. A date typed here is used until it does.</>
+            : <>The ETA is the required-by date on the incoming purchase order in DEAR. A date typed here is only used when no purchase order has a date.</>}
       </div>
       {msg && <div className={'save-msg ' + (msg.ok ? 'ok' : 'err')} style={{ marginTop: 8 }}>{msg.text}</div>}
     </div>
