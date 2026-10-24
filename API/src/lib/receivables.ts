@@ -98,19 +98,20 @@ const nice = (s: string | null) => (s ? s.charAt(0) + s.slice(1).toLowerCase() :
 // Paid = cash applied to invoices + any prepayment DEAR still holds against the order (what the Credit page calls
 // "held"), less any of that prepayment the team has reserved for another order (reservedPrepay): that money is
 // spoken for, so this order no longer counts it. An order that is fully invoiced with nothing due is settled, even if
-// part of it was a credit note.
+// part of it was a credit note. "Fully invoiced" counts what was credited too: an order invoiced for part, with the rest taken off by a
+// credit note, is settled when DEAR has nothing due.
 // "Fully paid" allows for GST rounding: DEAR's prepayment can fall a few cents short of the order total, and that is not money
 // owed. A balance under $1 counts as paid (under 1% of a very small order). Open Quotes, the order page and the Credit page all use it.
 export const paidTolerance = (total: number) => Math.min(1, Math.max(total, 0) * 0.01);
 export const settleCents = (total: number, remaining: number) => (remaining < paidTolerance(total) ? 0 : remaining);
 
-export function paymentState(q: { total: number | null; amount: number; amountPaid: number | null; unappliedCredit: number | null; amountDue: number | null; invoicedTotal: number | null; creditNotes: unknown }, reservedPrepay = 0) {
+export function paymentState(q: { total: number | null; amount: number; amountPaid: number | null; unappliedCredit: number | null; amountDue: number | null; invoicedTotal: number | null; creditedTotal?: number | null; creditNotes: unknown }, reservedPrepay = 0) {
   const total = q.total ?? q.amount;
   const onAccount = Array.isArray(q.creditNotes) ? (q.creditNotes as any[]).reduce((s, c) => s + (Number(c?.onAccount) || 0), 0) : 0;
   const held = Math.max((q.unappliedCredit ?? 0) - onAccount, 0);                       // prepaid money DEAR holds against this order
   const prepayment = Math.max(held - Math.max(reservedPrepay, 0), 0);                    // what still counts towards paying it
   let paid = (q.amountPaid ?? 0) + prepayment;
-  if (q.amountDue != null && q.amountDue <= 0.005 && (q.invoicedTotal ?? 0) >= total - 0.005) paid = Math.max(paid, total);
+  if (q.amountDue != null && q.amountDue <= 0.005 && (q.invoicedTotal ?? 0) + (q.creditedTotal ?? 0) >= total - 0.005) paid = Math.max(paid, total);
   const remaining = settleCents(total, cents(Math.max(total - paid, 0)));
   if (remaining === 0) paid = Math.max(paid, total);   // within the tolerance: paid in full
   return { total: cents(total), paid: cents(paid), held: cents(held), remaining, payment: (remaining <= 0.005 ? 'paid' : paid > 0.005 ? 'part' : 'unpaid') as 'paid' | 'part' | 'unpaid' };
@@ -171,7 +172,7 @@ export async function openQuotes(rep: Rep, regions?: string[], terms?: string[] 
           and coalesce(q.total, q.amount) - (coalesce(q.amount_paid, 0) + greatest(greatest(coalesce(q.unapplied_credit, 0)
                 - coalesce(case when jsonb_typeof(q.credit_notes) = 'array'
                                 then (select sum(nullif(c->>'onAccount', '')::numeric) from jsonb_array_elements(q.credit_notes) c) end, 0), 0) - rv.taken, 0)) >= greatest(least(1, 0.01 * coalesce(q.total, q.amount)), 0.005)
-          and not (q.amount_due is not null and q.amount_due <= 0.005 and coalesce(q.invoiced_total, 0) >= coalesce(q.total, q.amount) - 0.005)`
+          and not (q.amount_due is not null and q.amount_due <= 0.005 and coalesce(q.invoiced_total, 0) + coalesce(q.credited_total, 0) >= coalesce(q.total, q.amount) - 0.005)`
     : [];
   const quotes = await prisma.quote.findMany({
     where: {
@@ -181,7 +182,7 @@ export async function openQuotes(rep: Rep, regions?: string[], terms?: string[] 
       ],
     },
     orderBy: { sentAt: 'asc' },
-    select: { id: true, number: true, accountId: true, sentAt: true, fulfillmentStatus: true, reference: true, total: true, amount: true, amountPaid: true, unappliedCredit: true, amountDue: true, invoicedTotal: true, creditNotes: true },
+    select: { id: true, number: true, accountId: true, sentAt: true, fulfillmentStatus: true, reference: true, total: true, amount: true, amountPaid: true, unappliedCredit: true, amountDue: true, invoicedTotal: true, creditedTotal: true, creditNotes: true },
   });
   const ids = quotes.map(q => q.id);
   // Prepayments on these orders that have been reserved for another order (a use in the last 2 days counts until the sync catches up).
