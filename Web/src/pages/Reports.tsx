@@ -134,7 +134,7 @@ export default function Reports() {
               <div className="m-row" key={r.id} style={{ gridTemplateColumns: '1.4fr 2fr 0.9fr', cursor: 'default' }}>
                 <div className="acct-name">{r.name} {r.shared && <span className="pill neutral">Shared</span>}</div>
                 <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>
-                  {r.definition.dataset === 'sales' ? 'Order lines' : r.definition.dataset === 'products' ? 'Products and stock' : 'Customers and accounts'}
+                  {r.definition.dataset === 'sales' ? 'Order lines' : r.definition.dataset === 'products' ? 'Products and stock' : r.definition.dataset === 'weekly_activity' ? 'Weekly activity' : 'Customers and accounts'}
                   {!r.mine && r.ownerName ? `, by ${r.ownerName}` : ''}
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>

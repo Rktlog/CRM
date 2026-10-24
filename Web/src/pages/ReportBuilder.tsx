@@ -18,6 +18,7 @@ const DEFAULT_COLUMNS: Record<string, string[]> = {
   sales: ['orderDate', 'customer', 'brand', 'sku', 'product', 'qty', 'lineTotal'],
   products: ['sku', 'name', 'brand', 'status', 'available', 'onOrder', 'eta'],
   customers: ['name', 'state', 'status', 'rep', 'spend365', 'lastOrder'],
+  weekly_activity: ['weekStart', 'rep', 'f2f', 'phone', 'email', 'quotes', 'quoteValue', 'newCustomers', 'reactivated', 'newInDear'],
 };
 
 export default function ReportBuilder() {
@@ -162,7 +163,7 @@ export default function ReportBuilder() {
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           {ds?.filters.includes('from') && (
             <>
-              <label className="modal-field">Order date from<input type="date" value={filters.from ?? ''} onChange={e => setF({ from: e.target.value || undefined })} /></label>
+              <label className="modal-field">{ds?.key === 'weekly_activity' ? 'Weeks from' : 'Order date from'}<input type="date" value={filters.from ?? ''} onChange={e => setF({ from: e.target.value || undefined })} /></label>
               <label className="modal-field">to<input type="date" value={filters.to ?? ''} onChange={e => setF({ to: e.target.value || undefined })} /></label>
             </>
           )}

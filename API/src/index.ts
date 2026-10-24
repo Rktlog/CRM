@@ -23,6 +23,7 @@ import { marketingPublicRouter } from './routes/marketingPublic';
 import { gmailRouter, gmailCallbackRouter, gmailCronRouter } from './routes/gmail';
 import { calendarRouter, calendarCronRouter, calendarCallbackRouter } from './routes/calendar';
 import { customReportsRouter } from './routes/customReports';
+import { repSummaryRouter } from './routes/repSummary';
 import { aiRouter } from './routes/ai';
 import { guardApp, errorHandler, keepRunning } from './lib/safeRouter';
 import { startGmailSchedule } from './sync/gmailJob';
@@ -64,6 +65,7 @@ app.use('/misc-orders', requireAuth, miscRouter);
 app.use('/products', requireAuth, productsRouter);
 app.use('/sheet-feed', sheetFeedRouter);   // read-only feeds for Google Sheets: its own secret token (SHEET_FEED_TOKEN), not a login
 app.use('/custom-reports', requireAuth, customReportsRouter);
+app.use('/rep-summary', requireAuth, repSummaryRouter);   // a rep's own weekly activity summary on Sales Data
 app.use('/orders', requireAuth, ordersRouter);
 app.use('/abandoned-carts', requireAuth, abandonedCartsRouter);
 app.use('/credit', requireAuth, creditRouter);

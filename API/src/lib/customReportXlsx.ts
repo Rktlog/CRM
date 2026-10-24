@@ -1,17 +1,19 @@
 import * as XLSX from 'xlsx';
 import { DATASETS, Definition, Shaped } from './customReport';
+import { ACTIVITY_TARGETS } from './weeklyActivity';
 
 // A custom report as an Excel file: the data on one sheet, and a second sheet saying exactly what was asked for,
 // so the file still makes sense when someone opens it in three months.
 export function describeFilters(def: Definition): string[] {
   const f = def.filters, out: string[] = [];
-  if (f.from || f.to) out.push(`Order date ${f.from ? `from ${f.from}` : ''}${f.from && f.to ? ' ' : ''}${f.to ? `to ${f.to}` : ''}`);
+  if (f.from || f.to) out.push(`${def.dataset === 'weekly_activity' ? 'Week' : 'Order date'} ${f.from ? `from ${f.from}` : ''}${f.from && f.to ? ' ' : ''}${f.to ? `to ${f.to}` : ''}`);
   if (f.brands?.length) out.push(`Brand: ${f.brands.join(', ')}`);
   if (f.states?.length) out.push(`State: ${f.states.join(', ')}`);
   if (f.categories?.length) out.push(`Category: ${f.categories.join(', ')}`);
   if (f.statuses?.length) out.push(`Status: ${f.statuses.join(', ')}`);
   if (f.reps?.length) out.push(`Rep: ${f.reps.join(', ')}`);
   if (def.dataset === 'sales') out.push(f.realOrdersOnly === false ? 'Includes drafts, quotes and voided orders' : 'Real orders only (not drafts, quotes or voided)');
+  if (def.dataset === 'weekly_activity') out.push('Weeks run Monday to Sunday and belong to the month they start in', `Targets: ${ACTIVITY_TARGETS.f2fPerWeek}+ F2F visits and ${ACTIVITY_TARGETS.quotesPerWeek}+ sales quotes a week, ${ACTIVITY_TARGETS.newPerMonth}+ new or returning customers a month`);
   if (f.inStockOnly) out.push('In stock only');
   if (def.dataset === 'customers') out.push(f.includeArchived ? 'Includes archived accounts' : 'Archived accounts left out');
   return out.length ? out : ['None'];
