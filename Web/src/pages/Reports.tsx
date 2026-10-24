@@ -14,6 +14,7 @@ const REPORTS: { key: string; label: string; blurb: string; group: string }[] = 
   { key: 'sales-by-account', label: 'Sales by account', blurb: 'Every account, last FY vs this FY.', group: 'Sales breakdowns' },
   { key: 'full-orders', label: 'Full order list', blurb: 'Every invoice, one row each — real transaction history.', group: 'Working lists' },
   { key: 'unpaid-quotes', label: 'Unpaid quotes', blurb: 'A real follow-up worklist, ready to work through.', group: 'Working lists' },
+  { key: 'rep-summary-sheet', label: 'Rep summary sheet', blurb: "Each rep's Summary sheet, laid out exactly as the team's Summary_Rhonda sheet and as reps see it on Sales Data: budget, invoiced sales against last year, variance, quotes awaiting payment, new and reactivated stockists, the quarter table and the unpaid quotes. One tab per rep, or pick a rep above. The year is the year the financial year starts (2026 is FY 2026/27). Managers only.", group: 'Working lists' },
   { key: 'budget-vs-actual', label: 'Budget vs actual', blurb: "Every rep's quarterly target next to real invoiced totals.", group: 'Working lists' },
   { key: 'accounts', label: 'Full account list', blurb: 'Every account — contact details, region, spend, stage.', group: 'Account & team' },
   { key: 'inactive-customers', label: 'Inactive customers', blurb: 'Overdue relative to their own pace — a ready-made outreach list.', group: 'Account & team' },
@@ -62,7 +63,11 @@ export default function Reports() {
       if (isManager && repId) params.set('repId', repId);
       if (key === 'budget-vs-actual') params.set('year', String(year));
       if (key === 'rep-activity' || key === 'conversion' || key === 'marketing') params.set('days', String(days));
-      await apiDownload(`/exports/${key}?${params.toString()}`, `${key}.xlsx`);
+      if (key === 'rep-summary-sheet') {
+        const p = new URLSearchParams({ fy: String(year) });
+        if (repId) p.set('repId', repId);
+        await apiDownload(`/summary-sheet/download?${p.toString()}`, `rep-summary-FY${year}-${String(year + 1).slice(2)}.xlsx`);
+      } else await apiDownload(`/exports/${key}?${params.toString()}`, `${key}.xlsx`);
     } catch (e) {
       alert(`Download failed: ${(e as Error).message}`);
     } finally {
@@ -108,7 +113,7 @@ export default function Reports() {
           </select>
         )}
         <select value={year} onChange={e => setYear(Number(e.target.value))}>
-          {[year - 1, year, year + 1].map(y => <option key={y} value={y}>{y} (for Budget vs actual)</option>)}
+          {[year - 1, year, year + 1].map(y => <option key={y} value={y}>{y} (for Budget vs actual and the Rep summary sheet)</option>)}
         </select>
         <select value={days} onChange={e => setDays(Number(e.target.value))}>
           <option value={7}>Last 7 days</option>
@@ -134,7 +139,7 @@ export default function Reports() {
               <div className="m-row" key={r.id} style={{ gridTemplateColumns: '1.4fr 2fr 0.9fr', cursor: 'default' }}>
                 <div className="acct-name">{r.name} {r.shared && <span className="pill neutral">Shared</span>}</div>
                 <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>
-                  {r.definition.dataset === 'sales' ? 'Order lines' : r.definition.dataset === 'products' ? 'Products and stock' : r.definition.dataset === 'weekly_activity' ? 'Weekly activity' : 'Customers and accounts'}
+                  {r.definition.dataset === 'sales' ? 'Order lines' : r.definition.dataset === 'products' ? 'Products and stock' : 'Customers and accounts'}
                   {!r.mine && r.ownerName ? `, by ${r.ownerName}` : ''}
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
@@ -172,7 +177,7 @@ export default function Reports() {
         <div className="section" key={group}>
           <div className="panel-title">{group}</div>
           <div className="manifest">
-            {REPORTS.filter(r => r.group === group && (isManager || !['marketing', 'eol', 'hidden-accounts'].includes(r.key))).map(r => (
+            {REPORTS.filter(r => r.group === group && (isManager || !['marketing', 'eol', 'hidden-accounts', 'rep-summary-sheet'].includes(r.key))).map(r => (
               <div className="m-row" key={r.key} style={{ gridTemplateColumns: '1.4fr 2fr 0.8fr', cursor: 'default' }}>
                 <div className="acct-name">{r.label}</div>
                 <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>{r.blurb}</div>

@@ -13,6 +13,7 @@ import { pickCurrentOrder } from '../lib/currentOrder';
 import { todayLocal, dateInputValue, isoForDay } from '../lib/logDate';
 import AccountGmail from '../components/AccountGmail';
 import DictationTextarea from '../components/DictationTextarea';
+import RemarksThread from '../components/RemarksThread';
 
 // The council worked out from the postcode in the address (the API sends it with the account).
 const councilOf = (a: unknown): string | null => (a as { council?: string | null }).council ?? null;
@@ -290,6 +291,10 @@ export default function AccountDetail() {
           <AccountEmails accountId={account.id} />
               <AccountGmail accountId={account.id} />
  
+          <div className="card">
+            <RemarksThread kind="account" id={account.id} heading />
+          </div>
+
           <div className="card">
             <h3>Log a phone call, email, or F2F visit</h3>
             <form onSubmit={handleLog}>

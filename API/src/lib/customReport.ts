@@ -4,7 +4,6 @@ import { territoryWhere } from './territory';
 import { chooseEta, incomingFor } from './eta';
 import { listStatuses } from './productStatuses';
 import { councilReady } from './council';
-import { activitySummary, regionsOf, repNames, periodList, addDays, mondayOf, ACTIVITY_TARGETS } from './weeklyActivity';
 
 // Custom reports: pick a dataset, the columns, filters, and (optionally) how to add it up. Nothing the browser sends
 // goes into SQL as text: datasets, columns and filters are checked against the lists below, and values are parameters.
@@ -12,7 +11,7 @@ import { activitySummary, regionsOf, repNames, periodList, addDays, mondayOf, AC
 
 export type ColType = 'text' | 'number' | 'money' | 'date';
 export type Col = { key: string; label: string; type: ColType; dim?: boolean };   // dim: can be grouped by
-export type DatasetKey = 'sales' | 'products' | 'customers' | 'weekly_activity';
+export type DatasetKey = 'sales' | 'products' | 'customers';
 export type Filters = {
   from?: string; to?: string; brands?: string[]; states?: string[]; categories?: string[]; statuses?: string[]; reps?: string[];
   realOrdersOnly?: boolean; inStockOnly?: boolean; includeArchived?: boolean;
@@ -65,28 +64,6 @@ export const DATASETS: Record<DatasetKey, { label: string; blurb: string; filter
       { key: 'rrp', label: 'RRP (ex GST)', type: 'money' },
       { key: 'stockValue', label: 'Stock value at wholesale', type: 'money' },
       { key: 'photo', label: 'Photo link', type: 'text' },
-    ],
-  },
-  weekly_activity: {
-    label: 'Weekly activity',
-    blurb: `One row per rep per week (Monday to Sunday): visits, calls and emails logged, sales quotes, and new and returning customers. Targets: ${ACTIVITY_TARGETS.f2fPerWeek}+ F2F visits and ${ACTIVITY_TARGETS.quotesPerWeek}+ sales quotes a week, ${ACTIVITY_TARGETS.newPerMonth}+ new or returning customers a month. Sales figures follow each rep's states, as on Sales Data. A rep sees only their own rows.`,
-    filters: ['from', 'to', 'reps'],
-    columns: [
-      { key: 'weekStart', label: 'Week commencing', type: 'date', dim: true },
-      { key: 'month', label: 'Month (the week starts in)', type: 'text', dim: true },
-      { key: 'rep', label: 'Rep', type: 'text', dim: true },
-      { key: 'f2f', label: 'F2F visits', type: 'number' },
-      { key: 'phone', label: 'Phone calls', type: 'number' },
-      { key: 'email', label: 'Emails', type: 'number' },
-      { key: 'contacts', label: 'Total contacts', type: 'number' },
-      { key: 'quotes', label: 'Sales quotes', type: 'number' },
-      { key: 'quoteValue', label: 'Sales quote value', type: 'money' },
-      { key: 'newCustomers', label: 'New customers', type: 'number' },
-      { key: 'newValue', label: 'New customer value', type: 'money' },
-      { key: 'reactivated', label: 'Returning customers', type: 'number' },
-      { key: 'reactivatedValue', label: 'Returning customer value', type: 'money' },
-      { key: 'totalNew', label: 'New + returning', type: 'number' },
-      { key: 'newInDear', label: 'New in DEAR', type: 'number' },
     ],
   },
   customers: {
@@ -240,30 +217,6 @@ async function loadCustomers(f: Filters, rep: Rep): Promise<Row[]> {
 }
 
 // ---- Shaping: add up by group, order, keep the chosen columns ----
-// Weekly activity: a manager gets every rep (or the ones picked), anyone else only themselves. Reps with nothing in the range are left out
-// of a manager's report. With no dates it is the last 12 weeks.
-const MAX_WEEKLY_DAYS = 800;
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];   // fixed, so September is never "Sept"
-async function loadWeeklyActivity(f: Filters, rep: Rep, today: string): Promise<Row[]> {
-  const to = f.to ?? today;
-  const from = f.from ?? addDays(mondayOf(to), -77);
-  if ((Date.parse(to) - Date.parse(from)) / 86_400_000 > MAX_WEEKLY_DAYS) throw new ReportInputError('Pick a range of two years or less');
-  const names = await repNames();
-  const manager = rep.role === 'manager';
-  const wanted = manager ? [...names.entries()].filter(([, n]) => !f.reps?.length || f.reps.includes(n)) : [[rep.id, names.get(rep.id) ?? '']] as [string, string][];
-  const out: Row[] = [];
-  for (const [id, name] of wanted) {
-    const rows = await activitySummary({ repId: id, regions: await regionsOf(id), from, to, grain: 'week' });
-    if (manager && !rows.some(r => r.contacts || r.quotes || r.totalNew || r.newInDear)) continue;
-    for (const r of rows) out.push({
-      weekStart: r.period, month: `${MONTHS[Number(r.period.slice(5, 7)) - 1]} ${r.period.slice(0, 4)}`, rep: name,
-      f2f: r.f2f, phone: r.phone, email: r.email, contacts: r.contacts, quotes: r.quotes, quoteValue: r.quoteValue,
-      newCustomers: r.newCustomers, newValue: r.newValue, reactivated: r.reactivated, reactivatedValue: r.reactivatedValue, totalNew: r.totalNew, newInDear: r.newInDear,
-    });
-  }
-  return out.sort((x, y) => String(x.weekStart).localeCompare(String(y.weekStart)) || String(x.rep).localeCompare(String(y.rep)));
-}
-
 export type Shaped = { columns: Col[]; rows: Row[] };
 export function shape(def: Definition, rows: Row[]): Shaped {
   const all = DATASETS[def.dataset].columns;
@@ -304,7 +257,6 @@ export function shape(def: Definition, rows: Row[]): Shaped {
 export async function runReport(def: Definition, rep: Rep, today: string): Promise<Shaped & { total: number }> {
   const rows = def.dataset === 'sales' ? await loadSales(def.filters, rep)
     : def.dataset === 'products' ? await loadProducts(def.filters, today)
-    : def.dataset === 'weekly_activity' ? await loadWeeklyActivity(def.filters, rep, today)
     : await loadCustomers(def.filters, rep);
   if (rows.length > MAX_ROWS) throw new ReportInputError(`That is more than ${MAX_ROWS.toLocaleString('en-AU')} rows. Add a filter, or add it up by group.`);
   const s = shape(def, rows);

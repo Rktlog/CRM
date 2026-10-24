@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { apiGet } from '../lib/api';
+import { apiGet, apiPost } from '../lib/api';
 import { fmtDate } from '../lib/types';
 import { ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
 import { useMe } from '../lib/useMe';
 import LogVisitModal from '../components/LogVisitModal';
 import EditActivityModal from '../components/EditActivityModal';
+import ActivityRemarksModal from '../components/ActivityRemarksModal';
 
 // Activity log: every phone call, email and F2F visit logged against any store the person can
 // see, newest first, and a place to log a new one. (This was the F2F visit log.)
@@ -15,7 +16,9 @@ type Row = {
   type: ActivityKind; occurredAt: string; note: string; photoUrl: string | null;
   orderId?: string | null; orderNumber?: string | null;
 };
+type Summary = Record<string, { count: number; last: { author: string; body: string; at: string } }>;   // remarks on each log: how many, and the latest
 type Filter = '' | ActivityKind;
+const clip = (t: string, n: number) => { const one = t.replace(/\s+/g, ' ').trim(); return one.length > n ? `${one.slice(0, n - 1).trimEnd()}…` : one; };
 const COLS = '1.4fr 0.8fr 1fr 1fr 2fr 0.7fr 0.4fr';
 
 export default function ActivityLog() {
@@ -25,14 +28,21 @@ export default function ActivityLog() {
   const [error, setError] = useState<string | null>(null);
   const [logging, setLogging] = useState(false);
   const [editing, setEditing] = useState<Row | null>(null);
+  const [remarking, setRemarking] = useState<Row | null>(null);   // the log whose remarks are open
+  const [summary, setSummary] = useState<Summary>({});
   const me = useMe();
   // The rep who logged it, or a manager, can edit it (the API checks this too).
   const canEdit = (r: Row) => !!me && (me.role === 'manager' || r.repId === me.id);
   const navigate = useNavigate();
 
+  // How many remarks each log has, and the latest, for the logs on the page.
+  function loadSummary(list: Row[]) {
+    if (!list.length) return setSummary({});
+    apiPost('/remarks/summary', { kind: 'activity', ids: list.map(r => r.id) }).then(d => setSummary(d?.summary ?? {})).catch(() => setSummary({}));
+  }
   function load() {
     setError(null);
-    apiGet(`/activity${type ? `?type=${type}` : ''}`).then(setRows).catch(e => setError(e.message));
+    apiGet(`/activity${type ? `?type=${type}` : ''}`).then((list: Row[]) => { setRows(list); loadSummary(list); }).catch(e => setError(e.message));
   }
   useEffect(() => { setRows(null); load(); }, [type]);
 
@@ -84,6 +94,10 @@ export default function ActivityLog() {
               <div style={{ color: 'var(--ink-soft)' }}>
                 {v.orderNumber && v.orderId && <div><Link to={`/orders/${v.orderId}`} className="order-link" onClick={e => e.stopPropagation()}>On order {v.orderNumber}</Link></div>}
                 {v.note}
+                <div style={{ marginTop: summary[v.id] ? 6 : 4 }}>
+                  {summary[v.id] && <div style={{ fontSize: 12.5, fontStyle: 'italic', color: 'var(--muted)' }}>{summary[v.id].last.author}: {clip(summary[v.id].last.body, 100)}</div>}
+                  <button className="edit-link" onClick={e => { e.stopPropagation(); setRemarking(v); }}>{summary[v.id] ? `Remarks (${summary[v.id].count})` : 'Add remark'}</button>
+                </div>
               </div>
               <div>
                 {v.type !== 'visit' ? <span className="acct-region">—</span>
@@ -107,6 +121,10 @@ export default function ActivityLog() {
 
       {editing && (
         <EditActivityModal activity={editing} onSaved={load} onClose={() => setEditing(null)} />
+      )}
+
+      {remarking && (
+        <ActivityRemarksModal activity={remarking} onChanged={() => loadSummary(rows ?? [])} onClose={() => setRemarking(null)} />
       )}
 
       {logging && (

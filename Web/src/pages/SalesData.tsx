@@ -6,7 +6,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 
 import { apiGet } from '../lib/api';
 import { fmtMoney } from '../lib/types';
 import SalesComparisonCard from '../components/SalesComparisonCard';
-import WeeklyActivitySummary from '../components/WeeklyActivitySummary';
+import SummarySheet from '../components/SummarySheet';
 
 type Quarter = {
   quarter: string; months: string[]; budget: number; pctToBudget: number | null;
@@ -199,6 +199,9 @@ export default function SalesData() {
 
           <hr className="ledger-rule" />
 
+          {/* A rep's own Summary sheet, laid out exactly as the team's Summary_Rhonda sheet. Not for managers: they download it for every rep from Reports. */}
+          {me?.role === 'rep' && (<><SummarySheet fy={period === 'fiscal' ? year : (new Date().getMonth() >= 6 ? new Date().getFullYear() : new Date().getFullYear() - 1)} /><hr className="ledger-rule" /></>)}
+
           <div className="ledger-section-head"><h2>Compare periods</h2></div>
           <div className="ledger-chart">
             <SalesComparisonCard region={activeGroup?.regions?.join(',')} />
@@ -261,9 +264,6 @@ export default function SalesData() {
           </div>
 
           <hr className="ledger-rule" />
-
-          {/* A rep's own weekly activity against the team's targets. Not for managers: they download it for every rep from Reports. */}
-          {me?.role === 'rep' && (<><WeeklyActivitySummary /><hr className="ledger-rule" /></>)}
 
           <div className="ledger-section-head">
             <h2>Unpaid quotes to chase</h2>
