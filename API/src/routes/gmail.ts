@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { canSeeAccount } from '../lib/territory';
-import { authUrl, exchangeCode, getProfile, revoke, gmailConfigured, missingSetup } from '../lib/gmail/google';
+import { authUrl, exchangeCode, getProfile, revoke, gmailConfigured, missingSetup, canDraft, cleanAddress, createDraft, draftLink, accessTokenFrom, GoogleApiError } from '../lib/gmail/google';
 import { decrypt, encrypt, signState, verifyState } from '../lib/gmail/crypto';
 import { syncRep } from '../lib/gmail/sync';
 import { runGmailJob, gmailJobRunning } from '../sync/gmailJob';
@@ -19,18 +19,60 @@ const uuid = (v: unknown) => typeof v === 'string' && /^[0-9a-f-]{36}$/i.test(v)
 // GET /gmail/status -> the signed-in rep's connection. Never includes any token.
 gmailRouter.get('/status', async (req, res) => {
   const [c] = await prisma.$queryRaw<any[]>`
-    select c.email, c.status, c.last_error as "lastError", c.connected_at as "connectedAt", c.last_sync_at as "lastSyncAt", c.logging_enabled as "loggingEnabled",
+    select c.email, c.status, c.scope, c.last_error as "lastError", c.connected_at as "connectedAt", c.last_sync_at as "lastSyncAt", c.logging_enabled as "loggingEnabled",
            c.save_preview as "savePreview", (select count(*)::int from crm.email_log l where l.rep_id = c.rep_id) as "emailsLogged"
     from crm.gmail_connections c where c.rep_id = ${req.rep!.id}::uuid`;
   const configured = gmailConfigured();
   res.json({ configured, missing: configured ? [] : missingSetup(), connected: !!c, email: c?.email ?? null, status: c?.status ?? null, error: c?.lastError ?? null,
-             connectedAt: c?.connectedAt ?? null, lastSyncAt: c?.lastSyncAt ?? null, loggingEnabled: c?.loggingEnabled ?? true, savePreview: c?.savePreview ?? true, emailsLogged: c?.emailsLogged ?? 0 });
+             connectedAt: c?.connectedAt ?? null, lastSyncAt: c?.lastSyncAt ?? null, loggingEnabled: c?.loggingEnabled ?? true, savePreview: c?.savePreview ?? true, emailsLogged: c?.emailsLogged ?? 0,
+             canDraft: canDraft(c?.scope) });
 });
 
-// GET /gmail/connect -> { url }: where to send the rep to approve access on Google's own page.
+// GET /gmail/connect -> { url }: where to send the rep to approve access on Google's own page. ?drafts=1 also asks for permission to
+// create drafts (it is separate, so reps who do not want drafts are never asked).
 gmailRouter.get('/connect', async (req, res) => {
   if (!gmailConfigured()) return res.status(400).json({ error: 'Gmail is not set up on the server yet', missing: missingSetup() });
-  res.json({ url: authUrl(signState(req.rep!.id), await repEmail(req.rep!.id)) });
+  res.json({ url: authUrl(signState(req.rep!.id), await repEmail(req.rep!.id), req.query.drafts === '1') });
+});
+
+// POST /gmail/draft { to, cc?, subject, body, accountId? } -> { ok, id, link }: puts an email in the rep's own Gmail Drafts. It is never
+// sent from the CRM; the rep opens it in Gmail, checks it and sends it themselves. Needs Gmail connected with drafts allowed.
+const draftTimes = new Map<string, number[]>();
+const DRAFTS_PER_HOUR = 30;
+function addresses(v: unknown): { list: string[]; bad: boolean } {
+  const parts = Array.isArray(v) ? v : typeof v === 'string' ? v.split(/[,;]/) : [];
+  const list: string[] = []; let bad = false;
+  for (const p of parts) { if (typeof p === 'string' && !p.trim()) continue; const a = cleanAddress(p); if (a) list.push(a); else bad = true; }
+  return { list, bad };
+}
+gmailRouter.post('/draft', async (req, res) => {
+  const b = req.body ?? {};
+  const to = addresses(b.to), cc = addresses(b.cc);
+  if (!to.list.length || to.bad || cc.bad) return res.status(400).json({ error: 'Check the email addresses. Use plain addresses like name@shop.com.au, separated by commas.' });
+  if (to.list.length + cc.list.length > 10) return res.status(400).json({ error: 'That is more than 10 people. Draft it to fewer.' });
+  const subject = typeof b.subject === 'string' ? b.subject.trim() : '', body = typeof b.body === 'string' ? b.body : '';
+  if (!subject || /[\r\n]/.test(subject) || subject.length > 300) return res.status(400).json({ error: 'Write a subject (one line, up to 300 characters).' });
+  if (!body.trim() || body.length > 20_000) return res.status(400).json({ error: 'Write the email (up to 20,000 characters).' });
+  if (b.accountId != null) {
+    if (!uuid(b.accountId)) return res.status(400).json({ error: 'Bad account' });
+    const [a] = await prisma.$queryRaw<any[]>`select id, region from crm.accounts where id = ${b.accountId}::uuid`;
+    if (!a) return res.status(404).json({ error: 'Account not found' });
+    if (!(await canSeeAccount(req.rep!, a as any))) return res.status(403).json({ error: 'This account is outside your states' });
+  }
+  const now = Date.now(), recent = (draftTimes.get(req.rep!.id) ?? []).filter(t => now - t < 3_600_000);
+  if (recent.length >= DRAFTS_PER_HOUR) return res.status(429).json({ error: `That is ${DRAFTS_PER_HOUR} drafts in the last hour. Try again later.` });
+  const [c] = await prisma.$queryRaw<{ email: string; refresh_token_enc: string; scope: string | null; status: string }[]>`select email, refresh_token_enc, scope, status from crm.gmail_connections where rep_id = ${req.rep!.id}::uuid`;
+  if (!c) return res.status(400).json({ error: 'Connect Gmail first (Settings).', needsConnect: true });
+  if (!canDraft(c.scope)) return res.status(409).json({ error: 'Drafts are not allowed yet. Press Allow drafts and tick the box on Google\'s page.', needsDrafts: true });
+  try {
+    const d = await createDraft(await accessTokenFrom(decrypt(c.refresh_token_enc)), { to: to.list, cc: cc.list, subject, body });
+    draftTimes.set(req.rep!.id, [...recent, now]);
+    res.json({ ok: true, id: d.id, link: d.messageId ? draftLink(c.email, d.messageId) : null });
+  } catch (e) {
+    if (e instanceof GoogleApiError && (e.status === 401 || e.status === 403 || e.reason === 'invalid_grant')) return res.status(409).json({ error: 'Google would not allow it. Press Allow drafts to connect again, and tick the box.', needsDrafts: true });
+    console.error('gmail draft failed', (e as Error).message);
+    res.status(502).json({ error: 'Could not create the draft just now. Try again in a minute.' });
+  }
 });
 
 // PATCH /gmail/settings { loggingEnabled?, savePreview? }
@@ -125,7 +167,7 @@ gmailCallbackRouter.get('/', async (req, res) => {
       on conflict (rep_id) do update set email = excluded.email, refresh_token_enc = excluded.refresh_token_enc, scope = excluded.scope,
         status = 'ok', last_error = null, connected_at = now(), updated_at = now()`;   // reconnecting keeps their pause and preview choices
     void syncRep(st.repId).catch(e => console.error('gmail first sync failed', e));
-    return back('connected');
+    return back(canDraft(tok.scope) ? 'connected&drafts=1' : 'connected');   // drafts=1: they also allowed drafts
   } catch (e) {
     console.error('gmail callback failed', e);
     return back('error&reason=failed');

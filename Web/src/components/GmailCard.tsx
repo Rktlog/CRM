@@ -5,10 +5,11 @@ import { useAuth } from '../context/AuthContext';
 import { fmtDate } from '../lib/types';
 
 // Settings: connect MY Gmail so emails to and from customers are logged on their accounts.
-// Read only, and only the emails with an address already in the CRM. Never the message itself.
+// Read only, and only the emails with an address already in the CRM. Never the message itself. Drafts are a separate, optional
+// permission: the CRM can put a draft in my Drafts folder when I ask, and never sends anything.
 type Status = {
   configured: boolean; missing: string[]; connected: boolean; email: string | null; status: 'ok' | 'needs_reconnect' | 'error' | null; error: string | null;
-  connectedAt: string | null; lastSyncAt: string | null; loggingEnabled: boolean; savePreview: boolean; emailsLogged: number;
+  connectedAt: string | null; lastSyncAt: string | null; loggingEnabled: boolean; savePreview: boolean; emailsLogged: number; canDraft?: boolean;
 };
 type Teammate = { name: string; email: string; status: string; error: string | null; lastSyncAt: string | null; loggingEnabled: boolean; emailsLogged: number };
 
@@ -51,10 +52,11 @@ export default function GmailCard({ go = (url: string) => window.location.assign
   // Coming back from Google: say what happened, then tidy the address.
   useEffect(() => {
     const g = params.get('gmail'); if (!g) return;
+    const drafts = params.get('drafts') === '1';
     setMsg(g === 'connected'
-      ? { ok: true, text: 'Gmail is connected. It is looking through your last 30 days of email now. Emails with customers will appear on their accounts in a minute or two.' }
+      ? { ok: true, text: drafts ? 'Gmail is connected, and drafts are allowed. Use Draft email on a customer\'s account to put a draft in your Gmail.' : 'Gmail is connected. It is looking through your last 30 days of email now. Emails with customers will appear on their accounts in a minute or two.' }
       : { ok: false, text: REASONS[params.get('reason') ?? ''] ?? REASONS.failed });
-    const next = new URLSearchParams(params); next.delete('gmail'); next.delete('reason'); setParams(next, { replace: true });
+    const next = new URLSearchParams(params); next.delete('gmail'); next.delete('reason'); next.delete('drafts'); setParams(next, { replace: true });
   }, []);
 
   async function run(label: string, fn: () => Promise<void>) {
@@ -62,6 +64,7 @@ export default function GmailCard({ go = (url: string) => window.location.assign
     try { await fn(); } catch (e: any) { setMsg({ ok: false, text: e.message }); } finally { setBusy(null); load(); }
   }
   const connect = () => run('connect', async () => { const r = await apiGet('/gmail/connect'); go(r.url); });
+  const allowDrafts = () => run('drafts', async () => { const r = await apiGet('/gmail/connect?drafts=1'); go(r.url); });
   const syncNow = () => run('sync', async () => {
     const r = await apiPost('/gmail/sync', {});
     setMsg(r.status === 'ok' ? { ok: true, text: `Checked. ${r.saved === 1 ? '1 new email' : `${r.saved} new emails`} logged${r.removed ? `, ${r.removed === 1 ? '1 email' : `${r.removed} emails`} removed because you marked ${r.removed === 1 ? 'it' : 'them'} Private` : ''}${r.failed ? `, ${r.failed} could not be saved and ${r.failed === 1 ? 'was' : 'were'} skipped` : ''}${r.remaining ? `, ${r.remaining} more still to look through` : ''}.` }
@@ -121,6 +124,15 @@ export default function GmailCard({ go = (url: string) => window.location.assign
             <span><b>Keep a short preview of each email</b></span>
           </label>
           <div className="acct-region" style={{ margin: '0 0 10px 24px' }}>The first line or two, so the account page shows what it was about. Off keeps only the subject.</div>
+          <div style={{ margin: '0 0 12px', padding: '10px 12px', background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: 6, maxWidth: 640 }}>
+            <div style={{ marginBottom: 4 }}><b>Email drafts</b> {status.canDraft ? <span className="pill teal">Allowed</span> : <span className="pill neutral">Off</span>}</div>
+            <div className="acct-region" style={{ marginBottom: status.canDraft ? 0 : 8 }}>
+              {status.canDraft
+                ? 'On a customer\'s account, Draft email puts an email in your Gmail Drafts. The CRM never sends anything: you check each draft and send it yourself.'
+                : 'Optional. Allow drafts so Draft email, on a customer\'s account, can put an email in your Gmail Drafts. The CRM only creates drafts and never sends. Google will ask you to tick one more box.'}
+            </div>
+            {!status.canDraft && <button className="btn secondary" disabled={!!busy || problem} onClick={allowDrafts}>{busy === 'drafts' ? 'Opening Google…' : 'Allow drafts'}</button>}
+          </div>
           <div className="acct-region" style={{ margin: '0 0 12px', maxWidth: 640 }}>
             <b>Keep an email out.</b> In Gmail, make a label called <b>Private</b> and put it on the email, or on the whole conversation. It is never saved here,
             and if it was saved before it is removed the next time the CRM checks (within about 15 minutes). Nobody else can see which emails you marked.

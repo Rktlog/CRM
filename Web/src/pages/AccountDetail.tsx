@@ -12,6 +12,7 @@ import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fm
 import { pickCurrentOrder } from '../lib/currentOrder';
 import { todayLocal, dateInputValue, isoForDay } from '../lib/logDate';
 import AccountGmail from '../components/AccountGmail';
+import DraftEmailButton from '../components/DraftEmailButton';
 import DictationTextarea from '../components/DictationTextarea';
 
 // The council worked out from the postcode in the address (the API sends it with the account).
@@ -288,6 +289,7 @@ export default function AccountDetail() {
           {/* Credit and reservations: what the team has set aside, on both accounts */}
           <CreditReservations accountId={account.id} accountName={account.name} />
           <AccountEmails accountId={account.id} />
+              <DraftEmailButton accountId={account.id} accountName={account.name} defaultTo={account.email} />
               <AccountGmail accountId={account.id} />
  
           <div className="card">

@@ -31,6 +31,7 @@ import MarketingAudience from './pages/MarketingAudience';
 import MarketingTemplates from './pages/MarketingTemplates';
 import MarketingAutomations from './pages/MarketingAutomations';
 import MarketingSettings from './pages/MarketingSettings';
+import Assistant from './pages/Assistant';
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { session, loading } = useAuth();
@@ -81,8 +82,11 @@ function Routed() {
         <Route path="credit" element={<Credit />} />
         <Route path="settings" element={<Settings />} />
         <Route path="activity" element={<ActivityLog />} />
+        <Route path="assistant" element={<Assistant />} />
         {/* the old address for this page */}
         <Route path="visits" element={<Navigate to="/activity" replace />} />
+        {/* an address that does not exist: say so, with the menu still there, instead of a blank page */}
+        <Route path="*" element={<div className="empty-state">That page does not exist. Pick something from the menu.</div>} />
       </Route>
     </Routes>
   );

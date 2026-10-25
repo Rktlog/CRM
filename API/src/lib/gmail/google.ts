@@ -11,6 +11,13 @@ export class GoogleApiError extends Error {
 // Read-only access to the rep's own mailbox, plus their email address.
 export const SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'openid', 'email'];
 
+// Drafts are opt-in: a rep who presses "Allow drafts" also gives the compose permission. Gmail has no "drafts only" permission, so
+// compose is the smallest one that works, and it also lets an app send. This CRM only ever calls the create-draft endpoint and
+// never sends (a test checks that nothing but that one call is made). A rep who does not allow drafts stays read-only.
+export const COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
+export const SCOPES_WITH_DRAFTS = [...SCOPES, COMPOSE_SCOPE];
+export const canDraft = (scope: string | null | undefined): boolean => String(scope ?? '').split(/\s+/).includes(COMPOSE_SCOPE);
+
 // The company's Google sign-in (one client for everything), and where Google sends people back to for each feature.
 const apiBase = () => (process.env.PUBLIC_API_URL ?? '').replace(/\/+$/, '');
 function clientCreds(): { clientId: string; clientSecret: string } | null {
@@ -56,9 +63,9 @@ export function authUrlFor(o: { scopes: string[]; redirectUri: string; state: st
   if (hd) p.set('hd', hd);
   return `https://accounts.google.com/o/oauth2/v2/auth?${p}`;
 }
-export function authUrl(state: string, loginHint?: string | null): string {
+export function authUrl(state: string, loginHint?: string | null, drafts = false): string {
   const c = oauthConfig(); if (!c) throw new Error('Gmail is not set up on the server yet');
-  return authUrlFor({ scopes: SCOPES, redirectUri: c.redirectUri, state, loginHint });
+  return authUrlFor({ scopes: drafts ? SCOPES_WITH_DRAFTS : SCOPES, redirectUri: c.redirectUri, state, loginHint });
 }
 
 async function parse(res: Response) {
@@ -107,6 +114,39 @@ const auth = (t: string) => ({ headers: { Authorization: `Bearer ${t}` } });
 export async function getProfile(accessToken: string): Promise<{ emailAddress: string }> {
   return parse(await fetchImpl(`${API}/profile`, auth(accessToken)));
 }
+// ---- Drafts: put an email in the rep's own Drafts folder. It is never sent from here. ----
+export type DraftInput = { to: string[]; cc?: string[]; subject: string; body: string };
+const ADDRESS = /^[^\s<>@,;"()\[\]\\]+@[^\s<>@,;"()\[\]\\]+\.[^\s<>@,;"()\[\]\\]+$/;
+// One address, or null if it is not a plain address (no names, no line breaks, nothing that could add a header).
+export const cleanAddress = (s: unknown): string | null => { const t = typeof s === 'string' ? s.trim() : ''; return t.length <= 254 && ADDRESS.test(t) ? t : null; };
+const b64 = (b: Buffer) => b.toString('base64');
+const b64url = (b: Buffer) => b64(b).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+// A subject with anything but plain letters is written the way email requires, in short pieces so no line is too long.
+function encodeSubject(subject: string): string {
+  if (/^[\x20-\x7e]*$/.test(subject)) return subject;
+  const parts: string[] = []; let cur = '';
+  for (const ch of Array.from(subject)) { if (Buffer.byteLength(cur + ch) > 42) { parts.push(cur); cur = ''; } cur += ch; }
+  if (cur) parts.push(cur);
+  return parts.map(p => `=?UTF-8?B?${b64(Buffer.from(p, 'utf8'))}?=`).join('\r\n ');
+}
+// The whole email, ready for Gmail (base64url). Refuses anything with a line break in a header.
+export function buildRawMessage(m: DraftInput): string {
+  const to = m.to.map(cleanAddress), cc = (m.cc ?? []).map(cleanAddress);
+  if (!to.length || to.some(a => !a) || cc.some(a => !a)) throw new Error('Check the email addresses');
+  if (/[\r\n]/.test(m.subject)) throw new Error('The subject cannot have a line break');
+  const body = m.body.replace(/\r\n|\r|\n/g, '\r\n');
+  const wrapped = (b64(Buffer.from(body, 'utf8')).match(/.{1,76}/g) ?? []).join('\r\n');
+  const head = [`To: ${to.join(', ')}`, ...(cc.length ? [`Cc: ${cc.join(', ')}`] : []), `Subject: ${encodeSubject(m.subject)}`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64'];
+  return b64url(Buffer.from(head.join('\r\n') + '\r\n\r\n' + wrapped + '\r\n', 'utf8'));
+}
+// The ONLY call this app makes to write to Gmail: create a draft. There is no send anywhere in the CRM.
+export async function createDraft(accessToken: string, m: DraftInput): Promise<{ id: string; messageId: string; threadId: string }> {
+  const b = await parse(await fetchImpl(`${API}/drafts`, { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ message: { raw: buildRawMessage(m) } }) }));
+  return { id: String(b.id ?? ''), messageId: String(b.message?.id ?? ''), threadId: String(b.message?.threadId ?? '') };
+}
+// Opens the draft in the mailbox it is in.
+export const draftLink = (email: string, messageId: string) => `https://mail.google.com/mail/?authuser=${encodeURIComponent(email)}#drafts?compose=${encodeURIComponent(messageId)}`;
+
 // Ids of the messages matching a Gmail search, newest first.
 export async function listMessageIds(accessToken: string, q: string, maxPages = 20): Promise<string[]> {
   const ids: string[] = []; let pageToken = '';
