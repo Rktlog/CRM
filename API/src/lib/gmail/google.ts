@@ -191,3 +191,28 @@ export async function getMessageMeta(accessToken: string, id: string): Promise<G
     return { id: b.id, threadId: b.threadId, labelIds: b.labelIds ?? [], snippet: b.snippet ?? '', internalDate: String(b.internalDate ?? '0'), headers };
   } catch (e) { if (e instanceof GoogleApiError && e.status === 404) return null; throw e; }
 }
+
+// ---- The words of an email, for summarising. Read, handed to Claude and thrown away: never saved. ----
+type Part = { mimeType?: string; filename?: string; body?: { data?: string }; parts?: Part[] };
+const fromB64Url = (s: string) => Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+export function textFromPayload(p: Part | null | undefined): string {
+  if (!p) return '';
+  const plain: string[] = [], html: string[] = [];
+  const walk = (x: Part) => {
+    if (x.filename) return;   // an attachment, not the message
+    if (x.mimeType === 'text/plain' && x.body?.data) plain.push(fromB64Url(x.body.data));
+    else if (x.mimeType === 'text/html' && x.body?.data) html.push(fromB64Url(x.body.data));
+    for (const c of x.parts ?? []) walk(c);
+  };
+  walk(p);
+  if (plain.join('').trim()) return plain.join('\n');
+  return html.join('\n').replace(/<(style|script)[\s\S]*?<\/\1>/gi, ' ').replace(/<br\s*\/?>|<\/(p|div|tr|li|h[1-6])>/gi, '\n').replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, '&');
+}
+// null if it has been deleted since.
+export async function getMessageText(accessToken: string, id: string): Promise<string | null> {
+  try {
+    const b = await parse(await fetchImpl(`${API}/messages/${encodeURIComponent(id)}?format=full`, auth(accessToken)));
+    return textFromPayload(b.payload);
+  } catch (e) { if (e instanceof GoogleApiError && e.status === 404) return null; throw e; }
+}

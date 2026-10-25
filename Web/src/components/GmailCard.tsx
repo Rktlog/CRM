@@ -9,7 +9,7 @@ import { fmtDate } from '../lib/types';
 // permission: the CRM can put a draft in my Drafts folder when I ask, and never sends anything.
 type Status = {
   configured: boolean; missing: string[]; connected: boolean; email: string | null; status: 'ok' | 'needs_reconnect' | 'error' | null; error: string | null;
-  connectedAt: string | null; lastSyncAt: string | null; loggingEnabled: boolean; savePreview: boolean; emailsLogged: number; canDraft?: boolean;
+  connectedAt: string | null; lastSyncAt: string | null; loggingEnabled: boolean; savePreview: boolean; aiSummaries?: boolean; emailsLogged: number; canDraft?: boolean;
 };
 type Teammate = { name: string; email: string; status: string; error: string | null; lastSyncAt: string | null; loggingEnabled: boolean; emailsLogged: number };
 
@@ -75,6 +75,11 @@ export default function GmailCard({ go = (url: string) => window.location.assign
     if (!on && !window.confirm('Turn off previews? The short previews already kept will be deleted. Subjects stay.')) return;
     run('preview', async () => { await apiPatch('/gmail/settings', { savePreview: on }); setMsg({ ok: true, text: on ? 'Previews are on.' : 'Previews are off, and the ones kept have been deleted.' }); });
   };
+  const setAi = (on: boolean) => {
+    if (on && !window.confirm('Let Claude read your emails with customers so it can summarise them and match them to orders? The words of each email are sent to Claude (Anthropic) to do this. Only the one-line summary is kept, never the email. Emails you mark Private are never read. You can switch this off at any time.')) return;
+    if (!on && !window.confirm('Turn off summaries? The summaries already made will be deleted. Order numbers written in the subject stay linked.')) return;
+    run('ai', async () => { await apiPatch('/gmail/settings', { aiSummaries: on }); setMsg({ ok: true, text: on ? 'Summaries are on. New emails will be summarised over the next few minutes.' : 'Summaries are off, and the ones made have been deleted.' }); });
+  };
   const disconnect = () => run('disconnect', async () => { await apiPost('/gmail/disconnect', { deleteEmails }); setLeaving(false); setDeleteEmails(false); setMsg({ ok: true, text: deleteEmails ? 'Disconnected, and your logged emails were deleted.' : 'Disconnected. The emails already logged stay on the accounts.' }); });
 
   if (!status) return null;
@@ -98,7 +103,8 @@ export default function GmailCard({ go = (url: string) => window.location.assign
             only emails to or from an address already in the CRM: who it was between, the subject, the date and a short preview. It never keeps the
             message itself, and it ignores everything else, including newsletters. Anyone who can see that customer's account in the CRM (the team for
             that state, and managers) will see those emails' subjects and previews. You can pause it or disconnect at any time. To keep any email or
-            conversation out, give it the Gmail label <b>Private</b>: it is never saved.
+            conversation out, give it the Gmail label <b>Private</b>: it is never saved. After you connect you can also let Claude summarise each email in
+            one line and match it to the order it is about; only that summary is kept, never the email.
           </div>
           <button className="btn" disabled={!!busy} onClick={connect}>{connectLabel}</button>
         </>
@@ -124,6 +130,14 @@ export default function GmailCard({ go = (url: string) => window.location.assign
             <span><b>Keep a short preview of each email</b></span>
           </label>
           <div className="acct-region" style={{ margin: '0 0 10px 24px' }}>The first line or two, so the account page shows what it was about. Off keeps only the subject.</div>
+          <label className="pl-check" style={{ marginBottom: 2 }}>
+            <input type="checkbox" checked={!!status.aiSummaries} disabled={!!busy} onChange={e => setAi(e.target.checked)} />
+            <span><b>Summarise my emails with Claude</b></span>
+          </label>
+          <div className="acct-region" style={{ margin: '0 0 10px 24px', maxWidth: 600 }}>
+            One line for each email, and it is matched to the order it is about, so it shows on the order itself. To do this the CRM reads the email's words and sends
+            them to Claude (Anthropic). The words are not saved, only the one-line summary. Emails you mark Private are never read. Off deletes the summaries already made.
+          </div>
           <div style={{ margin: '0 0 12px', padding: '10px 12px', background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: 6, maxWidth: 640 }}>
             <div style={{ marginBottom: 4 }}><b>Email drafts</b> {status.canDraft ? <span className="pill teal">Allowed</span> : <span className="pill neutral">Off</span>}</div>
             <div className="acct-region" style={{ marginBottom: status.canDraft ? 0 : 8 }}>

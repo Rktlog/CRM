@@ -20,11 +20,11 @@ const uuid = (v: unknown) => typeof v === 'string' && /^[0-9a-f-]{36}$/i.test(v)
 gmailRouter.get('/status', async (req, res) => {
   const [c] = await prisma.$queryRaw<any[]>`
     select c.email, c.status, c.scope, c.last_error as "lastError", c.connected_at as "connectedAt", c.last_sync_at as "lastSyncAt", c.logging_enabled as "loggingEnabled",
-           c.save_preview as "savePreview", (select count(*)::int from crm.email_log l where l.rep_id = c.rep_id) as "emailsLogged"
+           c.save_preview as "savePreview", c.ai_summaries as "aiSummaries", (select count(*)::int from crm.email_log l where l.rep_id = c.rep_id) as "emailsLogged"
     from crm.gmail_connections c where c.rep_id = ${req.rep!.id}::uuid`;
   const configured = gmailConfigured();
   res.json({ configured, missing: configured ? [] : missingSetup(), connected: !!c, email: c?.email ?? null, status: c?.status ?? null, error: c?.lastError ?? null,
-             connectedAt: c?.connectedAt ?? null, lastSyncAt: c?.lastSyncAt ?? null, loggingEnabled: c?.loggingEnabled ?? true, savePreview: c?.savePreview ?? true, emailsLogged: c?.emailsLogged ?? 0,
+             connectedAt: c?.connectedAt ?? null, lastSyncAt: c?.lastSyncAt ?? null, loggingEnabled: c?.loggingEnabled ?? true, savePreview: c?.savePreview ?? true, aiSummaries: c?.aiSummaries ?? false, emailsLogged: c?.emailsLogged ?? 0,
              canDraft: canDraft(c?.scope) });
 });
 
@@ -75,7 +75,7 @@ gmailRouter.post('/draft', async (req, res) => {
   }
 });
 
-// PATCH /gmail/settings { loggingEnabled?, savePreview? }
+// PATCH /gmail/settings { loggingEnabled?, savePreview?, aiSummaries? }
 gmailRouter.patch('/settings', async (req, res) => {
   const b = req.body ?? {};
   const [c] = await prisma.$queryRaw<{ rep_id: string }[]>`select rep_id from crm.gmail_connections where rep_id = ${req.rep!.id}::uuid`;
@@ -85,6 +85,14 @@ gmailRouter.patch('/settings', async (req, res) => {
     await prisma.$queryRaw`update crm.gmail_connections set save_preview = ${b.savePreview}, updated_at = now() where rep_id = ${req.rep!.id}::uuid`;
     // Turning previews off also removes the ones already kept.
     if (!b.savePreview) await prisma.$queryRaw`update crm.email_log set snippet = null where rep_id = ${req.rep!.id}::uuid`;
+  }
+  if (typeof b.aiSummaries === 'boolean') {
+    await prisma.$queryRaw`update crm.gmail_connections set ai_summaries = ${b.aiSummaries}, updated_at = now() where rep_id = ${req.rep!.id}::uuid`;
+    // Turning it off removes what Claude wrote about this rep's emails. Order numbers that are written in the subject or preview stay.
+    if (!b.aiSummaries) await prisma.$queryRaw`
+      update crm.email_log set summary = null, topic = null, ai_at = null,
+        order_numbers = coalesce((select array_agg(distinct upper(m[1])) from regexp_matches(coalesce(subject, '') || ' ' || coalesce(snippet, ''), '(SQ[0-9]{4,6})', 'gi') as m), '{}')
+      where rep_id = ${req.rep!.id}::uuid`;
   }
   res.json({ ok: true });
 });
@@ -117,22 +125,19 @@ gmailRouter.get('/team', async (req, res) => {
     from crm.gmail_connections c join crm.reps r on r.id = c.rep_id order by r.name`);
 });
 
-// GET /gmail/account/:id/emails -> the emails logged on a customer, grouped into conversations
-gmailRouter.get('/account/:id/emails', async (req, res) => {
-  if (!uuid(req.params.id)) return res.status(400).json({ error: 'Bad account' });
-  const [a] = await prisma.$queryRaw<any[]>`select id, region from crm.accounts where id = ${req.params.id}::uuid`;
-  if (!a) return res.status(404).json({ error: 'Account not found' });
-  if (!(await canSeeAccount(req.rep!, a as any))) return res.status(403).json({ error: 'This account is outside your states' });
-  const rows = await prisma.$queryRaw<any[]>`
-    select l.id, l.thread_id as "threadId", l.gmail_message_id as "messageId", l.direction, l.subject, l.snippet, l.occurred_at as "occurredAt",
-           l.rep_id as "repId", coalesce(r.name, 'a teammate') as "repName", c.email as "ownerEmail"
-    from crm.email_log l left join crm.reps r on r.id = l.rep_id left join crm.gmail_connections c on c.rep_id = l.rep_id
-    where l.account_id = ${req.params.id}::uuid order by l.occurred_at desc limit 300`;
+// Emails grouped into conversations, the same way for an account and for an order.
+// Each message carries Claude's one-line summary (when there is one), its topic, and the orders it is about, with a link to each.
+async function threadsFor(rows: any[], accountId: string, meId: string) {
+  const numbers = [...new Set(rows.flatMap(r => (r.orderNumbers ?? []) as string[]))];
+  const ids = new Map<string, string>();
+  if (numbers.length) for (const q of await prisma.$queryRaw<{ id: string; number: string }[]>`select id, number from crm.quotes where account_id = ${accountId}::uuid and number = any(${numbers}::text[])`) ids.set(q.number, q.id);
   const threads = new Map<string, any>();
   for (const m of rows) {
-    const mine = m.repId === req.rep!.id;
+    const mine = m.repId === meId;
     const msg = {
-      id: m.id, direction: m.direction, occurredAt: m.occurredAt, snippet: m.snippet, repName: m.repName, mine,
+      id: m.id, direction: m.direction, occurredAt: m.occurredAt, snippet: m.snippet, summary: m.summary ?? null, topic: m.topic ?? null,
+      orders: ((m.orderNumbers ?? []) as string[]).map(n => ({ number: n, id: ids.get(n) ?? null })),
+      repName: m.repName, mine,
       // The link opens the email in the mailbox it is in, so it is only offered to the person who owns that mailbox.
       link: mine && m.ownerEmail ? `https://mail.google.com/mail/?authuser=${encodeURIComponent(m.ownerEmail)}#all/${m.messageId}` : null,
     };
@@ -140,8 +145,35 @@ gmailRouter.get('/account/:id/emails', async (req, res) => {
     t.count++; t.messages.push(msg); t.subject = String(m.subject ?? '').replace(/^\s*((re|fwd?)\s*:\s*)+/i, '').trim() || t.subject;   // ends as the oldest message's subject
     threads.set(m.threadId, t);
   }
-  const out = [...threads.values()].map(t => ({ ...t, subject: t.subject || '(no subject)', messages: t.messages.slice(0, 10) }));
-  res.json({ threads: out, total: rows.length });
+  return [...threads.values()].map(t => ({ ...t, subject: t.subject || '(no subject)', messages: t.messages.slice(0, 10) }));
+}
+
+// GET /gmail/account/:id/emails -> the emails logged on a customer, grouped into conversations
+gmailRouter.get('/account/:id/emails', async (req, res) => {
+  if (!uuid(req.params.id)) return res.status(400).json({ error: 'Bad account' });
+  const [a] = await prisma.$queryRaw<any[]>`select id, region from crm.accounts where id = ${req.params.id}::uuid`;
+  if (!a) return res.status(404).json({ error: 'Account not found' });
+  if (!(await canSeeAccount(req.rep!, a as any))) return res.status(403).json({ error: 'This account is outside your states' });
+  const rows = await prisma.$queryRaw<any[]>`
+    select l.id, l.thread_id as "threadId", l.gmail_message_id as "messageId", l.direction, l.subject, l.snippet, l.summary, l.topic, l.order_numbers as "orderNumbers", l.occurred_at as "occurredAt",
+           l.rep_id as "repId", coalesce(r.name, 'a teammate') as "repName", c.email as "ownerEmail"
+    from crm.email_log l left join crm.reps r on r.id = l.rep_id left join crm.gmail_connections c on c.rep_id = l.rep_id
+    where l.account_id = ${req.params.id}::uuid order by l.occurred_at desc limit 300`;
+  res.json({ threads: await threadsFor(rows, a.id, req.rep!.id), total: rows.length });
+});
+
+// GET /gmail/order/:id/emails -> the emails about ONE order (so they show on the order itself, not only on the customer)
+gmailRouter.get('/order/:id/emails', async (req, res) => {
+  if (!uuid(req.params.id)) return res.status(400).json({ error: 'Bad order' });
+  const [q] = await prisma.$queryRaw<any[]>`select q.id, q.number, q.account_id as "accountId", a.region from crm.quotes q join crm.accounts a on a.id = q.account_id where q.id = ${req.params.id}::uuid`;
+  if (!q) return res.status(404).json({ error: 'Order not found' });
+  if (!(await canSeeAccount(req.rep!, { id: q.accountId, region: q.region } as any))) return res.status(403).json({ error: 'This order is outside your states' });
+  const rows = await prisma.$queryRaw<any[]>`
+    select l.id, l.thread_id as "threadId", l.gmail_message_id as "messageId", l.direction, l.subject, l.snippet, l.summary, l.topic, l.order_numbers as "orderNumbers", l.occurred_at as "occurredAt",
+           l.rep_id as "repId", coalesce(r.name, 'a teammate') as "repName", c.email as "ownerEmail"
+    from crm.email_log l left join crm.reps r on r.id = l.rep_id left join crm.gmail_connections c on c.rep_id = l.rep_id
+    where l.account_id = ${q.accountId}::uuid and l.order_numbers @> array[${q.number}]::text[] order by l.occurred_at desc limit 100`;
+  res.json({ orderNumber: q.number, threads: await threadsFor(rows, q.accountId, req.rep!.id), total: rows.length });
 });
 
 // ---- Google sends the rep back here after they approve (or refuse). No login: the signed "state" says who it is. ----

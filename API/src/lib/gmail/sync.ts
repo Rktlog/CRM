@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { decrypt } from './crypto';
 import { accessTokenFrom, getMessageMeta, listMessageIds, listPrivateMessages, privateExclusion, GoogleApiError, GmailMeta } from './google';
+import { analyseRep, orderNumbersIn } from './emailAi';
 
 // Looks through a rep's mailbox and keeps ONLY the emails that are to or from a customer already in the CRM.
 // What is kept: who it was between, the subject, the date, and (if the rep allows) a ~160 character preview.
@@ -23,6 +24,7 @@ const decode = (s: string) => s.replace(/&#39;|&apos;/g, "'").replace(/&quot;/g,
 export type LogRow = {
   accountId: string; messageId: string; threadId: string; direction: 'in' | 'out'; subject: string; snippet: string | null;
   from: string; to: string[]; cc: string[]; counterparty: string; occurredAt: Date;
+  orderNumbers: string[];   // sales orders named in the subject or preview, like SQ37324
 };
 
 // Is this email one to keep, and against which account(s)? `known` maps a customer address to its account ids.
@@ -34,19 +36,22 @@ export function classify(meta: GmailMeta, me: string, known: Map<string, string[
   const from = parseAddresses(h['from'])[0];
   if (!from) return { skip: 'no sender' };
   if (h['list-unsubscribe'] || /^(bulk|list|junk)$/i.test((h['precedence'] ?? '').trim())) return { skip: 'newsletter or bulk mail' };
-  const out = from === mine;
+  // Sent from the rep's own address, or from another address they send as (an alias or the shared sales mailbox): Gmail marks both SENT.
+  const out = from === mine || labels.includes('SENT');
   const autoSub = (h['auto-submitted'] ?? '').trim().toLowerCase();
   if (!out && autoSub && autoSub !== 'no') return { skip: 'automatic reply' };
   const to = parseAddresses(h['to']), cc = parseAddresses(h['cc']);
-  const people = out ? [...to, ...cc].filter(a => a !== mine) : [from];
+  const people = out ? [...to, ...cc].filter(a => a !== mine && a !== from) : [from];
   const matches = new Map<string, string>();   // account id -> the address it matched on
   for (const a of people) for (const acc of known.get(a) ?? []) if (!matches.has(acc)) matches.set(acc, a);
   if (!matches.size) return { skip: 'not a customer' };
   const snippet = savePreview ? cut(cleanText(decode(meta.snippet ?? '').trim()), 160) || null : null;
+  // Order numbers are kept even when previews are off: only the numbers, never the words.
+  const orderNumbers = orderNumbersIn(h['subject'], decode(meta.snippet ?? ''));
   const when = new Date(Number(meta.internalDate));
   return { rows: [...matches].map(([accountId, counterparty]) => ({
     accountId, messageId: meta.id, threadId: meta.threadId, direction: out ? 'out' as const : 'in' as const,
-    subject: cut(cleanText((h['subject'] ?? '').trim()), 300), snippet, from, to, cc, counterparty, occurredAt: Number.isNaN(when.getTime()) ? new Date() : when,
+    subject: cut(cleanText((h['subject'] ?? '').trim()), 300), snippet, from, to, cc, counterparty, occurredAt: Number.isNaN(when.getTime()) ? new Date() : when, orderNumbers,
   })) };
 }
 
@@ -74,6 +79,7 @@ export type SyncResult = {
   rep: string; listed: number; newMessages: number; saved: number; skipped: number; remaining: number; removed: number;
   status: 'ok' | 'needs_reconnect' | 'error' | 'paused' | 'skipped'; error?: string;
   failed?: number; failure?: string;   // emails that could not be saved (and were skipped), and the reason for the first
+  analysed?: number;                   // emails Claude summarised on this run
 };
 
 async function finish(repId: string, status: string, error: string | null, now: Date, syncedAt: Date | null) {
@@ -98,9 +104,9 @@ type SaveResult = { saved: number; failed: number; failure: string | null };
 const SAVE_CHUNK = 50;
 const SYSTEMIC = /does not exist|permission denied|connection|timeout|timed out|too many clients|can't reach|econn|terminating|shutdown/i;   // the database, not the email
 const insertRows = async (repId: string, rows: LogRow[]): Promise<number> => {
-  const tuples = rows.map(r => Prisma.sql`(${repId}::uuid, ${r.accountId}::uuid, ${r.messageId}, ${r.threadId}, ${r.direction}, ${r.subject}, ${r.snippet}, ${r.from}, ${r.to}::text[], ${r.cc}::text[], ${r.counterparty}, ${r.occurredAt})`);
+  const tuples = rows.map(r => Prisma.sql`(${repId}::uuid, ${r.accountId}::uuid, ${r.messageId}, ${r.threadId}, ${r.direction}, ${r.subject}, ${r.snippet}, ${r.from}, ${r.to}::text[], ${r.cc}::text[], ${r.counterparty}, ${r.occurredAt}, ${r.orderNumbers ?? []}::text[])`);
   const saved = await prisma.$queryRaw<{ id: string }[]>`
-    insert into crm.email_log (rep_id, account_id, gmail_message_id, thread_id, direction, subject, snippet, from_addr, to_addrs, cc_addrs, counterparty, occurred_at)
+    insert into crm.email_log (rep_id, account_id, gmail_message_id, thread_id, direction, subject, snippet, from_addr, to_addrs, cc_addrs, counterparty, occurred_at, order_numbers)
     values ${Prisma.join(tuples)} on conflict do nothing returning id`;
   return saved.length;
 };
@@ -125,7 +131,7 @@ export async function saveRows(repId: string, rows: LogRow[], insert: (repId: st
 export async function syncRep(repId: string, opts: { now?: Date; maxNew?: number; backfillDays?: number } = {}): Promise<SyncResult> {
   const now = opts.now ?? new Date(), maxNew = opts.maxNew ?? 150, backfill = opts.backfillDays ?? (Number(process.env.GMAIL_BACKFILL_DAYS) || 30);
   const [c] = await prisma.$queryRaw<any[]>`
-    select c.email, c.refresh_token_enc, c.logging_enabled, c.save_preview, c.last_sync_at, r.name
+    select c.email, c.refresh_token_enc, c.logging_enabled, c.save_preview, c.ai_summaries, c.last_sync_at, r.name
     from crm.gmail_connections c join crm.reps r on r.id = c.rep_id where c.rep_id = ${repId}::uuid`;
   const res: SyncResult = { rep: c?.name ?? '', listed: 0, newMessages: 0, saved: 0, skipped: 0, remaining: 0, removed: 0, status: 'skipped' };
   if (!c) return res;
@@ -190,6 +196,8 @@ export async function syncRep(repId: string, opts: { now?: Date; maxNew?: number
     return { ...res, status: x.status, error: x.message };
   }
   await finish(repId, 'ok', null, now, res.remaining === 0 ? now : null);   // a full pass is only recorded when nothing is left over
+  // Then Claude summarises a few of the new emails (only for reps who switched it on). It can never make the sync fail.
+  if (c.ai_summaries) { try { res.analysed = (await analyseRep(repId)).analysed; } catch (e) { console.error('email summaries failed:', String((e as Error)?.message ?? e).slice(0, 200)); } }
   return { ...res, status: 'ok' };
 }
 
