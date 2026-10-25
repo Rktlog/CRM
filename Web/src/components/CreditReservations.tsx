@@ -21,7 +21,9 @@ type Note = {
   creditNo: string; date: string | null; orderNo: string; total: number; onAccount: number;
   reservedAmount: number; reservedFor: string | null; free: number;
 };
-type Prepaid = { orderNo: string; orderId: string; status: string; cancelled: boolean; orderDate: string | null; amount: number; reserved: number; free: number; orderTotal?: number | null; leftToPay?: number | null };
+type Prepaid = { orderNo: string; orderId: string; status: string; cancelled: boolean; orderDate: string | null; amount: number; reserved: number; free: number; checkable?: number; needsCheck?: boolean; orderTotal?: number | null; leftToPay?: number | null };
+// How much of a prepayment can be put forward: what is free, or, on a completed order, what DEAR will be asked to confirm.
+const room = (p: Pick<Prepaid, 'free' | 'checkable' | 'needsCheck'>) => (p.needsCheck ? p.checkable ?? 0 : p.free);
 type Reservation = {
   id: string; name: string; amount: number; orderRef: string | null; creditNo: string | null; sourceKind?: 'credit_note' | 'prepayment'; sourceOrder?: string | null;
   usedOnOrder: string | null; note: string | null;
@@ -60,6 +62,10 @@ export default function CreditReservations({ accountId, accountName }: { account
   // Prepaid money on cancelled or finished orders is free to reserve, like a credit note.
   const prepaid = credit.prepaid ?? [];
   const freePrepaid = prepaid.filter(p => p.free > 0.005);
+  // Prepaid money still showing on a COMPLETED order: normally the order used it, but if the customer overpaid, DEAR still holds it. It is offered,
+  // not counted as free, and DEAR is asked before any of it is reserved.
+  const checkPrepaid = prepaid.filter(p => p.needsCheck && (p.checkable ?? 0) > 0.005);
+  const reservablePrepaid = [...freePrepaid, ...checkPrepaid];
   const prepaidHeld = credit.prepaidHeld ?? 0, prepaidFree = credit.prepaidFree ?? 0;
   // Nothing at all: no credit, nothing reserved, nothing held on orders.
   if (credit.creditInDear <= 0.005 && !credit.reservations.length && !withCredit.length && !prepaid.length && credit.otherCredit <= 0.005) return null;
@@ -155,6 +161,24 @@ export default function CreditReservations({ accountId, accountName }: { account
         </div>
       )}
 
+      {checkPrepaid.length > 0 && (
+        <div className="credit-list">
+          {checkPrepaid.map(p => (
+            <div className="credit-row" key={`check-${p.orderNo}`}>
+              <div>
+                <div className="acct-name">Prepaid on <Link to={`/orders/${p.orderId}`} className="order-link">{p.orderNo}</Link>{' '}
+                  <span className="acct-region">completed order{p.orderDate ? `, ${fmtDate(p.orderDate)}` : ''}</span></div>
+                <div className="acct-region">
+                  {fmtMoney(p.checkable ?? 0)} still shows as prepaid on a completed order{p.orderTotal != null ? ` (the order was ${fmtMoney(p.orderTotal)})` : ''}.
+                  If DEAR still holds it unapplied, the customer overpaid and you can reserve it for their next order. DEAR is checked first, and only what DEAR confirms can be reserved.
+                </div>
+              </div>
+              <div style={{ textAlign: 'right' }}><span className="pill neutral">Check in DEAR</span></div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {groups.length > 0 && (
         <div className="credit-list">
           {groups.map(g => g.items.length === 1
@@ -163,7 +187,7 @@ export default function CreditReservations({ accountId, accountName }: { account
         </div>
       )}
 
-      {(credit.available > 0.005 || freePrepaid.length > 0) && !formOpen && (
+      {(credit.available > 0.005 || reservablePrepaid.length > 0) && !formOpen && (
         <button className="btn secondary" style={{ marginTop: 8 }} onClick={() => setFormOpen(true)}>{credit.available > 0.005 ? 'Reserve credit' : 'Reserve prepaid money'}</button>
       )}
       {formOpen && (
@@ -172,7 +196,7 @@ export default function CreditReservations({ accountId, accountName }: { account
           accountName={accountName ?? ''}
           available={credit.available}
           options={credit.reservable}
-          prepaid={freePrepaid}
+          prepaid={reservablePrepaid}
           onDone={() => { setFormOpen(false); setRefresh(n => n + 1); }}
           onCancel={() => setFormOpen(false)}
         />
@@ -254,7 +278,7 @@ function ReservationRow({ r, accountName, onClose, nested, note }: {
 }
 
 // One thing money can be taken from: a credit note, or the prepayment held on an order.
-type Src = { key: string; kind: 'note' | 'prepaid'; creditNo?: string; prepaidOrder?: string; free: number; label: string; detail: string };
+type Src = { key: string; kind: 'note' | 'prepaid'; creditNo?: string; prepaidOrder?: string; free: number; check?: boolean; label: string; detail: string };
 const nounOf = (items: { kind: 'note' | 'prepaid' }[]) => {
   const n = items.length, notes = items.filter(i => i.kind === 'note').length;
   const w = notes === n ? ['credit note', 'credit notes'] : notes === 0 ? ['prepayment', 'prepayments'] : ['item', 'items'];
@@ -266,7 +290,7 @@ function ReserveForm({ accountId, accountName, available, options, prepaid, onDo
 }) {
   const sources: Src[] = [
     ...options.map(o => ({ key: o.creditNo, kind: 'note' as const, creditNo: o.creditNo, free: o.free, label: o.creditNo, detail: o.date ? fmtDate(o.date) : '' })),
-    ...prepaid.map(p => ({ key: `pp:${p.orderNo}`, kind: 'prepaid' as const, prepaidOrder: p.orderNo, free: p.free, label: `Prepaid on ${p.orderNo}`, detail: p.cancelled ? 'order cancelled' : `order ${nice(p.status).toLowerCase()}` })),
+    ...prepaid.map(p => ({ key: `pp:${p.orderNo}`, kind: 'prepaid' as const, prepaidOrder: p.orderNo, free: room(p), check: !!p.needsCheck, label: `Prepaid on ${p.orderNo}`, detail: p.needsCheck ? 'completed order, DEAR is checked' : p.cancelled ? 'order cancelled' : `order ${nice(p.status).toLowerCase()}` })),
   ];
   const canSeveral = sources.length >= 2;
   const [mode, setMode] = useState<'one' | 'several'>('one');
@@ -303,7 +327,7 @@ function ReserveForm({ accountId, accountName, available, options, prepaid, onDo
   // ---- one ----
   const onePre = prepaid.find(p => p.orderNo === from);
   const one = onePre ? undefined : options.find(o => o.creditNo.toUpperCase() === creditNo.trim().toUpperCase());
-  const maxOne = onePre ? onePre.free : one ? one.free : available;
+  const maxOne = onePre ? room(onePre) : one ? one.free : available;
   const n1 = Number(amount);
   const validOne = Number.isFinite(n1) && n1 > 0 && n1 <= maxOne + 0.005 && orderOk;
 
@@ -327,7 +351,7 @@ function ReserveForm({ accountId, accountName, available, options, prepaid, onDo
     setFrom(value);
     if (value) setCreditNo('');
     const p = prepaid.find(x => x.orderNo === value);
-    if (p && !amountTyped.current) setAmount(p.free.toFixed(2));   // all of it, which can be changed
+    if (p && !amountTyped.current) setAmount(room(p).toFixed(2));   // all of it, which can be changed (DEAR may confirm less on a completed order)
   }
   function tick(s: Src, on: boolean) {
     setPicked(p => {
@@ -377,7 +401,7 @@ function ReserveForm({ accountId, accountName, available, options, prepaid, onDo
               Take it from
               <select value={from} onChange={e => chooseFrom(e.target.value)} className="credit-input" aria-label="Take it from">
                 <option value="">A credit note</option>
-                {prepaid.map(p => <option key={p.orderNo} value={p.orderNo}>Prepaid on {p.orderNo} ({fmtMoney(p.free)} free, {p.cancelled ? 'cancelled' : 'finished'})</option>)}
+                {prepaid.map(p => <option key={p.orderNo} value={p.orderNo}>Prepaid on {p.orderNo} ({p.needsCheck ? `${fmtMoney(room(p))} to check in DEAR, completed order` : `${fmtMoney(p.free)} free, ${p.cancelled ? 'cancelled' : 'finished'}`})</option>)}
               </select>
             </label>
           )}
@@ -416,7 +440,7 @@ function ReserveForm({ accountId, accountName, available, options, prepaid, onDo
                     <span><b>{s.label}</b> <span className="acct-region">{s.detail}</span></span>
                   </label>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <span className="acct-region">{fmtMoney(s.free)} free</span>
+                    <span className="acct-region">{fmtMoney(s.free)} {s.check ? 'to check in DEAR' : 'free'}</span>
                     {on && (
                       <input
                         value={picked[s.key]} inputMode="decimal" className="credit-input" style={{ width: 100 }} aria-label={`Amount of ${s.label}`}
