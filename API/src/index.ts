@@ -22,6 +22,7 @@ import { marketingRouter } from './routes/marketing';
 import { marketingPublicRouter } from './routes/marketingPublic';
 import { gmailRouter, gmailCallbackRouter, gmailCronRouter } from './routes/gmail';
 import { calendarRouter, calendarCronRouter, calendarCallbackRouter } from './routes/calendar';
+import { orderingRouter } from './routes/ordering';
 import { customReportsRouter } from './routes/customReports';
 import { summarySheetRouter } from './routes/summarySheet';
 import { aiRouter } from './routes/ai';
@@ -79,6 +80,7 @@ app.use('/calendar-cron', calendarCronRouter);           // secret header, no lo
 app.use('/calendar', requireAuth, calendarRouter);       // was missing: without it every /calendar/... call was a 404
 app.use('/sync-cron', syncCronRouter);          // started by Supabase's scheduler, secret header, no login
 app.use('/ai', requireAuth, aiRouter);
+app.use('/ordering', requireAuth, orderingRouter);   // the Ordering page (managers): what to order, from the database
 
 guardApp(app);          // from here every route hands its errors to Express instead of stopping the server
 app.use(errorHandler);  // and the person gets the reason as a normal error, with the CORS headers

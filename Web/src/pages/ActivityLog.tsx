@@ -7,6 +7,7 @@ import { useMe } from '../lib/useMe';
 import { activityQuery, Range, RANGE_LABEL, rangeDates } from '../lib/activityRange';
 import LogVisitModal from '../components/LogVisitModal';
 import EditActivityModal from '../components/EditActivityModal';
+import DeleteLogLink from '../components/DeleteLogLink';
 
 // Activity log: every phone call, email and F2F visit logged against any store the person can
 // see, newest first, and a place to log a new one. (This was the F2F visit log.)
@@ -17,7 +18,7 @@ type Row = {
   orderId?: string | null; orderNumber?: string | null;
 };
 type Filter = '' | ActivityKind;
-const COLS = '1.4fr 0.8fr 1fr 1fr 2fr 0.7fr 0.4fr';
+const COLS = '1.4fr 0.8fr 1fr 1fr 1.8fr 0.7fr 0.9fr';
 const CONTROL = { padding: '7px 10px', border: '1px solid var(--line)', borderRadius: 6, font: 'inherit', fontSize: 13, background: 'var(--panel)' } as const;
 
 export default function ActivityLog() {
@@ -121,7 +122,10 @@ export default function ActivityLog() {
               </div>
               <div>
                 {canEdit(v) && (
-                  <button className="edit-link" onClick={e => { e.stopPropagation(); setEditing(v); }}>Edit</button>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 10px' }}>
+                    <button className="edit-link" onClick={e => { e.stopPropagation(); setEditing(v); }}>Edit</button>
+                    <DeleteLogLink id={v.id} onDeleted={load} />
+                  </div>
                 )}
               </div>
             </div>

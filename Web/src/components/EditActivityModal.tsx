@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { apiPatch } from '../lib/api';
+import { apiDelete, apiPatch } from '../lib/api';
 import { ACTIVITY_KINDS, ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
 import { todayLocal, dateInputValue, isoForDay } from '../lib/logDate';
 import DictationTextarea from './DictationTextarea';
 
 // Edit a log that was already saved: its kind, its date and its note. Only what was changed is
-// sent. (The rep who logged it, or a manager, can edit it; the API enforces that.)
+// sent. (The rep who logged it, or a manager, can edit or delete it; the API enforces that.)
 
 type Props = {
   activity: { id: string; accountName: string; type: ActivityKind; occurredAt: string; note: string };
@@ -19,6 +19,8 @@ export default function EditActivityModal({ activity, onSaved, onClose }: Props)
   const [note, setNote] = useState(activity.note);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const today = todayLocal();
   const dayChanged = day !== dateInputValue(activity.occurredAt);
@@ -41,6 +43,21 @@ export default function EditActivityModal({ activity, onSaved, onClose }: Props)
     } catch (e: any) {
       setError(e.message);
       setSaving(false);
+    }
+  }
+
+  // Delete the log for good. Asks first; the API only allows it for the rep who logged it, or a manager.
+  async function remove() {
+    setDeleting(true);
+    setError(null);
+    try {
+      await apiDelete(`/activity/${activity.id}`);
+      onSaved();
+      onClose();
+    } catch (e: any) {
+      setError(e.message);
+      setDeleting(false);
+      setConfirming(false);
     }
   }
 
@@ -71,12 +88,23 @@ export default function EditActivityModal({ activity, onSaved, onClose }: Props)
         </label>
 
         {error && <div className="login-error" style={{ marginBottom: 10 }}>{error}</div>}
-        <div className="modal-actions" style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-          <button type="button" className="btn secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn" disabled={saving || !note.trim() || !day || future || !changed}>
-            {saving ? 'Saving…' : 'Save'}
-          </button>
-        </div>
+        {confirming ? (
+          <div role="alertdialog" aria-label="Delete this log" style={{ marginTop: 6, padding: '10px 12px', background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: 6 }}>
+            <div style={{ marginBottom: 8 }}>Delete this log? This can't be undone.</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="button" className="btn" style={{ background: 'var(--rust)' }} disabled={deleting} onClick={remove}>{deleting ? 'Deleting…' : 'Yes, delete it'}</button>
+              <button type="button" className="btn secondary" disabled={deleting} onClick={() => setConfirming(false)}>Keep it</button>
+            </div>
+          </div>
+        ) : (
+          <div className="modal-actions" style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}>
+            <button type="button" className="edit-link" style={{ marginRight: 'auto', color: 'var(--rust)' }} disabled={saving} onClick={() => setConfirming(true)}>Delete log</button>
+            <button type="button" className="btn secondary" onClick={onClose}>Cancel</button>
+            <button type="submit" className="btn" disabled={saving || !note.trim() || !day || future || !changed}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        )}
       </form>
     </div>
   );

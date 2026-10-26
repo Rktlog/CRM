@@ -4,6 +4,7 @@ import { ACTIVITY_ICON, ACTIVITY_KINDS, ACTIVITY_LABEL, ActivityKind } from '../
 import { todayLocal, dateInputValue, isoForDay } from '../lib/logDate';
 import { fmtDate } from '../lib/types';
 import EditActivityModal from './EditActivityModal';
+import DeleteLogLink from './DeleteLogLink';
 import DictationTextarea from './DictationTextarea';
 
 // The team's log for ONE order: a call, email, visit or remark about it (chasing payment, a follow-up, any comment or feedback). Everyone who can see the
@@ -82,6 +83,7 @@ export default function OrderLog({ orderId, accountId, accountName, onChange }: 
                 <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span className="num" style={{ color: 'var(--muted)' }}>{fmtDate(n.occurredAt)}</span>
                   {n.canEdit && <button className="edit-link" onClick={() => setEditing(n)}>Edit</button>}
+                  {n.canEdit && <DeleteLogLink id={n.id} onDeleted={() => { load(); onChange?.(); }} />}
                 </span>
               </div>
               <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>{n.mine ? 'You' : n.repName ?? 'Someone'}{n.edited ? ', edited' : ''}</div>

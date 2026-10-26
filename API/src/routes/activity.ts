@@ -209,3 +209,14 @@ activityRouter.patch('/:id', async (req, res) => {
 
   res.json(updated);
 });
+
+// Delete a log. Same rule as editing it: the rep who logged it, or a manager. It cannot be undone. Anything the log did to the
+// account when it was saved (moving a new lead to "approached", a follow-up date read from the note) is not undone with it.
+activityRouter.delete('/:id', async (req, res) => {
+  if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) return res.status(400).json({ error: 'Bad activity' });
+  const activity = await prisma.activity.findUnique({ where: { id: req.params.id }, select: { id: true, repId: true } });
+  if (!activity) return res.status(404).json({ error: 'Activity not found' });
+  if (req.rep!.role !== 'manager' && activity.repId !== req.rep!.id) return res.status(403).json({ error: 'You can only delete your own logged activity' });
+  await prisma.activity.delete({ where: { id: activity.id } });
+  res.json({ ok: true });
+});

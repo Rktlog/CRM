@@ -14,12 +14,16 @@ import { todayLocal, dateInputValue, isoForDay } from '../lib/logDate';
 import AccountGmail from '../components/AccountGmail';
 import DraftEmailButton from '../components/DraftEmailButton';
 import DictationTextarea from '../components/DictationTextarea';
+import DeleteLogLink from '../components/DeleteLogLink';
 
 // The council worked out from the postcode in the address (the API sends it with the account).
 const councilOf = (a: unknown): string | null => (a as { council?: string | null }).council ?? null;
 
 export default function AccountDetail() {
   const { id } = useParams<{ id: string }>();
+  const me = useMe();
+  // The rep who logged it, or a manager, can edit or delete a log (the API checks this too).
+  const canEditLog = (repId: string) => !!me && (me.role === 'manager' || me.id === repId);
   const [account, setAccount] = useState<AccountDetailType | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState('');
@@ -380,12 +384,17 @@ export default function AccountDetail() {
                         <span style={{ fontWeight: 500 }}>{ACTIVITY_LABEL[t.type]}</span>
                         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span className="num" style={{ color: 'var(--muted)' }}>{fmtDate(t.occurredAt)}</span>
-                          <button
-                            className="edit-link"
-                            onClick={() => { setEditingActivityId(t.id); setEditNote(t.note); setEditType(t.type); setEditDay(dateInputValue(t.occurredAt)); }}
-                          >
-                            Edit
-                          </button>
+                          {canEditLog(t.repId) && (
+                            <>
+                              <button
+                                className="edit-link"
+                                onClick={() => { setEditingActivityId(t.id); setEditNote(t.note); setEditType(t.type); setEditDay(dateInputValue(t.occurredAt)); }}
+                              >
+                                Edit
+                              </button>
+                              <DeleteLogLink id={t.id} onDeleted={load} />
+                            </>
+                          )}
                         </span>
                       </div>
                       {t.repName && <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>Logged by {t.repName}</div>}
