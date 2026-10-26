@@ -45,11 +45,14 @@ calendarRouter.get('/connect', async (req, res) => {
 calendarRouter.post('/disconnect', async (req, res) => {
   const id = req.rep!.id;
   const conn = await connectionOf(id);
-  if (!conn) return res.json({ ok: true });
-  await clearRepCalendar(id).catch(() => {});   // while their sign-in still works
-  try { await revoke(decrypt(conn.refreshTokenEnc)); } catch { /* unreadable or already gone: it is deleted below anyway */ }
-  await prisma.$queryRaw`delete from crm.calendar_connections where rep_id = ${id}::uuid`;
-  await prisma.rep.update({ where: { id }, data: { calendarSync: false, calendarError: null } });
+  if (conn) {
+    await clearRepCalendar(id).catch(() => {});   // while their sign-in still works
+    try { await revoke(decrypt(conn.refreshTokenEnc)); } catch { /* unreadable or already gone: it is deleted below anyway */ }
+    await prisma.$queryRaw`delete from crm.calendar_connections where rep_id = ${id}::uuid`;
+  }
+  // Always finish the tidy-up, even if the connection was already gone (a first attempt that stopped half way leaves the switch on).
+  // select: only what is needed, so this never depends on columns the database may not have.
+  await prisma.rep.update({ where: { id }, data: { calendarSync: false, calendarError: null }, select: { id: true } });
   dropCachedToken(id); eventCache.clear();
   res.json({ ok: true });
 });
@@ -63,7 +66,7 @@ calendarRouter.post('/enable', async (req, res) => {
     if (!conn) return res.status(400).json({ error: 'Connect Google Calendar first' });
     if (conn.status !== 'ok') return res.status(400).json({ error: 'Google Calendar needs reconnecting. Press Connect Google Calendar again.' });
   }
-  await prisma.rep.update({ where: { id: req.rep!.id }, data: { calendarSync: enabled, calendarError: null } });
+  await prisma.rep.update({ where: { id: req.rep!.id }, data: { calendarSync: enabled, calendarError: null }, select: { id: true } });
   try {
     if (enabled) return res.json({ ok: true, result: await syncRepCalendar(req.rep!.id) });
     await clearRepCalendar(req.rep!.id);
@@ -75,7 +78,7 @@ calendarRouter.post('/enable', async (req, res) => {
 
 // POST /calendar/show { enabled } -> show or hide Google events in the Planner
 calendarRouter.post('/show', async (req, res) => {
-  await prisma.rep.update({ where: { id: req.rep!.id }, data: { calendarShow: !!req.body?.enabled } });
+  await prisma.rep.update({ where: { id: req.rep!.id }, data: { calendarShow: !!req.body?.enabled }, select: { id: true } });
   eventCache.clear();
   res.json({ ok: true });
 });
