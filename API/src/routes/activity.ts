@@ -16,17 +16,40 @@ function badLogDate(iso?: string): string | null {
   return null;
 }
 
+const isDay = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v + 'T00:00:00Z')) && new Date(v + 'T00:00:00Z').toISOString().slice(0, 10) === v;
+
+// GET /activity/reps -> everyone who has logged any activity, for the rep filter on the Activity log page.
+activityRouter.get('/reps', async (_req, res) => {
+  const rows = await prisma.$queryRaw<{ id: string; name: string }[]>`select r.id, r.name from crm.reps r where exists (select 1 from crm.activity a where a.rep_id = r.id) order by r.name`;
+  res.json(rows);
+});
+
 // List activity across all accounts a rep can see, optionally
 // filtered by type — this is what the Visit log page reads, one
 // query instead of the frontend fetching every account's full
 // detail (which is what broke once the account count grew past a
 // few hundred).
+// Filters (all optional): ?type=call  ?repId=<rep>  ?from=2026-10-01&to=2026-10-31 (both days included, Melbourne time).
+// They are applied here, not on the page, because the page only ever receives the most recent 300.
 activityRouter.get('/', async (req, res) => {
   const type = req.query.type as string | undefined;
+  const repId = req.query.repId as string | undefined, from = req.query.from as string | undefined, to = req.query.to as string | undefined;
+  if (repId && !/^[0-9a-f-]{36}$/i.test(repId)) return res.status(400).json({ error: 'Bad rep' });
+  if ((from && !isDay(from)) || (to && !isDay(to))) return res.status(400).json({ error: 'Dates must look like 2026-10-31' });
+  if (from && to && to < from) return res.status(400).json({ error: 'The end date is before the start date' });
+  // A day is midnight to midnight in Melbourne, which is not always 24 hours long, so the database works the edges out.
+  let occurredAt: { gte?: Date; lt?: Date } | undefined;
+  if (from || to) {
+    const [edge] = await prisma.$queryRaw<{ start: Date | null; end: Date | null }[]>`
+      select (${from ?? null}::date::timestamp at time zone 'Australia/Melbourne') as start, ((${to ?? null}::date + 1)::timestamp at time zone 'Australia/Melbourne') as end`;
+    occurredAt = { ...(from && edge?.start ? { gte: new Date(edge.start) } : {}), ...(to && edge?.end ? { lt: new Date(edge.end) } : {}) };
+  }
 
   const activities = await prisma.activity.findMany({
     where: {
       ...(type ? { type: type as any } : {}),
+      ...(repId ? { repId } : {}),
+      ...(occurredAt ? { occurredAt } : {}),
       account: await territoryWhere(req.rep!),
     },
     include: {

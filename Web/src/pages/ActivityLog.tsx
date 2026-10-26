@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { apiGet } from '../lib/api';
 import { fmtDate } from '../lib/types';
 import { ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
 import { useMe } from '../lib/useMe';
+import { activityQuery, Range, RANGE_LABEL, rangeDates } from '../lib/activityRange';
 import LogVisitModal from '../components/LogVisitModal';
 import EditActivityModal from '../components/EditActivityModal';
 
@@ -17,10 +18,15 @@ type Row = {
 };
 type Filter = '' | ActivityKind;
 const COLS = '1.4fr 0.8fr 1fr 1fr 2fr 0.7fr 0.4fr';
+const CONTROL = { padding: '7px 10px', border: '1px solid var(--line)', borderRadius: 6, font: 'inherit', fontSize: 13, background: 'var(--panel)' } as const;
 
 export default function ActivityLog() {
   const [type, setType] = useState<Filter>('');
   const [search, setSearch] = useState('');
+  const [repId, setRepId] = useState('');
+  const [range, setRange] = useState<Range>('all');
+  const [custom, setCustom] = useState({ from: '', to: '' });
+  const [reps, setReps] = useState<{ id: string; name: string }[]>([]);
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [logging, setLogging] = useState(false);
@@ -30,11 +36,19 @@ export default function ActivityLog() {
   const canEdit = (r: Row) => !!me && (me.role === 'manager' || r.repId === me.id);
   const navigate = useNavigate();
 
+  const { from, to } = rangeDates(range, custom);
+  const backwards = !!from && !!to && to < from;          // a typed range that ends before it starts: nothing is asked of the server
+  const filtersOn = !!repId || range !== 'all';
+  const latest = useRef(0);                                // only the newest request may fill the list, never a slower older one
+
   function load() {
+    if (backwards) return;
     setError(null);
-    apiGet(`/activity${type ? `?type=${type}` : ''}`).then(setRows).catch(e => setError(e.message));
+    const mine = ++latest.current;
+    apiGet(`/activity${activityQuery({ type, repId, from, to })}`).then(r => { if (latest.current === mine) setRows(r); }).catch(e => { if (latest.current === mine) setError(e.message); });
   }
-  useEffect(() => { setRows(null); load(); }, [type]);
+  useEffect(() => { if (backwards) return; setRows(null); load(); }, [type, repId, from, to]);
+  useEffect(() => { apiGet('/activity/reps').then(setReps).catch(() => undefined); }, []);
 
   if (error) return <div className="empty-state">Couldn't load the activity log: {error}</div>;
 
@@ -57,15 +71,31 @@ export default function ActivityLog() {
         </div>
         <input
           type="search" placeholder="Search store, rep or note" value={search} onChange={e => setSearch(e.target.value)}
-          style={{ padding: '7px 10px', border: '1px solid var(--line)', borderRadius: 6, font: 'inherit', fontSize: 13, background: 'var(--panel)', minWidth: 220, flex: '1 1 220px', maxWidth: 360 }}
+          style={{ ...CONTROL, minWidth: 220, flex: '1 1 220px', maxWidth: 360 }}
         />
+        <select aria-label="Rep" value={repId} onChange={e => setRepId(e.target.value)} style={CONTROL}>
+          <option value="">All reps</option>
+          {reps.map(r => <option key={r.id} value={r.id}>{r.name}{me?.id === r.id ? ' (me)' : ''}</option>)}
+        </select>
+        <select aria-label="Date" value={range} onChange={e => setRange(e.target.value as Range)} style={CONTROL}>
+          {(Object.keys(RANGE_LABEL) as Range[]).map(k => <option key={k} value={k}>{RANGE_LABEL[k]}</option>)}
+        </select>
+        {range === 'custom' && (
+          <>
+            <input type="date" aria-label="From" value={custom.from} max={custom.to || undefined} onChange={e => setCustom(c => ({ ...c, from: e.target.value }))} style={CONTROL} />
+            <span className="acct-region">to</span>
+            <input type="date" aria-label="To" value={custom.to} min={custom.from || undefined} onChange={e => setCustom(c => ({ ...c, to: e.target.value }))} style={CONTROL} />
+          </>
+        )}
+        {filtersOn && <button className="edit-link" onClick={() => { setRepId(''); setRange('all'); setCustom({ from: '', to: '' }); }}>Clear filters</button>}
       </div>
+      {backwards && <div className="save-msg err" role="alert" style={{ marginBottom: 10 }}>The end date is before the start date.</div>}
 
       {!rows ? (
         <div className="empty-state">Loading…</div>
       ) : !shown.length ? (
         <div className="empty-state">
-          {rows.length ? 'Nothing matches your search.' : `No ${type ? ACTIVITY_LABEL[type].toLowerCase() + ' activity' : 'activity'} logged yet.`}
+          {rows.length ? 'Nothing matches your search.' : filtersOn ? 'No activity matches those filters.' : `No ${type ? ACTIVITY_LABEL[type].toLowerCase() + ' activity' : 'activity'} logged yet.`}
         </div>
       ) : (
         <div className="manifest">
