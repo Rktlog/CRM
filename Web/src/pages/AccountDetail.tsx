@@ -435,7 +435,7 @@ export default function AccountDetail() {
 
           <div className="card">
             <h3>Account</h3>
-            <div className="kv"><span className="k">Type</span><span>{account.type}</span></div>
+            <TypeRow account={account} onSaved={updated => setAccount(a => (a ? { ...a, ...updated } : a))} />
             <StateRow account={account} onSaved={updated => setAccount(a => (a ? { ...a, ...updated } : a))} />
             <div className="kv">
               <span className="k">Source</span>
@@ -689,6 +689,63 @@ function ReorderGapRow({ account, onSaved }: {
             </button>
           )}
           <span className="acct-region">Useful when several branches order through this account.</span>
+          {error && <span className="save-msg err">{error}</span>}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Type (Customer or Prospect), with a Change button for managers. A customer is kept up to date from DEAR; a prospect's details stay with the rep.
+const TYPE_LABEL = { customer: 'Customer', prospect: 'Prospect' } as const;
+function TypeRow({ account, onSaved }: { account: { id: string; type: 'prospect' | 'customer'; lastOrderAt: string | null }; onSaved: (a: any) => void }) {
+  const me = useMe();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState<'prospect' | 'customer'>(account.type);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    setSaving(true); setError(null);
+    try {
+      onSaved(await apiPatch(`/accounts/${account.id}/type`, { type: value }));
+      setEditing(false);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="kv" style={{ alignItems: 'flex-start' }}>
+      <span className="k">Type</span>
+      {!editing ? (
+        <span>
+          {TYPE_LABEL[account.type] ?? account.type}
+          {me?.role === 'manager' && (
+            <>{' '}<button className="link-btn" onClick={() => { setValue(account.type); setError(null); setEditing(true); }}>Change</button></>
+          )}
+        </span>
+      ) : (
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <select aria-label="Type" value={value} onChange={e => setValue(e.target.value as 'prospect' | 'customer')}
+              style={{ padding: '4px 6px', border: '1px solid var(--line)', borderRadius: 6 }}>
+              <option value="customer">Customer</option>
+              <option value="prospect">Prospect</option>
+            </select>
+            <button className="btn secondary" style={{ padding: '4px 10px', fontSize: 12 }} disabled={saving || value === account.type} onClick={save}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+            <button className="link-btn" onClick={() => setEditing(false)}>Cancel</button>
+          </span>
+          <span className="acct-region" style={{ maxWidth: 340 }}>
+            {value === 'customer'
+              ? 'A customer is kept up to date from DEAR (contact details, payment terms and orders) and gets reorder follow-ups in the Planner.'
+              : "A prospect's details stay with the rep and DEAR is not read for it."}
+            {value === 'prospect' && account.lastOrderAt ? ' This account has ordered before: as a prospect it stops being updated from DEAR.' : ''}
+          </span>
           {error && <span className="save-msg err">{error}</span>}
         </span>
       )}

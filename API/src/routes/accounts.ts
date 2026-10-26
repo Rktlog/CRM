@@ -316,6 +316,20 @@ accountsRouter.patch('/:id/region', async (req, res) => {
   res.json(updated);
 });
 
+// Managers: change an account between Prospect and Customer. A Customer is kept up to date from DEAR (contact details, payment terms,
+// orders) and gets reorder follow-ups in the Planner. A Prospect's details stay with the rep until it is onboarded, and DEAR is not read for
+// it. The customer sync only looks at accounts that are customers, so this is what starts or stops it for one account.
+accountsRouter.patch('/:id/type', async (req, res) => {
+  if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Only a manager can change whether an account is a customer or a prospect' });
+  const raw = req.body?.type, type = typeof raw === 'string' ? raw.toLowerCase() : '';
+  if (type !== 'customer' && type !== 'prospect') return res.status(400).json({ error: 'Type must be customer or prospect' });
+  const account = await prisma.account.findUnique({ where: { id: req.params.id } });
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  if (account.type === type) return res.json(account);
+  const updated = await prisma.account.update({ where: { id: account.id }, data: { type } });
+  res.json(updated);
+});
+
 // Toggle the misc flag — marketing/warranty/internal orders that are
 // real but shouldn't count toward a rep's sales performance. Unlike
 // archived, a misc account stays fully visible everywhere except

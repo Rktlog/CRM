@@ -4,6 +4,8 @@ import { apiGet } from '../lib/api';
 
 // Managers only: every log the team adds or edits, newest first, so a
 // manager doesn't have to open each account. Refreshes itself every minute.
+// The list sits in a panel of fixed height so the dashboard stays short, and it scrolls: the next page of entries loads by itself as
+// you reach the bottom, so there is no "limited to 3" and no button to press. PANEL_HEIGHT is how tall the panel is.
 
 type LogRow = {
   id: string; type: 'call' | 'email' | 'visit' | 'remark'; note: string; photoUrl: string | null; orderId?: string | null; orderNumber?: string | null;
@@ -26,6 +28,16 @@ const PERIODS = [
 ];
 const TYPE_LABEL = { call: 'Phone', email: 'Email', visit: 'F2F visit', remark: 'Remark' } as const;
 const REFRESH_MS = 60_000;
+const PANEL_HEIGHT = 'min(70vh, 560px)';   // about six entries; change this to show more or fewer at once
+const NEAR_BOTTOM = 120;                    // px from the bottom at which the next page starts loading
+
+// What a refresh does once more pages have been loaded: the newest entries (and any edits or deletions among them) replace what was
+// shown for that stretch of time, and the older pages already loaded are kept as they are.
+export function mergeLatest(prev: { id: string; sortAt: string }[], fresh: { rows: { id: string; sortAt: string }[]; hasMore: boolean }) {
+  const edge = fresh.rows.length ? new Date(fresh.rows[fresh.rows.length - 1].sortAt).getTime() : null;
+  if (!fresh.hasMore || edge === null) return fresh.rows;
+  return [...fresh.rows, ...prev.filter(r => new Date(r.sortAt).getTime() < edge)];
+}
 
 function when(iso: string): string {
   const d = new Date(iso);
@@ -50,7 +62,10 @@ export default function TeamLogCard() {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [loadingMore, setLoadingMore] = useState(false);
-  const pagedRef = useRef(false); // stop auto-refresh replacing pages already loaded
+  const pagedRef = useRef(false); // more pages have been loaded: a refresh now merges instead of replacing
+  const panel = useRef<HTMLDivElement>(null);
+  const rowsRef = useRef<LogRow[] | null>(null);
+  rowsRef.current = rows;
 
   const query = (before?: string) => {
     const p = new URLSearchParams({ days: String(days) });
@@ -65,8 +80,13 @@ export default function TeamLogCard() {
     let cancelled = false;
     const load = () => apiGet(query())
       .then(d => {
-        if (cancelled || pagedRef.current) return;
-        setRows(d.rows); setHasMore(d.hasMore); setReps(d.reps); setError(null);
+        if (cancelled) return;
+        if (pagedRef.current && rowsRef.current) {
+          const merged = mergeLatest(rowsRef.current, d) as LogRow[];
+          setRows(merged);
+          if (merged.length === d.rows.length) { pagedRef.current = false; setHasMore(d.hasMore); }   // nothing older is kept: back to one page
+        } else { setRows(d.rows); setHasMore(d.hasMore); }
+        setReps(d.reps); setError(null);
       })
       .catch(e => !cancelled && setError(e.message));
     pagedRef.current = false;
@@ -83,17 +103,31 @@ export default function TeamLogCard() {
   }, [search]);
 
   async function loadMore() {
-    if (!rows?.length) return;
+    if (!rows?.length || loadingMore) return;
     setLoadingMore(true);
     try {
       const d = await apiGet(query(rows[rows.length - 1].sortAt));
       pagedRef.current = true;
-      setRows([...rows, ...d.rows]);
-      setHasMore(d.hasMore);
+      const have = new Set(rows.map(r => r.id)), added: LogRow[] = d.rows.filter((n: LogRow) => !have.has(n.id));
+      setRows(cur => [...(cur ?? rows), ...added.filter(n => !(cur ?? []).some(r => r.id === n.id))]);
+      setHasMore(d.hasMore && added.length > 0);   // a page with nothing new would otherwise be asked for again and again
+    } catch (e: any) {
+      setError(e.message);
     } finally {
       setLoadingMore(false);
     }
   }
+
+  // The next page loads as you near the bottom. If the entries do not even fill the panel (a tall screen, a short first page), keep going
+  // until they do, so there is always something to scroll.
+  const onScroll = () => {
+    const el = panel.current;
+    if (el && hasMore && !loadingMore && el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM) loadMore();
+  };
+  useEffect(() => {
+    const el = panel.current;
+    if (el && rows && rows.length && hasMore && !loadingMore && el.scrollHeight <= el.clientHeight + 4) loadMore();
+  }, [rows, hasMore]);
 
   const toggle = (id: string) => setOpen(s => {
     const n = new Set(s);
@@ -129,7 +163,8 @@ export default function TeamLogCard() {
       {rows && rows.length === 0 && <div className="acct-region" style={{ padding: '10px 0' }}>Nothing logged{q ? ` matching "${q}"` : ''} in this period.</div>}
 
       {rows && rows.length > 0 && (
-        <div className="team-log-list">
+        <div ref={panel} className="team-log-list" onScroll={onScroll} tabIndex={0} aria-label="Team log entries"
+          style={{ maxHeight: PANEL_HEIGHT, overflowY: 'auto', overscrollBehavior: 'contain' }}>
           {rows.map(r => {
             const long = r.note.length > 220 || r.note.split('\n').length > 3;
             const expanded = open.has(r.id);
@@ -163,14 +198,14 @@ export default function TeamLogCard() {
               </div>
             );
           })}
+          {hasMore && (
+            <div style={{ padding: '10px 0', textAlign: 'center' }}>
+              <button className="btn secondary" onClick={loadMore} disabled={loadingMore}>{loadingMore ? 'Loading…' : 'Load more'}</button>
+            </div>
+          )}
         </div>
       )}
-
-      {rows && hasMore && (
-        <button className="btn secondary" style={{ marginTop: 10 }} onClick={loadMore} disabled={loadingMore}>
-          {loadingMore ? 'Loading…' : 'Load more'}
-        </button>
-      )}
+      {rows && rows.length > 0 && <div className="acct-region" style={{ marginTop: 6 }}>{rows.length} entr{rows.length === 1 ? 'y' : 'ies'}{hasMore ? ' so far, more as you scroll' : ''}.</div>}
     </div>
   );
 }
