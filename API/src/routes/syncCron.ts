@@ -3,12 +3,14 @@ import { prisma } from '../lib/prisma';
 import { syncPurchaseDates } from '../sync/syncPurchaseDates';
 import { syncProductDetails } from '../sync/syncProductDetails';
 import { syncCustomerDates } from '../sync/syncCustomers';
+import { runFollowUpDrafts } from '../lib/followupDrafts';
 
 // Jobs for Supabase's scheduler (pg_cron) to start by calling this API, so nothing extra has to be kept running anywhere:
 //   POST /sync-cron/purchase-dates     the ETA: each purchase order's required-by date, from DEAR      (every 30 minutes)
 //   POST /sync-cron/eol-check          EOL products with no stock for 24 hours become Discontinued      (every 30 minutes)
 //   POST /sync-cron/product-details    product descriptions, order increments, EOL from the description (every 6 hours)
 //   POST /sync-cron/customer-dates     DEAR's creation date for each customer                           (once a day)
+//   POST /sync-cron/followup-drafts    payment reminder drafts in the sales mailbox on a first follow-up day (once a day, early morning)
 // Sent with the header x-sync-secret (the SYNC_SECRET variable). The reply is immediate (202) and the job carries on in the
 // background, so the scheduler never waits for it; add ?wait=1 to wait for the result (handy when testing with curl). A job
 // that is still running is not started a second time.
@@ -26,6 +28,7 @@ export const JOBS: Record<string, Job> = {
   },
   'product-details': { what: 'product descriptions, order increments and EOL from the description', run: () => syncProductDetails() },
   'customer-dates': { what: "DEAR's creation date for each customer", run: () => syncCustomerDates() },
+  'followup-drafts': { what: 'payment reminder drafts on the first follow-up day', run: () => runFollowUpDrafts() },
 };
 
 export function createSyncCronRouter(jobs: Record<string, Job> = JOBS): Router {
