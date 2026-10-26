@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiGet } from '../lib/api';
+import OrderingExport from '../components/OrderingExport';
 import { useMe } from '../lib/useMe';
 import { fmtDate } from '../lib/types';
 import { distinct, filterRows, NO_FILTERS, STATUS_LABEL, STATUS_TONE, TABS, toCsv, type Filters, type OrderingData, type OrderRow, type Settings, type Tab } from '../lib/ordering';
@@ -29,6 +30,7 @@ export default function Ordering() {
   const [loading, setLoading] = useState(false);
   const [f, setF] = useState<Filters>(NO_FILTERS);
   const [open, setOpen] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [shown, setShown] = useState(PAGE);
   const latest = useRef(0);   // only the newest request may fill the page, never a slower older one
 
@@ -75,13 +77,18 @@ export default function Ordering() {
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
         <h1>Ordering</h1>
-        <button className="btn secondary" disabled={!list.length} onClick={download}>Download CSV ({list.length.toLocaleString('en-AU')})</button>
+        <span style={{ display: 'flex', gap: 8 }}>
+          <button className="btn secondary" aria-expanded={exporting} onClick={() => setExporting(x => !x)}>{exporting ? 'Hide export' : 'Export reports'}</button>
+          <button className="btn secondary" disabled={!list.length} onClick={download}>Download CSV ({list.length.toLocaleString('en-AU')})</button>
+        </span>
       </div>
       <div className="acct-region" style={{ maxWidth: 760, marginBottom: 12 }}>
         What to order and when, from what customers have ordered, what is in stock, what customers are waiting for and what is already on purchase orders.
         Stock last synced {syncedAgo == null ? 'at an unknown time' : syncedAgo < 1 ? 'less than an hour ago' : `${syncedAgo} hour${syncedAgo === 1 ? '' : 's'} ago`}.
         {syncedAgo != null && syncedAgo > 36 && <b style={{ color: 'var(--rust)' }}> The stock figures look old: check the sync before ordering.</b>}
       </div>
+
+      {exporting && <OrderingExport />}
 
       <div className="card" style={{ marginBottom: 14 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'end' }}>

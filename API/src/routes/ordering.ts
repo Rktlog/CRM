@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { addMonths, buildSeries, planRow, ORDER_STATUS_RANK, type Facts, type OrderRow, type Series, type Status } from '../lib/orderingPlan';
+import { REPORTS, checkRange, exportDefaults, fileName, makeZip, melbourneToday, readme, runReport, toCsv, type Range, type ReportKey } from '../lib/orderingExport';
 
 export const orderingRouter = Router();
 
@@ -44,15 +45,15 @@ orderingRouter.get('/', async (req, res) => {
   const today = melDay(), thisMonth = today.slice(0, 7), lastFull = addMonths(thisMonth, -1), startMonth = addMonths(lastFull, -(history - 1));
 
   const series = await cachedSeries(`${history}|${lastFull}`, async () => buildSeries(await prisma.$queryRaw<{ sku: string; month: string; qty: number }[]>`
-    select l.sku, to_char(date_trunc('month', q.sent_at at time zone 'Australia/Melbourne'), 'YYYY-MM') as month, sum(l.quantity)::float8 as qty
+    select l.sku, to_char(q.sent_at, 'YYYY-MM') as month, sum(l.quantity)::float8 as qty   -- the order date as DEAR gives it: a plain date, so no time zone can move an order across a month end
     from crm.quote_lines l join crm.quotes q on q.id = l.quote_id
     where q.source <> 'rhino-history' and q.number not like 'Q%' and q.misc_type is null
       and upper(coalesce(q.fulfillment_status, '')) not in ('DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING', 'VOIDED', 'CREDITED')
-      and q.sent_at >= ((${startMonth} || '-01')::date::timestamp at time zone 'Australia/Melbourne')
-      and q.sent_at < ((${thisMonth} || '-01')::date::timestamp at time zone 'Australia/Melbourne')
+      and q.sent_at >= (${startMonth} || '-01')::date
+      and q.sent_at < (${thisMonth} || '-01')::date
     group by l.sku, 2 limit 250000`, lastFull));
 
-  const [products, backordered, quoted, pos, suppliers, stages] = await Promise.all([
+  const [products, backordered, quoted, pos, suppliers, stages, stockRun] = await Promise.all([
     prisma.$queryRaw<{ sku: string; name: string; brand: string | null; category: string | null; lifecycle: string | null; on_hand: number; allocated: number; available: number; on_order: number; eta: Date | null; order_increment: number | null; stock_synced_at: Date | null }[]>`
       select sku, name, brand, category, lifecycle, on_hand::float8, allocated::float8, available::float8, on_order::float8, eta, order_increment, stock_synced_at from crm.products`,
     // Units customers are waiting for: on each open order, what DEAR says is backordered, never more than is still to ship.
@@ -83,6 +84,9 @@ orderingRouter.get('/', async (req, res) => {
       where p.supplier is not null and btrim(p.supplier) <> '' and upper(coalesce(p.status, '')) not in ('VOIDED', 'CREDITED', 'DRAFT')
       order by l.sku, p.order_date desc nulls last`,
     stageList(),
+    // When the stock sync last RAN (the same record the Products page shows). A product row is only stamped when its own figures change, so on a quiet
+    // weekend the newest row can be days old while the sync is running fine.
+    prisma.$queryRaw<{ t: Date }[]>`select last_synced_at as t from crm.sync_state where key = 'stock'`.catch(() => [] as { t: Date }[]),
   ]);
   const by = <T extends { sku: string }>(rows: T[]) => new Map(rows.map(r => [r.sku, r]));
   const back = by(backordered), quotes = by(quoted), po = by(pos), sup = by(suppliers);
@@ -105,7 +109,8 @@ orderingRouter.get('/', async (req, res) => {
   rows.sort((a, b) => ORDER_STATUS_RANK[a.status] - ORDER_STATUS_RANK[b.status] || b.suggested - a.suggested || b.forecastPerMonth - a.forecastPerMonth || a.sku.localeCompare(b.sku));
 
   const count = (st: Status) => rows.filter(r => r.status === st).length;
-  const toOrder = rows.filter(r => r.suggested > 0), synced = products.map(p => p.stock_synced_at).filter((d): d is Date => !!d).sort((a, b) => +b - +a)[0];
+  const toOrder = rows.filter(r => r.suggested > 0);
+  const synced = [...products.map(p => p.stock_synced_at), stockRun[0]?.t ?? null].filter((d): d is Date => !!d).sort((a, b) => +b - +a)[0];   // the latest sign the stock was brought up to date
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], label = (ym: string) => `${MON[Number(ym.slice(5)) - 1]} ${ym.slice(0, 4)}`;
   res.json({
     asOf: today, settings: { lead, cover, plan, history },
@@ -124,4 +129,51 @@ orderingRouter.get('/', async (req, res) => {
     // Never let one bad request stop the server: say what went wrong as a normal error.
     res.status(500).json({ error: `Could not work out the ordering plan: ${String((e as Error)?.message ?? e).slice(0, 200)}` });
   }
+});
+
+// ---- Export: the nine reports as CSV files (managers) ----
+// GET /ordering/export                    the list of reports and the default date ranges
+// GET /ordering/export/zip?from&to&yfrom&yto   all nine in one zip, with a README (sales reports use from/to, the others yfrom/yto)
+// GET /ordering/export/:report?from&to    one report as a CSV file
+const managersOnly = (req: any, res: any) => { if (req.rep!.role !== 'manager') { res.status(403).json({ error: 'Ordering is for managers' }); return false; } return true; };
+const failed = (res: any, e: unknown) => res.status(500).json({ error: `Could not make the report: ${String((e as Error)?.message ?? e).slice(0, 200)}` });
+const rangeFrom = (q: any, fromKey: string, toKey: string, fallback: Range) => checkRange(q[fromKey] ?? fallback.from, q[toKey] ?? fallback.to);
+
+orderingRouter.get('/export', (req, res) => {
+  if (!managersOnly(req, res)) return;
+  const today = melbourneToday();
+  res.json({ today, defaults: exportDefaults(today), reports: REPORTS.map(r => ({ key: r.key, no: r.no, title: r.title, file: r.file, basis: r.basis, note: r.note })) });
+});
+
+orderingRouter.get('/export/zip', async (req, res) => {
+  if (!managersOnly(req, res)) return;
+  try {
+    const today = melbourneToday(), d = exportDefaults(today);
+    const a = rangeFrom(req.query, 'from', 'to', d.period), b = rangeFrom(req.query, 'yfrom', 'yto', d.year);
+    if (a.error || b.error) return res.status(400).json({ error: a.error ?? b.error });
+    const files: { name: string; data: Buffer }[] = [], counts: Record<string, { rows: number; capped: boolean }> = {};
+    for (const r of REPORTS) {
+      const range = r.basis === 'period' ? a.range! : r.basis === 'year' ? b.range! : null, t = await runReport(r.key, range ?? d.period);
+      counts[r.key] = { rows: t.rows.length, capped: t.capped };
+      files.push({ name: fileName(r.key, range, today), data: Buffer.from(toCsv(t), 'utf8') });
+    }
+    files.unshift({ name: '00-read-me.txt', data: Buffer.from(readme(today, a.range!, b.range!, counts), 'utf8') });
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="ordering-reports_${today}.zip"`);
+    res.send(makeZip(files));
+  } catch (e) { failed(res, e); }
+});
+
+orderingRouter.get('/export/:report', async (req, res) => {
+  if (!managersOnly(req, res)) return;
+  const def = REPORTS.find(r => r.key === req.params.report);
+  if (!def) return res.status(404).json({ error: 'No such report' });
+  try {
+    const today = melbourneToday(), d = exportDefaults(today), r = rangeFrom(req.query, 'from', 'to', def.basis === 'year' ? d.year : d.period);
+    if (r.error) return res.status(400).json({ error: r.error });
+    const t = await runReport(def.key as ReportKey, r.range!);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName(def.key as ReportKey, def.basis === 'now' ? null : r.range!, today)}"`);
+    res.send(toCsv(t));
+  } catch (e) { failed(res, e); }
 });
