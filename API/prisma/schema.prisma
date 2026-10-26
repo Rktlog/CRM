@@ -32,6 +32,7 @@ enum CreditTerm {
 
 enum AccountType {
   prospect
+  lead
   customer
 
   @@schema("crm")

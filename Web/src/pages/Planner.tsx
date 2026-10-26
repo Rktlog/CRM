@@ -11,7 +11,7 @@ import { GOOGLE_BLUE, GoogleDayList, GoogleNotice, TodayInGoogle, eventChip, eve
 type TaskAccount = { id: string; name: string; region: string; phone: string | null };
 type PlanAccount = TaskAccount & {
   email: string | null; contactName: string | null; lastOrderAt: string | null;
-  spend365: number; stage: string; type: 'prospect' | 'customer';
+  spend365: number; stage: string; type: 'prospect' | 'lead' | 'customer';
   lastActivity: { type: string; note: string; occurredAt: string } | null;
 };
 type PlanTask = {

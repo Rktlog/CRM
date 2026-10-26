@@ -30,7 +30,7 @@ export type Account = {
   repId: string;
   repName: string | null;
   credit: 'prepay' | 'account';
-  type: 'prospect' | 'customer';
+  type: 'prospect' | 'lead' | 'customer';
   stage: Stage;
   status?: AccountStatus;           // from the crm.account_status view
   contactName: string | null;

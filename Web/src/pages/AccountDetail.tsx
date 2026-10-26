@@ -1,9 +1,9 @@
 import { useEffect, useState, useMemo, FormEvent } from 'react';
 import { useMe, ALL_STATES } from '../lib/useMe';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ACTIVITY_ICON, ACTIVITY_KINDS, ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
 import OrderNoteChip from '../components/OrderNoteChip';
-import { apiGet, apiPost, apiPatch, apiDownload } from '../lib/api';
+import { apiGet, apiPost, apiPatch, apiDelete, apiDownload } from '../lib/api';
 import { orderStatusPills, stageTag, paymentTag } from '../lib/orderStatus';
 import PriceListModal from '../components/PriceListModal';
 import CreditReservations from '../components/CreditReservations';
@@ -467,6 +467,7 @@ export default function AccountDetail() {
                 <span className="num">{fmtDate(account.nextFollowUpAt)}</span>
               </div>
             )}
+            <AccountAdmin account={account} onChanged={updated => setAccount(a => (a ? { ...a, ...updated } : a))} />
           </div>
 
           <div className="card">
@@ -697,11 +698,17 @@ function ReorderGapRow({ account, onSaved }: {
 }
 
 // Type (Customer or Prospect), with a Change button for managers. A customer is kept up to date from DEAR; a prospect's details stay with the rep.
-const TYPE_LABEL = { customer: 'Customer', prospect: 'Prospect' } as const;
-function TypeRow({ account, onSaved }: { account: { id: string; type: 'prospect' | 'customer'; lastOrderAt: string | null }; onSaved: (a: any) => void }) {
+type AccountKind = 'prospect' | 'lead' | 'customer';
+const TYPE_LABEL: Record<AccountKind, string> = { customer: 'Customer', lead: 'Lead', prospect: 'Prospect' };
+const TYPE_HELP: Record<AccountKind, string> = {
+  customer: 'A customer is kept up to date from DEAR (contact details, payment terms and orders) and gets reorder follow-ups in the Planner.',
+  lead: "A lead has shown interest. Their details stay with the rep, DEAR does not update them, and the Planner does not suggest them for cold outreach.",
+  prospect: "A prospect has not been approached yet. Their details stay with the rep, DEAR does not update them, and the Planner can suggest them for outreach.",
+};
+function TypeRow({ account, onSaved }: { account: { id: string; type: AccountKind; lastOrderAt: string | null }; onSaved: (a: any) => void }) {
   const me = useMe();
   const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState<'prospect' | 'customer'>(account.type);
+  const [value, setValue] = useState<AccountKind>(account.type);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -730,9 +737,10 @@ function TypeRow({ account, onSaved }: { account: { id: string; type: 'prospect'
       ) : (
         <span style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            <select aria-label="Type" value={value} onChange={e => setValue(e.target.value as 'prospect' | 'customer')}
+            <select aria-label="Type" value={value} onChange={e => setValue(e.target.value as AccountKind)}
               style={{ padding: '4px 6px', border: '1px solid var(--line)', borderRadius: 6 }}>
               <option value="customer">Customer</option>
+              <option value="lead">Lead</option>
               <option value="prospect">Prospect</option>
             </select>
             <button className="btn secondary" style={{ padding: '4px 10px', fontSize: 12 }} disabled={saving || value === account.type} onClick={save}>
@@ -741,14 +749,94 @@ function TypeRow({ account, onSaved }: { account: { id: string; type: 'prospect'
             <button className="link-btn" onClick={() => setEditing(false)}>Cancel</button>
           </span>
           <span className="acct-region" style={{ maxWidth: 340 }}>
-            {value === 'customer'
-              ? 'A customer is kept up to date from DEAR (contact details, payment terms and orders) and gets reorder follow-ups in the Planner.'
-              : "A prospect's details stay with the rep and DEAR is not read for it."}
-            {value === 'prospect' && account.lastOrderAt ? ' This account has ordered before: as a prospect it stops being updated from DEAR.' : ''}
+            {TYPE_HELP[value]}
+            {value !== 'customer' && account.type === 'customer' && account.lastOrderAt ? ` This account has ordered before: as a ${value} it stops being updated from DEAR.` : ''}
           </span>
           {error && <span className="save-msg err">{error}</span>}
         </span>
       )}
+    </div>
+  );
+}
+
+// Managers: archive an account, or delete it. An account with orders cannot be deleted (its orders count in the sales figures): the check
+// says so and offers to archive it instead. Deleting asks you to type the account's name.
+type DeleteCheck = { name: string; linkedToDear: boolean; canDelete: boolean; reason: string | null; orders: number; logs: number; tasks: number; emails: number };
+function AccountAdmin({ account, onChanged }: { account: { id: string; name: string; archived: boolean }; onChanged: (a: any) => void }) {
+  const me = useMe();
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [check, setCheck] = useState<DeleteCheck | null>(null);
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState<'archive' | 'delete' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  if (me?.role !== 'manager') return null;
+
+  async function archive(archived: boolean) {
+    setBusy('archive'); setError(null);
+    try { onChanged(await apiPatch(`/accounts/${account.id}/archive`, { archived })); setOpen(false); }
+    catch (e: any) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+  async function startDelete() {
+    setOpen(true); setCheck(null); setTyped(''); setError(null);
+    try { setCheck(await apiGet(`/accounts/${account.id}/delete-check`, { fresh: true })); }
+    catch (e: any) { setError(e.message); }
+  }
+  async function remove() {
+    setBusy('delete'); setError(null);
+    try { await apiDelete(`/accounts/${account.id}`); navigate('/accounts'); }
+    catch (e: any) { setError(e.message); setBusy(null); }
+  }
+  const confirmed = typed.trim().toLowerCase() === account.name.trim().toLowerCase();
+  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+
+  return (
+    <div className="kv" style={{ alignItems: 'flex-start' }}>
+      <span className="k">Manage</span>
+      <span style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <span>
+          {account.archived
+            ? <button className="link-btn" disabled={!!busy} onClick={() => archive(false)}>{busy === 'archive' ? 'Restoring…' : 'Restore account'}</button>
+            : <button className="link-btn" disabled={!!busy} onClick={() => archive(true)}>{busy === 'archive' ? 'Archiving…' : 'Archive account'}</button>}
+          {' · '}
+          <button className="link-btn" style={{ color: 'var(--rust)' }} disabled={!!busy} onClick={startDelete}>Delete account…</button>
+        </span>
+        {account.archived && <span className="acct-region">Archived: hidden from the lists and reports. Its orders still count.</span>}
+        {open && (
+          <span role="alertdialog" aria-label="Delete this account" style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: 6, maxWidth: 380 }}>
+            {!check && !error && <span className="acct-region">Checking what deleting would remove…</span>}
+            {check && !check.canDelete && (
+              <>
+                <span>{check.reason}</span>
+                <span style={{ display: 'flex', gap: 8 }}>
+                  {!account.archived && <button className="btn secondary" style={{ padding: '4px 10px', fontSize: 12 }} disabled={!!busy} onClick={() => archive(true)}>Archive instead</button>}
+                  <button className="link-btn" onClick={() => setOpen(false)}>Close</button>
+                </span>
+              </>
+            )}
+            {check && check.canDelete && (
+              <>
+                <span>
+                  This permanently deletes <b>{check.name}</b>
+                  {check.logs + check.tasks + check.emails > 0 ? `, with its ${[check.logs ? plural(check.logs, 'logged activity').replace('activitys', 'activities') : '', check.tasks ? plural(check.tasks, 'task') : '', check.emails ? plural(check.emails, 'logged email') : ''].filter(Boolean).join(', ')}` : ''}. This can't be undone.
+                </span>
+                {check.linkedToDear && <span className="acct-region">It is linked to a DEAR customer. DEAR is not touched, and if that customer is still in DEAR the DEAR sync may add it back.</span>}
+                <label className="acct-region" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  Type the account name to confirm
+                  <input aria-label="Type the account name to confirm" value={typed} onChange={e => setTyped(e.target.value)} autoComplete="off"
+                    style={{ padding: '4px 6px', border: '1px solid var(--line)', borderRadius: 6 }} />
+                </label>
+                <span style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn" style={{ padding: '4px 10px', fontSize: 12, background: 'var(--rust)' }} disabled={!confirmed || !!busy} onClick={remove}>{busy === 'delete' ? 'Deleting…' : 'Delete account'}</button>
+                  <button className="link-btn" disabled={!!busy} onClick={() => setOpen(false)}>Cancel</button>
+                </span>
+              </>
+            )}
+          </span>
+        )}
+        {error && <span className="save-msg err">{error}</span>}
+      </span>
     </div>
   );
 }

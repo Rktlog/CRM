@@ -316,18 +316,76 @@ accountsRouter.patch('/:id/region', async (req, res) => {
   res.json(updated);
 });
 
-// Managers: change an account between Prospect and Customer. A Customer is kept up to date from DEAR (contact details, payment terms,
-// orders) and gets reorder follow-ups in the Planner. A Prospect's details stay with the rep until it is onboarded, and DEAR is not read for
-// it. The customer sync only looks at accounts that are customers, so this is what starts or stops it for one account.
+// Managers: change an account's type: Customer, Lead or Prospect.
+//   Customer  kept up to date from DEAR (contact details, payment terms, orders); gets reorder follow-ups in the Planner.
+//   Lead      someone who has shown interest. Details stay with the rep, DEAR does not update them, and the Planner does not offer
+//             it as a cold outreach (it is already being worked).
+//   Prospect  not yet approached. Details stay with the rep, DEAR does not update them, and the Planner can offer it for outreach.
+// The customer sync only looks at accounts that are customers, so this is what starts or stops it for one account.
 accountsRouter.patch('/:id/type', async (req, res) => {
-  if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Only a manager can change whether an account is a customer or a prospect' });
+  if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Only a manager can change an account\'s type' });
   const raw = req.body?.type, type = typeof raw === 'string' ? raw.toLowerCase() : '';
-  if (type !== 'customer' && type !== 'prospect') return res.status(400).json({ error: 'Type must be customer or prospect' });
+  if (type !== 'customer' && type !== 'lead' && type !== 'prospect') return res.status(400).json({ error: 'Type must be customer, lead or prospect' });
   const account = await prisma.account.findUnique({ where: { id: req.params.id } });
   if (!account) return res.status(404).json({ error: 'Account not found' });
   if (account.type === type) return res.json(account);
   const updated = await prisma.account.update({ where: { id: account.id }, data: { type } });
   res.json(updated);
+});
+
+// ---- Managers: delete an account, or archive it ----
+// An account with orders is never deleted: its orders count in the sales figures, and the database would refuse anyway. Archive it instead
+// (hidden from the lists and reports; the orders still count). An account with no orders can be deleted, together with its own logs and
+// tasks (and its logged emails, which go with it). The customer in DEAR is not touched.
+async function deleteFacts(id: string) {
+  const [orders, logs, tasks] = await Promise.all([
+    prisma.quote.count({ where: { accountId: id } }), prisma.activity.count({ where: { accountId: id } }), prisma.task.count({ where: { accountId: id } }),
+  ]);
+  const [x] = await prisma.$queryRaw<{ emails: number; reservations: number }[]>`
+    select (select count(*) from crm.email_log where account_id = ${id}::uuid)::int as emails,
+           (select count(*) from crm.credit_reservations where from_account_id = ${id}::uuid or to_account_id = ${id}::uuid)::int as reservations`;
+  const reason = orders > 0
+    ? `This account has ${orders} order${orders === 1 ? '' : 's'}. Deleting it would take ${orders === 1 ? 'it' : 'them'} out of the sales figures, so it can't be deleted. Archive it instead: it is hidden from the lists and reports and its orders still count.`
+    : (x?.reservations ?? 0) > 0 ? "This account has credit reserved against it (see Credit), so it can't be deleted." : null;
+  return { orders, logs, tasks, emails: x?.emails ?? 0, reservations: x?.reservations ?? 0, canDelete: !reason, reason };
+}
+const managerOnly = (req: any, res: any, what: string) => { if (req.rep!.role !== 'manager') { res.status(403).json({ error: `Only a manager can ${what}` }); return false; } return true; };   // (a bad id is already a 404 at the top of this file)
+
+// What deleting would remove, and whether it is allowed, for the confirmation window.
+accountsRouter.get('/:id/delete-check', async (req, res) => {
+  if (!managerOnly(req, res, 'delete an account')) return;
+  const account = await prisma.account.findUnique({ where: { id: req.params.id }, select: { id: true, name: true, dearCustomerId: true } });
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  res.json({ name: account.name, linkedToDear: !!account.dearCustomerId, ...(await deleteFacts(account.id)) });
+});
+
+accountsRouter.delete('/:id', async (req, res) => {
+  if (!managerOnly(req, res, 'delete an account')) return;
+  const account = await prisma.account.findUnique({ where: { id: req.params.id }, select: { id: true } });
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  const f = await deleteFacts(account.id);
+  if (!f.canDelete) return res.status(409).json({ error: f.reason });
+  try {
+    await prisma.$transaction([
+      prisma.task.deleteMany({ where: { accountId: account.id } }),
+      prisma.activity.deleteMany({ where: { accountId: account.id } }),
+      prisma.account.delete({ where: { id: account.id } }),
+    ]);
+  } catch (e: any) {
+    if (e?.code === 'P2003') return res.status(409).json({ error: 'Something was added to this account while you were deleting it, so it was not deleted.' });   // an order arrived in the meantime
+    throw e;
+  }
+  res.json({ ok: true, deleted: { logs: f.logs, tasks: f.tasks, emails: f.emails } });
+});
+
+// Archive an account (hidden from the lists and reports, and kept hidden: the automatic archiving rules will not bring it back), or restore it.
+accountsRouter.patch('/:id/archive', async (req, res) => {
+  if (!managerOnly(req, res, 'archive an account')) return;
+  if (typeof req.body?.archived !== 'boolean') return res.status(400).json({ error: 'Say whether to archive or restore it' });
+  const account = await prisma.account.findUnique({ where: { id: req.params.id }, select: { id: true } });
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+  await prisma.$executeRaw`update crm.accounts set archived = ${req.body.archived}, keep_archived = ${req.body.archived}, updated_at = now() where id = ${account.id}::uuid`;
+  res.json(await prisma.account.findUnique({ where: { id: account.id } }));
 });
 
 // Toggle the misc flag — marketing/warranty/internal orders that are
