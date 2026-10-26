@@ -115,7 +115,7 @@ export async function getProfile(accessToken: string): Promise<{ emailAddress: s
   return parse(await fetchImpl(`${API}/profile`, auth(accessToken)));
 }
 // ---- Drafts: put an email in the rep's own Drafts folder. It is never sent from here. ----
-export type DraftInput = { to: string[]; cc?: string[]; subject: string; body: string };
+export type DraftInput = { to: string[]; cc?: string[]; subject: string; body: string; allowEmptyTo?: boolean };   // allowEmptyTo: only for drafts the CRM makes by itself, to be addressed by a person
 const ADDRESS = /^[^\s<>@,;"()\[\]\\]+@[^\s<>@,;"()\[\]\\]+\.[^\s<>@,;"()\[\]\\]+$/;
 // One address, or null if it is not a plain address (no names, no line breaks, nothing that could add a header).
 export const cleanAddress = (s: unknown): string | null => { const t = typeof s === 'string' ? s.trim() : ''; return t.length <= 254 && ADDRESS.test(t) ? t : null; };
@@ -132,11 +132,11 @@ function encodeSubject(subject: string): string {
 // The whole email, ready for Gmail (base64url). Refuses anything with a line break in a header.
 export function buildRawMessage(m: DraftInput): string {
   const to = m.to.map(cleanAddress), cc = (m.cc ?? []).map(cleanAddress);
-  if (!to.length || to.some(a => !a) || cc.some(a => !a)) throw new Error('Check the email addresses');
+  if ((!to.length && !m.allowEmptyTo) || to.some(a => !a) || cc.some(a => !a)) throw new Error('Check the email addresses');
   if (/[\r\n]/.test(m.subject)) throw new Error('The subject cannot have a line break');
   const body = m.body.replace(/\r\n|\r|\n/g, '\r\n');
   const wrapped = (b64(Buffer.from(body, 'utf8')).match(/.{1,76}/g) ?? []).join('\r\n');
-  const head = [`To: ${to.join(', ')}`, ...(cc.length ? [`Cc: ${cc.join(', ')}`] : []), `Subject: ${encodeSubject(m.subject)}`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64'];
+  const head = [...(to.length ? [`To: ${to.join(', ')}`] : []), ...(cc.length ? [`Cc: ${cc.join(', ')}`] : []), `Subject: ${encodeSubject(m.subject)}`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64'];
   return b64url(Buffer.from(head.join('\r\n') + '\r\n\r\n' + wrapped + '\r\n', 'utf8'));
 }
 // The ONLY call this app makes to write to Gmail: create a draft. There is no send anywhere in the CRM.
