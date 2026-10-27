@@ -101,16 +101,19 @@ export async function runReport(key: ReportKey, r: Range): Promise<Table> {
   switch (key) {
     case 'availability': {
       const [products, stages] = await Promise.all([prisma.$queryRaw<any[]>`
-        select sku, name, brand, category, lifecycle, uom, on_hand::float8 as on_hand, allocated::float8 as allocated, available::float8 as available, on_order::float8 as on_order, locations,
+        select sku, name, brand, category, lifecycle, uom, on_hand::float8 as on_hand, allocated::float8 as allocated, available::float8 as available, on_order::float8 as on_order, locations, prices,
                to_char(eta, 'YYYY-MM-DD') as eta, order_increment, barcode, to_char(stock_synced_at, 'YYYY-MM-DD HH24:MI') as synced
         from crm.products order by brand nulls last, sku limit ${CAP}`, stageLabels()]);
+      // One column per DEAR price tier, by the tier's own name (tier names are set per account, e.g. Wholesale or RRP). A product without that tier is left blank.
+      const tiers = [...new Set(products.flatMap((p: any) => Object.keys(p.prices && typeof p.prices === 'object' ? p.prices : {})))].sort((a, b) => a.localeCompare(b));
       const rows: Cell[][] = [];
       for (const p of products) {
+        const tierPrices = tiers.map(t => { const v = Number(p.prices?.[t]); return Number.isFinite(v) && p.prices?.[t] != null ? v : null; });
         const locs: any[] = Array.isArray(p.locations) && p.locations.length ? p.locations : [null];
         for (const l of locs) rows.push([p.sku, p.name, p.brand, p.category, p.lifecycle ? stages.get(p.lifecycle) ?? p.lifecycle : '', p.uom, l?.location ?? '', l ? l.onHand : p.on_hand, l ? l.allocated : p.allocated, l ? l.available : p.available, l ? l.onOrder : p.on_order,
-          p.on_hand, p.available, p.eta, p.order_increment, p.barcode, p.synced]);
+          p.on_hand, p.available, p.eta, p.order_increment, p.barcode, p.synced, ...tierPrices]);
       }
-      return finish(['SKU', 'Product', 'Brand', 'Category', 'Stage', 'Unit', 'Location', 'On hand', 'Allocated', 'Available', 'On order', 'Product on hand (all locations)', 'Product available (all locations)', 'Next arrival', 'Order increment', 'Barcode', 'Stock last synced'], rows);
+      return finish(['SKU', 'Product', 'Brand', 'Category', 'Stage', 'Unit', 'Location', 'On hand', 'Allocated', 'Available', 'On order', 'Product on hand (all locations)', 'Product available (all locations)', 'Next arrival', 'Order increment', 'Barcode', 'Stock last synced', ...tiers.map(t => `Price tier: ${t}`)], rows);
     }
     case 'sale-order-details': {
       const x = await prisma.$queryRaw<any[]>`
@@ -168,19 +171,46 @@ export async function runReport(key: ReportKey, r: Range): Promise<Table> {
       return finish(['Quote no', 'Quote date', 'Customer', 'State', 'Status', 'Customer reference', 'SKU', 'Product', 'Brand', 'Quantity', 'Unit price', 'Line total', 'Age (days)'], x.map(o => [o.number, o.qdate, o.customer, o.region, o.status, o.reference, o.sku, o.product_name, o.brand, o.qty, o.price, o.total, o.age]));
     }
     case 'inventory-movement-details': {
+      // Receipts: each one on its own day from crm.purchase_receipts (purchase-receipts.sql). Orders with no receipt rows yet (not re-read since
+      // the table was added) still show as before, once per line on its last receipt date, so nothing disappears while the table fills.
+      const hasReceipts = (await prisma.$queryRaw<{ ok: boolean }[]>`select to_regclass('crm.purchase_receipts') is not null as ok`)[0]?.ok === true;
+      const receiptRows = hasReceipts ? Prisma.sql`
+          select r.received_at::date, 'Purchase received', r.sku, p2.name, p2.brand, r.quantity::float8, p.number, p.supplier, null, null
+          from crm.purchase_receipts r join crm.purchases p on p.id = r.purchase_id left join crm.products p2 on p2.sku = r.sku
+          where r.received_at >= ${r.from}::date and r.received_at < (${r.to}::date + 1)
+          union all` : Prisma.empty;
+      const noReceiptRows = hasReceipts ? Prisma.sql`and not exists (select 1 from crm.purchase_receipts rr where rr.purchase_id = pl.purchase_id)` : Prisma.empty;
       const x = await prisma.$queryRaw<any[]>`
         select * from (
-          select ${mel('q.invoice_date')}::date as mdate, 'Sale invoiced' as type, l.sku, l.product_name as product, l.brand, -l.quantity::float8 as qty, q.number as ref, a.name as party, null::text as location, null::float8 as unit_cost
+          -- Sales leave stock when they ship: each authorised fulfilment, on its ship date, line by line.
+          select sd as mdate, 'Sale shipped' as type, sku, product, brand, -qty as qty, ref, party, null::text as location, null::float8 as unit_cost
+          from (
+            select case when f.val->>'shippedAt' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' then left(f.val->>'shippedAt', 10)::date end as sd,
+                   ln.val->>'sku' as sku, coalesce(ln.val->>'name', p4.name) as product, p4.brand as brand, (ln.val->>'qty')::float8 as qty, q.number as ref, a.name as party
+            from crm.quotes q join crm.accounts a on a.id = q.account_id
+            cross join lateral jsonb_array_elements(case when jsonb_typeof(q.fulfilments) = 'array' then q.fulfilments else '[]'::jsonb end) as f(val)
+            cross join lateral jsonb_array_elements(case when jsonb_typeof(f.val->'lines') = 'array' then f.val->'lines' else '[]'::jsonb end) as ln(val)
+            left join crm.products p4 on p4.sku = ln.val->>'sku'
+            where q.source <> 'rhino-history' and upper(coalesce(f.val->>'ship', '')) = 'AUTHORISED'
+              and upper(coalesce(q.fulfillment_status, '')) <> all(${NOT_SALES}::text[])) shipped
+          where sd >= ${r.from}::date and sd < (${r.to}::date + 1) and sku is not null and qty is not null
+          union all
+          -- Orders with no dated shipment on record (older orders, history) fall back to the invoice date.
+          select ${mel('q.invoice_date')}::date, 'Sale invoiced (no ship date)', l.sku, l.product_name, l.brand, -l.quantity::float8, q.number, a.name, null, null
           from crm.quotes q join crm.accounts a on a.id = q.account_id join crm.quote_lines l on l.quote_id = q.id
           where q.invoice_date is not null and upper(coalesce(q.fulfillment_status, '')) <> all(${NOT_SALES}::text[]) and ${mel('q.invoice_date')} >= ${r.from}::date and ${mel('q.invoice_date')} < (${r.to}::date + 1)
+            and not exists (
+              select 1 from jsonb_array_elements(case when jsonb_typeof(q.fulfilments) = 'array' then q.fulfilments else '[]'::jsonb end) as f2(val)
+              where upper(coalesce(f2.val->>'ship', '')) = 'AUTHORISED' and f2.val->>'shippedAt' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}')
           union all
+          ${receiptRows}
           select pl.last_received_at::date, 'Purchase received', pl.sku, pl.product_name, p2.brand, pl.quantity_received::float8, p.number, p.supplier, null, null
           from crm.purchase_lines pl join crm.purchases p on p.id = pl.purchase_id left join crm.products p2 on p2.sku = pl.sku
-          where pl.quantity_received > 0 and pl.last_received_at >= ${r.from}::date and pl.last_received_at < (${r.to}::date + 1)
+          where pl.quantity_received > 0 and pl.last_received_at >= ${r.from}::date and pl.last_received_at < (${r.to}::date + 1) ${noReceiptRows}
           union all
           select sa.effective_date::date, 'Stock adjustment (' || coalesce(al.kind, '') || ')', al.sku, al.product_name, p3.brand, al.quantity::float8, sa.number, coalesce(sa.reference, sa.comment), al.location, al.unit_cost::float8
           from crm.stock_adjustment_lines al join crm.stock_adjustments sa on sa.id = al.adjustment_id left join crm.products p3 on p3.sku = al.sku
-          where sa.effective_date >= ${r.from}::date and sa.effective_date < (${r.to}::date + 1) and upper(coalesce(sa.status, '')) <> 'VOIDED') m
+          where sa.effective_date >= ${r.from}::date and sa.effective_date < (${r.to}::date + 1) and upper(coalesce(sa.status, '')) not in ('DRAFT', 'VOIDED')) m   -- a draft or voided adjustment has not moved any stock
         order by mdate, type, sku limit ${CAP}`;
       return finish(['Stock movement date', 'Type', 'SKU', 'Product', 'Brand', 'Quantity (+ in, - out)', 'Reference', 'Customer / supplier / reason', 'Location', 'Unit cost'],
         x.map(o => [o.mdate instanceof Date ? o.mdate.toISOString().slice(0, 10) : o.mdate, o.type, o.sku, o.product, o.brand, o.qty, o.ref, o.party, o.location, o.unit_cost]));
@@ -230,7 +260,7 @@ export function readme(today: string, period: Range, year: Range, counts: Record
     ...REPORTS.map(r => `  ${r.no}. ${r.title}: ${counts[r.key]?.rows.toLocaleString('en-AU') ?? 0} rows${counts[r.key]?.capped ? ' (STOPPED at the row limit: shorten the range)' : ''}. ${r.note}`),
     '',
     'Things to know',
-    '  - Inventory Movement Details is built from what the CRM holds, not DEAR\'s full movement ledger: sales by invoice date, purchases by the date they were last received (a line received in several parts shows once, on its last date), and stock adjustments by effective date.',
+    '  - Inventory Movement Details is built from what the CRM holds, not DEAR\'s full movement ledger: sales on the day each fulfilment shipped (an order with no dated shipment falls back to its invoice date), purchases on the day each part was received, and completed stock adjustments by effective date (drafts and voided ones are left out). Customer returns and credit notes are NOT included yet.',
     '  - Pending Purchase Orders and Purchase Order Details cover the purchase orders synced into the CRM. Check an order is missing from them before assuming it does not exist.',
     '  - Sale Outstanding Quotes lists quotes, drafts and orders still at Ordering status. Ordering-status orders are also in Sale Order Details (Counts as a sale = No), so count each one once.',
     '  - History imported from the old sales spreadsheet has order numbers starting with Q and the source "rhino-history".',
