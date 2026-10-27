@@ -7,6 +7,7 @@ import RepHiddenAccounts from '../components/RepHiddenAccounts';
 import GmailCard from '../components/GmailCard';
 import CalendarSyncCard from '../components/CalendarSyncCard'
 import FollowUpDraftsCard from '../components/FollowUpDraftsCard';
+import SyncStatus from '../components/SyncStatus';
 
 type Rep = { id: string; name: string; role: string };
 type Target = { id: string; repId: string; repName: string; year: number; quarter: number; amount: number };
@@ -35,14 +36,6 @@ export default function Settings() {
   const [assignedRegions, setAssignedRegions] = useState<string[]>([]);
   const [territorySaving, setTerritorySaving] = useState(false);
   const [territorySummary, setTerritorySummary] = useState<{ repId: string; repName: string; regions: string[]; hiddenAccounts?: number }[] | null>(null);
-  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
-
-  useEffect(() => {
-    apiGet('/me').then(me => {
-      setLastSyncedAt(me.lastSyncedAt);
-    }).catch(() => {});
-  }, []);
-
   useEffect(() => {
     if (isManager) {
       apiGet('/reports/reps').then(setReps).catch(e => setError(e.message));
@@ -148,23 +141,7 @@ export default function Settings() {
       <h1>Settings</h1>
 
 
-      <div className="section">
-        <div className="panel-title">Data sync</div>
-        {lastSyncedAt ? (
-          <div style={{ fontSize: 13 }}>
-            Last synced from DEAR: <span className="num">{new Date(lastSyncedAt).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}</span>
-            <span style={{ color: 'var(--muted)', marginLeft: 6 }}>
-              ({Math.round((Date.now() - new Date(lastSyncedAt).getTime()) / 60000)} minutes ago)
-            </span>
-          </div>
-        ) : (
-          <div style={{ fontSize: 13, color: 'var(--muted)' }}>No sync has completed yet.</div>
-        )}
-        <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 6 }}>
-          Runs automatically every 30 minutes via the background sync worker (npm run sync) —
-          this only updates while that process is actually running.
-        </div>
-      </div>
+      <SyncStatus />
 
        <CalendarSyncCard />
        <GmailCard />

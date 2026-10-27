@@ -8,19 +8,23 @@ import { STAGE_LABELS, fmtMoney, fmtDateWithYear } from '../lib/types';
 import DictationTextarea from '../components/DictationTextarea';
 import { GOOGLE_BLUE, GoogleDayList, GoogleNotice, TodayInGoogle, eventChip, eventsByDay, eventTime, useGoogleEvents } from '../components/GoogleEvents';
 
-type TaskAccount = { id: string; name: string; region: string; phone: string | null };
+type TaskAccount = { id: string; name: string; region: string; phone: string | null; email?: string | null };
+type TaskKind = 'cold_call' | 'visit' | 'email';
+const TASK_LABEL: Record<TaskKind, string> = { visit: 'F2F visit', cold_call: 'Phone', email: 'Email' };
+// Email has no colour of its own in the stylesheet, so it carries its own: purple, to tell it from visits (green), phone (amber) and Google (blue).
+const EMAIL_COLOUR = { dot: '#8a5fc4', chip: { background: '#f1e9fb', borderColor: '#8a5fc4', color: '#5b3a8c' } };
 type PlanAccount = TaskAccount & {
   email: string | null; contactName: string | null; lastOrderAt: string | null;
-  spend365: number; stage: string; type: 'prospect' | 'lead' | 'customer';
+  spend365: number; stage: string; type: 'prospect' | 'lead' | 'customer' | 'cold_lead';
   lastActivity: { type: string; note: string; occurredAt: string } | null;
 };
 type PlanTask = {
-  id: string; type: 'cold_call' | 'visit'; fixed: boolean; reason: 'new_lead' | 'inactive' | null;
+  id: string; type: TaskKind; fixed: boolean; reason: 'new_lead' | 'inactive' | null;
   completed: boolean; note: string | null; account: PlanAccount;
 };
 type TodayData = { tasks: PlanTask[]; limit: number; counts: { newLeads: number; inactive: number }; regions: string[] };
 type CalTask = {
-  id: string; date: string; type: 'cold_call' | 'visit'; fixed: boolean;
+  id: string; date: string; type: TaskKind; fixed: boolean;
   completed: boolean; note: string | null; account: TaskAccount;
 };
 type View = 'today' | 'calendar';
@@ -79,6 +83,7 @@ export default function Planner() {
 const SECTIONS: { key: string; title: string; match: (t: PlanTask) => boolean }[] = [
   { key: 'visits', title: 'F2F visits', match: t => t.type === 'visit' },
   { key: 'calls', title: 'Scheduled phone calls', match: t => t.type === 'cold_call' && !t.reason },
+  { key: 'emails', title: 'Scheduled emails', match: t => t.type === 'email' },
   { key: 'new', title: 'New leads', match: t => t.reason === 'new_lead' },
   { key: 'inactive', title: 'Overdue customers', match: t => t.reason === 'inactive' },
 ];
@@ -145,7 +150,7 @@ function TodayView({ refresh, onChanged }: { refresh: number; onChanged: () => v
 function PlanRow({ task: t, open, onToggle, onDone }: {
   task: PlanTask; open: boolean; onToggle: () => void; onDone: () => void;
 }) {
-  const [logType, setLogType] = useState<'call' | 'email' | 'visit'>(t.type === 'visit' ? 'visit' : 'call');
+  const [logType, setLogType] = useState<'call' | 'email' | 'visit'>(t.type === 'visit' ? 'visit' : t.type === 'email' ? 'email' : 'call');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -190,7 +195,9 @@ function PlanRow({ task: t, open, onToggle, onDone }: {
           </div>
         </div>
         <div className="plan-row-phone" onClick={e => e.stopPropagation()}>
-          {a.phone ? <a href={`tel:${a.phone}`} className="order-link">{a.phone}</a> : <span className="acct-region">No phone</span>}
+          {t.type === 'email'
+            ? (a.email ? <a href={`mailto:${a.email}`} className="order-link">{a.email}</a> : <span className="acct-region">No email</span>)
+            : (a.phone ? <a href={`tel:${a.phone}`} className="order-link">{a.phone}</a> : <span className="acct-region">No phone</span>)}
         </div>
         <span className="plan-caret">{open ? '▾' : '▸'}</span>
       </div>
@@ -335,6 +342,7 @@ function CalendarView({ refresh, onChanged, onSchedule }: {
         <div className="cal-legend">
           <span><i className="cal-dot visit" /> F2F visit</span>
           <span><i className="cal-dot cold_call" /> Phone</span>
+          <span><i className="cal-dot" style={{ background: EMAIL_COLOUR.dot }} /> Email</span>
           {g.connected && !g.hidden && !g.error && <span><i className="cal-dot" style={{ background: GOOGLE_BLUE }} /> Google Calendar</span>}
         </div>
       </div>
@@ -375,9 +383,10 @@ function CalendarView({ refresh, onChanged, onSchedule }: {
                 <div
                   key={t.id}
                   className={`cal-chip ${t.type}${t.completed ? ' done' : ''}`}
+                  style={t.type === 'email' ? EMAIL_COLOUR.chip : undefined}
                   draggable={!t.completed}
                   onDragStart={e => e.dataTransfer.setData('text/plain', t.id)}
-                  title={`${t.type === 'visit' ? 'F2F visit' : 'Phone'}: ${t.account.name}${t.note ? `, ${t.note}` : ''}`}
+                  title={`${TASK_LABEL[t.type]}: ${t.account.name}${t.note ? `, ${t.note}` : ''}`}
                 >
                   {t.account.name}
                 </div>
@@ -415,12 +424,14 @@ function CalendarView({ refresh, onChanged, onSchedule }: {
             {selectedTasks.map(t => (
               <div className={'m-row' + (t.completed ? ' cal-row-done' : '')} key={t.id} style={{ gridTemplateColumns: '30px 70px 1.6fr 1fr 150px', cursor: 'default' }}>
                 <input type="checkbox" checked={t.completed} onChange={() => toggleDone(t)} aria-label="Done" />
-                <div><span className={`pill ${t.type === 'visit' ? 'teal' : 'amber'}`}>{t.type === 'visit' ? 'F2F visit' : 'Phone'}</span></div>
+                <div><span className={`pill ${t.type === 'visit' ? 'teal' : t.type === 'email' ? 'neutral' : 'amber'}`}>{TASK_LABEL[t.type]}</span></div>
                 <div>
                   <Link to={`/accounts/${t.account.id}`} className="acct-name">{t.account.name}</Link>
                   <div className="acct-region">{t.account.region}{t.note ? `, ${t.note}` : ''}</div>
                 </div>
-                <div>{t.account.phone ? <a href={`tel:${t.account.phone}`} className="order-link">{t.account.phone}</a> : '—'}</div>
+                <div>{t.type === 'email'
+                  ? (t.account.email ? <a href={`mailto:${t.account.email}`} className="order-link">{t.account.email}</a> : '—')
+                  : (t.account.phone ? <a href={`tel:${t.account.phone}`} className="order-link">{t.account.phone}</a> : '—')}</div>
                 <div>
                   {!t.completed && (
                     <input

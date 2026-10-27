@@ -137,8 +137,8 @@ async function loadSales(f: Filters, rep: Rep): Promise<Row[]> {
   const ids = await scopeIds(rep);
   const w: Prisma.Sql[] = [];
   if (ids) w.push(Prisma.sql`a.id = any(${ids}::uuid[])`);
-  if (f.from) w.push(Prisma.sql`(q.sent_at at time zone 'Australia/Melbourne')::date >= ${f.from}::date`);
-  if (f.to) w.push(Prisma.sql`(q.sent_at at time zone 'Australia/Melbourne')::date <= ${f.to}::date`);
+  if (f.from) w.push(Prisma.sql`((q.sent_at at time zone 'UTC') at time zone 'Australia/Melbourne')::date >= ${f.from}::date`);
+  if (f.to) w.push(Prisma.sql`((q.sent_at at time zone 'UTC') at time zone 'Australia/Melbourne')::date <= ${f.to}::date`);
   if (f.brands?.length) w.push(Prisma.sql`l.brand = any(${f.brands}::text[])`);
   if (f.states?.length) w.push(Prisma.sql`a.region = any(${f.states}::text[])`);
   if (f.categories?.length) w.push(Prisma.sql`coalesce(nullif(a.category, ''), 'Uncategorized') = any(${f.categories}::text[])`);
@@ -146,7 +146,7 @@ async function loadSales(f: Filters, rep: Rep): Promise<Row[]> {
   const councilCols = (await councilReady()) ? Prisma.sql`a.council, a.postcode` : Prisma.sql`null::text as council, null::text as postcode`;
   if (f.realOrdersOnly !== false) w.push(Prisma.sql`upper(coalesce(q.fulfillment_status, '')) not in ('DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING', 'VOIDED', 'CREDITED')`);
   const rows = await prisma.$queryRaw<any[]>(Prisma.sql`
-    select (q.sent_at at time zone 'Australia/Melbourne')::date::text as order_date, q.number as order_no,
+    select ((q.sent_at at time zone 'UTC') at time zone 'Australia/Melbourne')::date::text as order_date, q.number as order_no,
            coalesce(q.fulfillment_status, '') as status, a.name as customer, a.region as state, ${councilCols},
            coalesce(nullif(a.category, ''), 'Uncategorized') as category, rp.name as rep,
            l.brand, l.sku, l.product_name as product, l.quantity::float8 as qty, l.unit_price::float8 as unit_price,
@@ -203,7 +203,7 @@ async function loadCustomers(f: Filters, rep: Rep): Promise<Row[]> {
   const rows = await prisma.$queryRaw<any[]>(Prisma.sql`
     select a.name, a.region as state, ${councilCols}, coalesce(nullif(a.category, ''), 'Uncategorized') as category, rp.name as rep, s.status,
            a.contact_name as contact, a.phone, a.email, a.spend_30::float8 as spend30, a.spend_90::float8 as spend90,
-           a.spend_365::float8 as spend365, (s.last_order at time zone 'Australia/Melbourne')::date::text as last_order
+           a.spend_365::float8 as spend365, ((s.last_order at time zone 'UTC') at time zone 'Australia/Melbourne')::date::text as last_order
     from crm.accounts a
     left join crm.account_status s on s.account_id = a.id
     left join crm.reps rp on rp.id = a.rep_id

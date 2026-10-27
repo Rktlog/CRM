@@ -434,7 +434,7 @@ const DATASETS: Dataset[] = [
       const skus = text(a.sku) ? text(a.sku).split(',').map(x => x.trim().toUpperCase()).filter(Boolean) : null;
       const rows = await prisma.$queryRaw<{ sku: string; product: string | null; brand: string | null; category: string | null; month: string; qty: number; revenue: number }[]>`
         select l.sku, max(l.product_name) as product, max(coalesce(pr.brand, l.brand)) as brand, max(pr.category) as category,
-               to_char(date_trunc('month', q.sent_at at time zone 'Australia/Melbourne'), 'YYYY-MM') as month,
+               to_char(date_trunc('month', (q.sent_at at time zone 'UTC') at time zone 'Australia/Melbourne'), 'YYYY-MM') as month,
                sum(l.quantity)::float8 as qty, sum(l.line_total)::float8 as revenue
         from crm.quote_lines l
         join crm.quotes q on q.id = l.quote_id
@@ -449,7 +449,7 @@ const DATASETS: Dataset[] = [
           and (${like(a.category)}::text is null or pr.category ilike ${like(a.category)}::text)
           and (${skus}::text[] is null or upper(l.sku) = any(${skus}::text[]))
           and (${like(a.search)}::text is null or l.sku ilike ${like(a.search)}::text or l.product_name ilike ${like(a.search)}::text)
-        group by l.sku, to_char(date_trunc('month', q.sent_at at time zone 'Australia/Melbourne'), 'YYYY-MM')
+        group by l.sku, to_char(date_trunc('month', (q.sent_at at time zone 'UTC') at time zone 'Australia/Melbourne'), 'YYYY-MM')
         limit 250000`;
       if (!rows.length) throw new DataError('No orders matched, so there is nothing to forecast from. Check the brand, category or SKU, or widen the history.');
 

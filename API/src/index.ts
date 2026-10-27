@@ -29,6 +29,7 @@ import { summarySheetRouter } from './routes/summarySheet';
 import { aiRouter } from './routes/ai';
 import { guardApp, errorHandler, keepRunning } from './lib/safeRouter';
 import { startGmailSchedule } from './sync/gmailJob';
+import { syncStatusRouter } from './routes/syncStatus'
 import { syncCronRouter } from './routes/syncCron';
 import { gzipJson } from './lib/gzipJson';
 import { requestTiming } from './lib/timing';
@@ -82,6 +83,7 @@ app.use('/calendar', requireAuth, calendarRouter);       // was missing: without
 app.use('/sync-cron', syncCronRouter);          // started by Supabase's scheduler, secret header, no login
 app.use('/ai', requireAuth, aiRouter);
 app.use('/ordering', requireAuth, orderingRouter);   // the Ordering page (managers): what to order, from the database
+app.use('/sync-status', requireAuth, syncStatusRouter);
 app.use('/followup-drafts', requireAuth, followUpDraftsRouter);   // payment reminder drafts (managers)
 
 guardApp(app);          // from here every route hands its errors to Express instead of stopping the server

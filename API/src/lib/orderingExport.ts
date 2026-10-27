@@ -1,9 +1,13 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
 
 // The nine ordering reports as CSV files, worked out from the CRM database (DEAR is synced into it), so nothing has to be exported from DEAR by hand.
 // They follow your export settings: all brands with a Brand column; no status filter (every status is included, with a Status column, and a
 // "Counts as a sale" column so nothing is double counted); amounts as stored from DEAR in base currency; the date ranges you choose.
-// Dates are calendar days exactly as DEAR gives them (no time zone shifting), and a range includes both its first and last day.
+// Dates are Melbourne calendar days, and a range includes both its first and last day. Order dates are stored as the order's day at 00:00 UTC
+// (what the live sync writes), except history loaded from a Melbourne machine, which is Melbourne midnight as UTC (13:00 or 14:00 the day before).
+// mel() below reads both as the right Melbourne day, and still does once those rows are moved to 00:00. Reading the raw column as a date would give
+// the day BEFORE for the 13:00/14:00 rows, and a range filter on the raw column would drop 1 July orders from a report starting 1 July.
 
 export type Range = { from: string; to: string };
 export type Cell = string | number | null;
@@ -17,7 +21,7 @@ export const REPORTS: { key: ReportKey; no: number; title: string; file: string;
   { key: 'customer-orders-by-product', no: 3, title: 'Customer Orders by Product', file: 'customer-orders-by-product', basis: 'period', note: 'Each customer and product: orders, units and value. Quotes, drafts and voided orders are not counted.' },
   { key: 'sale-overview', no: 4, title: 'Sale Overview', file: 'sale-overview', basis: 'period', note: 'One row per order with its status, totals and payments, every status.' },
   { key: 'sale-backorder-details', no: 5, title: 'Sale Backorder Details', file: 'sale-backorder-details', basis: 'now', note: 'As at today: units customers are waiting for on open orders.' },
-  { key: 'sale-outstanding-quotes', no: 6, title: 'Sale Outstanding Quotes', file: 'sale-outstanding-quotes', basis: 'year', note: 'Quotes and drafts not yet orders, one row per line, by quote date.' },
+  { key: 'sale-outstanding-quotes', no: 6, title: 'Sale Outstanding Quotes', file: 'sale-outstanding-quotes', basis: 'year', note: 'Quotes, drafts and orders still at Ordering, one row per line, by quote date.' },
   { key: 'inventory-movement-details', no: 7, title: 'Inventory Movement Details', file: 'inventory-movement-details', basis: 'year', note: 'Sales invoiced, purchases received and stock adjustments, by movement date.' },
   { key: 'pending-purchase-orders', no: 8, title: 'Pending Purchase Orders', file: 'pending-purchase-orders', basis: 'year', note: 'Purchase order lines still to arrive, by order date.' },
   { key: 'purchase-order-details', no: 9, title: 'Purchase Order Details', file: 'purchase-order-details', basis: 'year', note: 'Every purchase order line, by order date, with what has arrived.' },
@@ -72,10 +76,18 @@ export function makeZip(files: { name: string; data: Buffer }[], when = new Date
   return Buffer.concat([...parts, centralBuf, end]);
 }
 
+// A stored date or moment as the Melbourne calendar day it means. Right for 00:00 UTC (10:00 or 11:00 that day in Melbourne), for 13:00/14:00 UTC
+// (Melbourne midnight, the next day in UTC) and for a real moment such as a payment time.
+const mel = (col: string) => Prisma.raw(`((${col} at time zone 'UTC') at time zone 'Australia/Melbourne')`);
+const melToday = Prisma.raw(`(timezone('Australia/Melbourne', now()))::date`);
+
 // ---- the reports ----
 const CAP = 300000;                       // rows per report; if a report reaches it, the README says so
 const NOT_SALES = ['DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING', 'VOIDED', 'CREDITED', 'QUOTE'];   // not counted as a sale (the same rule the Assistant's forecast uses, plus QUOTE)
 const QUOTES = ['DRAFT', 'ESTIMATING', 'ESTIMATED', 'QUOTE'];
+// What Sale Outstanding Quotes lists: those, plus orders still at Ordering. In the 3 Oct DEAR refresh most of the outstanding quotes were Ordering-status
+// orders (92 of them here now, against 1 order in all four statuses above), so leaving Ordering out made the report empty.
+const OUTSTANDING = [...QUOTES, 'ORDERING'];
 const CLOSED = ['COMPLETED', 'VOIDED', 'CREDITED', ...QUOTES, 'ORDERING'];
 const yn = (b: unknown) => (b ? 'Yes' : 'No');
 const STANDARD_STAGES: Record<string, string> = { eol: 'EOL', discontinued: 'Discontinued', preorder_only: 'Preorder Only', new: 'New', ranging: 'Confirmed for Ranging', customer_only: 'For Customer Only Then Cease', phasing_out: 'Phasing Out' };
@@ -102,28 +114,28 @@ export async function runReport(key: ReportKey, r: Range): Promise<Table> {
     }
     case 'sale-order-details': {
       const x = await prisma.$queryRaw<any[]>`
-        select q.number, to_char(q.sent_at, 'YYYY-MM-DD') as odate, to_char(q.invoice_date, 'YYYY-MM-DD') as idate, a.name as customer, a.region, q.reference, q.fulfillment_status as status, q.shipping_status, q.payment_status, q.source,
+        select q.number, to_char(${mel('q.sent_at')}, 'YYYY-MM-DD') as odate, to_char(${mel('q.invoice_date')}, 'YYYY-MM-DD') as idate, a.name as customer, a.region, q.reference, q.fulfillment_status as status, q.shipping_status, q.payment_status, q.source,
                l.sku, l.product_name, l.brand, l.quantity::float8 as qty, l.unit_price::float8 as price, l.discount::float8 as discount, l.tax::float8 as tax, l.line_total::float8 as total
         from crm.quotes q join crm.accounts a on a.id = q.account_id join crm.quote_lines l on l.quote_id = q.id
-        where q.sent_at >= ${r.from}::date and q.sent_at < (${r.to}::date + 1) order by q.sent_at, q.number, l.sku limit ${CAP}`;
+        where ${mel('q.sent_at')} >= ${r.from}::date and ${mel('q.sent_at')} < (${r.to}::date + 1) order by q.sent_at, q.number, l.sku limit ${CAP}`;
       return finish(['Order no', 'Order date', 'Invoice date', 'Customer', 'State', 'Customer reference', 'Order status', 'Shipping status', 'Payment status', 'Counts as a sale', 'Source', 'SKU', 'Product', 'Brand', 'Quantity', 'Unit price', 'Discount', 'Tax', 'Line total'],
         x.map(o => [o.number, o.odate, o.idate, o.customer, o.region, o.reference, o.status, o.shipping_status, o.payment_status, yn(!NOT_SALES.includes(String(o.status ?? '').toUpperCase())), o.source, o.sku, o.product_name, o.brand, o.qty, o.price, o.discount, o.tax, o.total]));
     }
     case 'customer-orders-by-product': {
       const x = await prisma.$queryRaw<any[]>`
         select a.name as customer, a.region, l.sku, max(l.product_name) as product, max(l.brand) as brand, count(distinct q.id)::int as orders, sum(l.quantity)::float8 as qty, sum(l.line_total)::float8 as total,
-               to_char(min(q.sent_at), 'YYYY-MM-DD') as first_order, to_char(max(q.sent_at), 'YYYY-MM-DD') as last_order
+               to_char(min(${mel('q.sent_at')}), 'YYYY-MM-DD') as first_order, to_char(max(${mel('q.sent_at')}), 'YYYY-MM-DD') as last_order
         from crm.quotes q join crm.accounts a on a.id = q.account_id join crm.quote_lines l on l.quote_id = q.id
-        where q.sent_at >= ${r.from}::date and q.sent_at < (${r.to}::date + 1) and upper(coalesce(q.fulfillment_status, '')) <> all(${NOT_SALES}::text[])
+        where ${mel('q.sent_at')} >= ${r.from}::date and ${mel('q.sent_at')} < (${r.to}::date + 1) and upper(coalesce(q.fulfillment_status, '')) <> all(${NOT_SALES}::text[])
         group by a.name, a.region, l.sku order by a.name, l.sku limit ${CAP}`;
       return finish(['Customer', 'State', 'SKU', 'Product', 'Brand', 'Orders', 'Quantity', 'Value', 'First order', 'Last order'], x.map(o => [o.customer, o.region, o.sku, o.product, o.brand, o.orders, o.qty, o.total, o.first_order, o.last_order]));
     }
     case 'sale-overview': {
       const x = await prisma.$queryRaw<any[]>`
-        select q.number, to_char(q.sent_at, 'YYYY-MM-DD') as odate, to_char(q.invoice_date, 'YYYY-MM-DD') as idate, q.invoice_number, a.name as customer, a.region, rp.name as rep, q.reference, q.fulfillment_status as status, q.picking_status, q.shipping_status, q.payment_status,
-               q.source, q.goods_total::float8 as goods, q.tax_total::float8 as tax, coalesce(q.total, q.amount)::float8 as total, q.invoiced_total::float8 as invoiced, q.credited_total::float8 as credited, q.amount_paid::float8 as paid, q.amount_due::float8 as due, to_char(q.paid_at, 'YYYY-MM-DD') as paid_on
+        select q.number, to_char(${mel('q.sent_at')}, 'YYYY-MM-DD') as odate, to_char(${mel('q.invoice_date')}, 'YYYY-MM-DD') as idate, q.invoice_number, a.name as customer, a.region, rp.name as rep, q.reference, q.fulfillment_status as status, q.picking_status, q.shipping_status, q.payment_status,
+               q.source, q.goods_total::float8 as goods, q.tax_total::float8 as tax, coalesce(q.total, q.amount)::float8 as total, q.invoiced_total::float8 as invoiced, q.credited_total::float8 as credited, q.amount_paid::float8 as paid, q.amount_due::float8 as due, to_char(${mel('q.paid_at')}, 'YYYY-MM-DD') as paid_on
         from crm.quotes q join crm.accounts a on a.id = q.account_id left join crm.reps rp on rp.id = a.rep_id
-        where q.sent_at >= ${r.from}::date and q.sent_at < (${r.to}::date + 1) order by q.sent_at, q.number limit ${CAP}`;
+        where ${mel('q.sent_at')} >= ${r.from}::date and ${mel('q.sent_at')} < (${r.to}::date + 1) order by q.sent_at, q.number limit ${CAP}`;
       return finish(['Order no', 'Order date', 'Invoice date', 'Invoice no', 'Customer', 'State', 'Rep', 'Customer reference', 'Order status', 'Picking status', 'Shipping status', 'Payment status', 'Counts as a sale', 'Source', 'Goods total', 'Tax', 'Total', 'Invoiced total', 'Credited', 'Amount paid', 'Amount due', 'Paid on'],
         x.map(o => [o.number, o.odate, o.idate, o.invoice_number, o.customer, o.region, o.rep, o.reference, o.status, o.picking_status, o.shipping_status, o.payment_status, yn(!NOT_SALES.includes(String(o.status ?? '').toUpperCase())), o.source, o.goods, o.tax, o.total, o.invoiced, o.credited, o.paid, o.due, o.paid_on]));
     }
@@ -140,7 +152,7 @@ export async function runReport(key: ReportKey, r: Range): Promise<Table> {
           select *, least(coalesce(nullif(lf -> sku ->> 'shipped', '')::float8, 0), qty) as shipped,
                  least(coalesce(nullif(lf -> sku ->> 'backordered', '')::float8, 0), greatest(qty - coalesce(nullif(lf -> sku ->> 'shipped', '')::float8, 0), 0)) as backordered
           from lines)
-        select c.number, to_char(c.sent_at, 'YYYY-MM-DD') as odate, c.customer, c.region, c.status, c.shipping_status, c.sku, c.product, c.brand, c.qty::float8 as ordered, c.shipped::float8 as shipped, c.backordered::float8 as backordered,
+        select c.number, to_char(${mel('c.sent_at')}, 'YYYY-MM-DD') as odate, c.customer, c.region, c.status, c.shipping_status, c.sku, c.product, c.brand, c.qty::float8 as ordered, c.shipped::float8 as shipped, c.backordered::float8 as backordered,
                p.available::float8 as available, p.on_order::float8 as on_order, to_char(p.eta, 'YYYY-MM-DD') as eta
         from calc c left join crm.products p on p.sku = c.sku where c.backordered > 0 order by c.sent_at, c.number, c.sku limit ${CAP}`;
       return finish(['Order no', 'Order date', 'Customer', 'State', 'Order status', 'Shipping status', 'SKU', 'Product', 'Brand', 'Ordered', 'Shipped', 'Backordered', 'Available now', 'On order', 'Next arrival'],
@@ -148,19 +160,19 @@ export async function runReport(key: ReportKey, r: Range): Promise<Table> {
     }
     case 'sale-outstanding-quotes': {
       const x = await prisma.$queryRaw<any[]>`
-        select q.number, to_char(q.sent_at, 'YYYY-MM-DD') as qdate, a.name as customer, a.region, q.fulfillment_status as status, q.reference, l.sku, l.product_name, l.brand, l.quantity::float8 as qty, l.unit_price::float8 as price, l.line_total::float8 as total,
-               (current_date - q.sent_at::date)::int as age
+        select q.number, to_char(${mel('q.sent_at')}, 'YYYY-MM-DD') as qdate, a.name as customer, a.region, q.fulfillment_status as status, q.reference, l.sku, l.product_name, l.brand, l.quantity::float8 as qty, l.unit_price::float8 as price, l.line_total::float8 as total,
+               (${melToday} - ${mel('q.sent_at')}::date)::int as age
         from crm.quotes q join crm.accounts a on a.id = q.account_id join crm.quote_lines l on l.quote_id = q.id
-        where q.source <> 'rhino-history' and q.number not like 'Q%' and q.misc_type is null and upper(coalesce(q.fulfillment_status, '')) = any(${QUOTES}::text[])
-          and q.sent_at >= ${r.from}::date and q.sent_at < (${r.to}::date + 1) order by q.sent_at, q.number, l.sku limit ${CAP}`;
+        where q.source <> 'rhino-history' and q.number not like 'Q%' and q.misc_type is null and upper(coalesce(q.fulfillment_status, '')) = any(${OUTSTANDING}::text[])
+          and ${mel('q.sent_at')} >= ${r.from}::date and ${mel('q.sent_at')} < (${r.to}::date + 1) order by q.sent_at, q.number, l.sku limit ${CAP}`;
       return finish(['Quote no', 'Quote date', 'Customer', 'State', 'Status', 'Customer reference', 'SKU', 'Product', 'Brand', 'Quantity', 'Unit price', 'Line total', 'Age (days)'], x.map(o => [o.number, o.qdate, o.customer, o.region, o.status, o.reference, o.sku, o.product_name, o.brand, o.qty, o.price, o.total, o.age]));
     }
     case 'inventory-movement-details': {
       const x = await prisma.$queryRaw<any[]>`
         select * from (
-          select q.invoice_date::date as mdate, 'Sale invoiced' as type, l.sku, l.product_name as product, l.brand, -l.quantity::float8 as qty, q.number as ref, a.name as party, null::text as location, null::float8 as unit_cost
+          select ${mel('q.invoice_date')}::date as mdate, 'Sale invoiced' as type, l.sku, l.product_name as product, l.brand, -l.quantity::float8 as qty, q.number as ref, a.name as party, null::text as location, null::float8 as unit_cost
           from crm.quotes q join crm.accounts a on a.id = q.account_id join crm.quote_lines l on l.quote_id = q.id
-          where q.invoice_date is not null and upper(coalesce(q.fulfillment_status, '')) <> all(${NOT_SALES}::text[]) and q.invoice_date >= ${r.from}::date and q.invoice_date < (${r.to}::date + 1)
+          where q.invoice_date is not null and upper(coalesce(q.fulfillment_status, '')) <> all(${NOT_SALES}::text[]) and ${mel('q.invoice_date')} >= ${r.from}::date and ${mel('q.invoice_date')} < (${r.to}::date + 1)
           union all
           select pl.last_received_at::date, 'Purchase received', pl.sku, pl.product_name, p2.brand, pl.quantity_received::float8, p.number, p.supplier, null, null
           from crm.purchase_lines pl join crm.purchases p on p.id = pl.purchase_id left join crm.products p2 on p2.sku = pl.sku
@@ -211,7 +223,7 @@ export function readme(today: string, period: Range, year: Range, counts: Record
     '  - All brands, with a Brand column.',
     '  - No status filter: every status is included. Order reports carry a Status column and a "Counts as a sale" column (No for quotes, drafts, estimates and voided or credited orders), so filter on that rather than adding everything up.',
     '  - Amounts are the totals stored from DEAR, in base currency.',
-    '  - Dates are calendar days as DEAR gives them. A range includes both its first and last day.',
+    '  - Dates are Melbourne calendar days. A range includes both its first and last day.',
     `  - Sales reports (2 to 4): ${period.from} to ${period.to}. Quotes, movements and purchase orders (6 to 9): ${year.from} to ${year.to}. Availability and backorders (1 and 5) are as at ${today}.`,
     '',
     'The reports',
@@ -220,7 +232,7 @@ export function readme(today: string, period: Range, year: Range, counts: Record
     'Things to know',
     '  - Inventory Movement Details is built from what the CRM holds, not DEAR\'s full movement ledger: sales by invoice date, purchases by the date they were last received (a line received in several parts shows once, on its last date), and stock adjustments by effective date.',
     '  - Pending Purchase Orders and Purchase Order Details cover the purchase orders synced into the CRM. Check an order is missing from them before assuming it does not exist.',
-    '  - Quotes and drafts are listed in Sale Outstanding Quotes and are not demand until they become orders.',
+    '  - Sale Outstanding Quotes lists quotes, drafts and orders still at Ordering status. Ordering-status orders are also in Sale Order Details (Counts as a sale = No), so count each one once.',
     '  - History imported from the old sales spreadsheet has order numbers starting with Q and the source "rhino-history".',
   ];
   return lines.join('\r\n') + '\r\n';

@@ -9,7 +9,7 @@ export const orderingRouter = Router();
 //   stock                  crm.products            what is on hand, allocated, available, on order, the stage and the order increment
 //   what customers order   crm.quote_lines         units per month by order date: the same history and rules as the Assistant's sales forecast
 //   customers waiting      open orders             units on orders not yet shipped that DEAR has marked as backordered
-//   quotes not yet orders  crm.quotes              units on quotes and drafts from the last 180 days (shown, not counted as demand)
+//   quotes not yet orders  crm.quotes              units on quotes, drafts and orders still at Ordering from the last 180 days (shown, not counted as demand)
 //   stock on order         crm.purchase_lines      what is still to arrive on purchase orders, and when it is required
 //   supplier               crm.purchases           the supplier on the most recent purchase order for the product
 // The forecast is worked out by code (backtested, with a confidence rating) and kept for 20 minutes. The stock and plan are worked out fresh every time.
@@ -45,12 +45,12 @@ orderingRouter.get('/', async (req, res) => {
   const today = melDay(), thisMonth = today.slice(0, 7), lastFull = addMonths(thisMonth, -1), startMonth = addMonths(lastFull, -(history - 1));
 
   const series = await cachedSeries(`${history}|${lastFull}`, async () => buildSeries(await prisma.$queryRaw<{ sku: string; month: string; qty: number }[]>`
-    select l.sku, to_char(q.sent_at, 'YYYY-MM') as month, sum(l.quantity)::float8 as qty   -- the order date as DEAR gives it: a plain date, so no time zone can move an order across a month end
+    select l.sku, to_char((q.sent_at at time zone 'UTC') at time zone 'Australia/Melbourne', 'YYYY-MM') as month, sum(l.quantity)::float8 as qty   -- the order's Melbourne day, so an order on the 1st is counted in its own month (some stored dates are Melbourne midnight as UTC, the day before in UTC)
     from crm.quote_lines l join crm.quotes q on q.id = l.quote_id
     where q.source <> 'rhino-history' and q.number not like 'Q%' and q.misc_type is null
       and upper(coalesce(q.fulfillment_status, '')) not in ('DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING', 'VOIDED', 'CREDITED')
-      and q.sent_at >= (${startMonth} || '-01')::date
-      and q.sent_at < (${thisMonth} || '-01')::date
+      and ((q.sent_at at time zone 'UTC') at time zone 'Australia/Melbourne') >= (${startMonth} || '-01')::date
+      and ((q.sent_at at time zone 'UTC') at time zone 'Australia/Melbourne') < (${thisMonth} || '-01')::date
     group by l.sku, 2 limit 250000`, lastFull));
 
   const [products, backordered, quoted, pos, suppliers, stages, stockRun] = await Promise.all([
@@ -70,7 +70,7 @@ orderingRouter.get('/', async (req, res) => {
     prisma.$queryRaw<{ sku: string; qty: number }[]>`
       select l.sku, sum(l.quantity)::float8 as qty from crm.quotes q join crm.quote_lines l on l.quote_id = q.id
       where q.source <> 'rhino-history' and q.number not like 'Q%' and q.misc_type is null
-        and upper(coalesce(q.fulfillment_status, '')) in ('DRAFT', 'ESTIMATING', 'ESTIMATED', 'QUOTE') and q.sent_at >= now() - interval '180 days'
+        and upper(coalesce(q.fulfillment_status, '')) in ('DRAFT', 'ESTIMATING', 'ESTIMATED', 'QUOTE', 'ORDERING') and q.sent_at >= now() - interval '180 days'
       group by l.sku`,
     prisma.$queryRaw<{ sku: string; outstanding: number; next_by: Date | null }[]>`
       select l.sku, sum(greatest(l.quantity_ordered - l.quantity_received, 0))::float8 as outstanding, min(p.required_by) as next_by

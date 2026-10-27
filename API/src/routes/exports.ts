@@ -879,7 +879,7 @@ exportsRouter.get('/:type', async (req, res) => {
               else 'Hidden from some reps by a manager'
             end as why_hidden,
             s.status as crm_status, a.dear_customer_id is not null as in_dear, a.created_at::date::text as created,
-            (s.last_order at time zone 'Australia/Melbourne')::date::text as last_order, a.spend_365::float8 as spend_365,
+            ((s.last_order at time zone 'UTC') at time zone 'Australia/Melbourne')::date::text as last_order, a.spend_365::float8 as spend_365,
             (select count(*)::int from crm.rep_account_exclusions e where e.account_id = a.id) as hidden_from_reps
           from crm.accounts a
           left join crm.reps r on r.id = a.rep_id

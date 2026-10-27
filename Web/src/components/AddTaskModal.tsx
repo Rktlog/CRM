@@ -15,7 +15,7 @@ export default function AddTaskModal({ onCreated, onClose, initialDate }: Props)
   // If a new store was saved but the next step failed, a retry reuses it
   // instead of creating the store twice.
   const savedStore = useRef<{ id: string; name: string } | null>(null);
-  const [type, setType] = useState<'cold_call' | 'visit'>('cold_call');
+  const [type, setType] = useState<'cold_call' | 'email' | 'visit'>('cold_call');
   const [date, setDate] = useState(initialDate ?? localISO());
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
@@ -49,7 +49,7 @@ export default function AddTaskModal({ onCreated, onClose, initialDate }: Props)
         <h3 style={{ marginBottom: 16 }}>Schedule a task</h3>
 
         <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-          {(['cold_call', 'visit'] as const).map(t => (
+          {(['cold_call', 'email', 'visit'] as const).map(t => (
             <button
               key={t}
               type="button"
@@ -57,7 +57,7 @@ export default function AddTaskModal({ onCreated, onClose, initialDate }: Props)
               style={{ opacity: type === t ? 1 : 0.55, padding: '6px 12px', fontSize: 12.5 }}
               onClick={() => setType(t)}
             >
-              {t === 'cold_call' ? 'Phone' : 'F2F visit'}
+              {t === 'cold_call' ? 'Phone' : t === 'email' ? 'Email' : 'F2F visit'}
             </button>
           ))}
         </div>

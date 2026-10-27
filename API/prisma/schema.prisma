@@ -34,6 +34,7 @@ enum AccountType {
   prospect
   lead
   customer
+  cold_lead   // no further contact: the Planner refuses to schedule tasks for these (see routes/tasks.ts)
 
   @@schema("crm")
 }
@@ -152,6 +153,19 @@ model Account {
   // from budget/ledger/performance figures specifically.
   misc          Boolean     @default(false)
 
+  // ---- Columns that exist in the database but were missing from this file (added from the live schema) ----
+  // Set while an account's order history still has to be loaded from DEAR.
+  needsOrderBackfill Boolean   @default(false) @map("needs_order_backfill")
+  // Stops the archive clean-up scripts from un-archiving or re-archiving this account.
+  keepArchived       Boolean   @default(false) @map("keep_archived")
+  // When the account was linked to its DEAR customer, and when DEAR created that customer.
+  dearLinkedAt       DateTime? @map("dear_linked_at") @db.Timestamptz
+  dearCreatedAt      DateTime? @map("dear_created_at") @db.Timestamptz
+  // Leave this account out of the open-quotes follow-up list.
+  skipOpenQuotes     Boolean   @default(false) @map("skip_open_quotes")
+  postcode           String?
+  council            String?
+
   activity      Activity[]
   quotes        Quote[]
   tasks         Task[]
@@ -249,6 +263,18 @@ model Quote {
   unappliedCredit Float?   @map("unapplied_credit")
   memo            String?
 
+  // ---- Columns that exist in the database but were missing from this file (added from the live schema) ----
+  manualPaid         Boolean   @default(false) @map("manual_paid")   // marked paid by hand, not from DEAR
+  // Payment follow-up: when the next one is due, when the 1st and 2nd reminders were done, and who owns it.
+  followUpAt         DateTime? @map("follow_up_at") @db.Date
+  fu1DoneOn          DateTime? @map("fu1_done_on") @db.Date
+  fu2DoneOn          DateTime? @map("fu2_done_on") @db.Date
+  followUpRepId      String?   @map("follow_up_rep_id") @db.Uuid
+  // A prepay order released for dispatch before payment cleared: when, by whom, and why.
+  prepayReleasedAt   DateTime? @map("prepay_released_at") @db.Timestamptz
+  prepayReleasedBy   String?   @map("prepay_released_by") @db.Uuid
+  prepayReleaseNote  String?   @map("prepay_release_note")
+
   // Every account-list request filters/includes quotes by these
   // exact combinations (misc filtering, the History badge lookup) —
   // without these, Postgres was scanning the whole table per account.
@@ -322,6 +348,7 @@ model Task {
 enum TaskType {
   cold_call
   visit
+  email
 
   @@schema("crm")
 }
@@ -386,6 +413,18 @@ model Product {
   lifecycle     String?   // eol | discontinued | preorder | new; empty = none. Set by hand or import; the DEAR sync never touches it
   updatedAt     DateTime  @default(now()) @map("updated_at")
   stockSyncedAt DateTime? @map("stock_synced_at")
+
+  // ---- Columns that exist in the database but were missing from this file (added from the live schema) ----
+  sheetData      Json      @default("{}") @map("sheet_data")
+  sheetSyncedAt  DateTime? @map("sheet_synced_at")
+  stockZeroSince DateTime? @map("stock_zero_since") @db.Timestamptz   // used by crm.finish_eol_products()
+  description    String?
+  orderIncrement Int?      @map("order_increment")
+  weightKg       Float?    @map("weight_kg")
+  lengthCm       Float?    @map("length_cm")
+  widthCm        Float?    @map("width_cm")
+  heightCm       Float?    @map("height_cm")
+  tags           String[]
 
   @@map("products")
   @@schema("crm")

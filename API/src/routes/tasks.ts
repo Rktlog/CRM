@@ -22,12 +22,12 @@ function dateOnly(value?: unknown): Date {
 
 // Nothing unfinished gets lost: anything not done by the end of its day
 // moves to the next day the rep opens the planner.
-//   - visits and auto-planned tasks: all come forward to today
+//   - visits, scheduled emails and auto-planned tasks: all come forward to today (an email is quick, so there is no daily cap on them)
 //   - manually scheduled cold calls: up to the rep's daily limit today,
 //     the rest pushed one more day, so a big backlog drains gradually
-async function rolloverTasks(repId: string, today: Date) {
+export async function rolloverTasks(repId: string, today: Date) {
   await prisma.task.updateMany({
-    where: { repId, completed: false, scheduledDate: { lt: today }, OR: [{ fixed: true }, { reason: { not: null } }] },
+    where: { repId, completed: false, scheduledDate: { lt: today }, OR: [{ fixed: true }, { reason: { not: null } }, { type: 'email' }] },
     data: { scheduledDate: today },
   });
 
@@ -207,7 +207,7 @@ tasksRouter.get('/range', async (req, res) => {
 
   const tasks = await prisma.task.findMany({
     where: { repId: req.rep!.id, scheduledDate: { gte: from, lte: to } },
-    include: { account: { select: { id: true, name: true, region: true, phone: true } } },
+    include: { account: { select: { id: true, name: true, region: true, phone: true, email: true } } },
     orderBy: [{ scheduledDate: 'asc' }, { fixed: 'desc' }, { createdAt: 'asc' }],
   });
   res.json(tasks.map(t => ({
@@ -223,7 +223,7 @@ tasksRouter.get('/range', async (req, res) => {
 
 const createTaskSchema = z.object({
   accountId: z.string().uuid(),
-  type: z.enum(['cold_call', 'visit']),
+  type: z.enum(['cold_call', 'visit', 'email']),
   scheduledDate: z.string(), // 'YYYY-MM-DD'
   fixed: z.boolean().optional(),
   note: z.string().optional(),
@@ -234,9 +234,12 @@ tasksRouter.post('/', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   const { accountId, type, scheduledDate, note } = parsed.data;
+  // Someone who has asked for no further contact is never scheduled for contact.
+  const target = await prisma.account.findUnique({ where: { id: accountId }, select: { type: true, name: true } });
+  if (target?.type === 'cold_lead') return res.status(409).json({ error: `${target.name} is marked as a Cold lead (no further contact), so a task cannot be scheduled for them. A manager can change their type if that has changed.` });
   // A visit is inherently fixed — that's the whole point of scheduling
-  // one; a cold call is never fixed, it's exactly the kind of task
-  // that should roll forward if it doesn't happen.
+  // one; a phone call or an email is never fixed, it's exactly the kind of
+  // task that should roll forward if it doesn't happen.
   const fixed = type === 'visit';
 
   const task = await prisma.task.create({
