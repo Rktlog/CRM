@@ -7,12 +7,15 @@ import { slowestRoutes } from '../lib/timing';
 
 // How fast is the API, and why? Started with the same secret as the other scheduled jobs (header x-sync-secret), from SQL:
 //     select crm.call_api('/speed');
-// then read the answer with:  select left(content::text, 4000) from net._http_response order by created desc limit 1;
-// Add ?deep=1 (select crm.call_api('/speed?deep=1');) to also time the network to the database host below Prisma and the pooler: one DNS lookup,
-// then four bare TCP connections, each followed by one Postgres SSLRequest round trip. That separates "the network is far" from "each query is
-// paying for more than one trip", which the five Prisma queries below cannot tell apart.
-// It times five round trips from the API to the database (the cost every request pays, several times over), says where the API
-// and the database are, and lists the routes that have been slowest since the API last started.
+// then read the answer with:  select id, created, status_code, timed_out, left(content::text, 4000) as content from net._http_response order by created desc limit 8;
+// (crm.call_api gives the API only 10 seconds to answer, and with a far-away database even a few queries take that long, so anything slow runs in the
+// background: start it, wait a minute, fetch it.)
+//
+//   /speed                 three quick round trips to the database, where the API and the database are, and the slowest routes since the last restart.
+//   /speed?full=1          starts the full test in the background and answers at once. It times the network to the database host below Prisma, five
+//                          queries in a row and five started together (do the database connections run together?), and the same queries through
+//                          DIRECT_URL (would changing DATABASE_URL help?).
+//   /speed?full=result     the answer, once it has finished (about a minute). Say "running": true until then.
 export function dbVerdict(ms: number | null): string {
   if (ms === null) return 'Could not reach the database.';
   if (ms <= 12) return 'Same region as the database: ideal.';
@@ -90,59 +93,75 @@ export function parallelVerdict(oneMs: number, fiveMs: number): string {
 const median = (xs: number[]) => { const s = [...xs].sort((a, b) => a - b), m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const r1 = (v: number) => Math.round(v * 10) / 10;
 
+// The comparison with DIRECT_URL is slow (a new connection, then ten more queries), too slow to wait for in one call: the database's HTTP helper gives up
+// first and stores an empty reply. So it runs in the background: ?alt=1 starts it and answers at once, ?alt=result fetches the answer a minute later.
+// ---- the full test, in the background ----
+const job: { running: boolean; startedAt: number | null; finishedAt: number | null; result: unknown } = { running: false, startedAt: null, finishedAt: null, result: null };
+
+async function runFull() {
+  const d = describeDb();
+  const out: Record<string, unknown> = { database: d };
+  const current = await measureClient(prisma);   // five in a row, then five together (the first burst is a warm-up)
+  out.query = current;
+  if (d) {
+    let dnsMs: number | null = null;
+    try { const t0 = process.hrtime.bigint(); await dnsp.lookup(d.host); dnsMs = r1(Number(process.hrtime.bigint() - t0) / 1e6); } catch { /* reported as null */ }
+    const probes = [];
+    for (let i = 0; i < 4; i++) probes.push(await probeOnce(d.host, Number(d.port)));
+    const trips = probes.map(p => p.roundTripMs).filter((x): x is number => x !== null);
+    const oneTrip = trips.length ? r1(median(trips)) : null;
+    out.network = { dnsMs, tcpConnectMs: probes.map(p => p.connectMs), postgresRoundTripMs: probes.map(p => p.roundTripMs), oneTripMs: oneTrip, verdict: networkVerdict(current.steadyMedianMs, oneTrip) };
+  }
+  out.parallel = { oneQueryMs: current.steadyMedianMs, fiveAtOnceMs: current.fiveAtOnceMs, verdict: parallelVerdict(current.steadyMedianMs, current.fiveAtOnceMs) };
+
+  // The same host reached through DIRECT_URL (the session pooler when it is port 5432), in a throw-away client with a pool of 5.
+  const direct = process.env.DIRECT_URL;
+  if (direct && direct !== process.env.DATABASE_URL) {
+    let alt: PrismaClient | null = null;
+    try {
+      alt = new PrismaClient({ datasources: { db: { url: `${direct}${direct.includes('?') ? '&' : '?'}connection_limit=5` } } });
+      const other = await measureClient(alt);
+      out.directUrl = { what: 'DIRECT_URL, tried with a pool of 5', database: describeDb(direct), ...other, verdict: alternativeVerdict(current.steadyMedianMs, other.steadyMedianMs) };
+    } catch (e) {
+      out.directUrl = { database: describeDb(direct), error: String((e as Error)?.message ?? e).replace(/postgres(ql)?:\/\/\S+/gi, '[url]').slice(0, 200) };
+    } finally { try { await alt?.$disconnect(); } catch { /* nothing to do */ } }
+  }
+  return out;
+}
+
 export const speedRouter = Router();
 speedRouter.all('/', async (req, res) => {
   if (!process.env.SYNC_SECRET || req.headers['x-sync-secret'] !== process.env.SYNC_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+
+  const full = req.query.full ?? req.query.deep ?? req.query.alt;   // ?deep=1 and ?alt=1 are older names for the same thing
+  if (full === '1') {
+    if (!job.running) {
+      Object.assign(job, { running: true, startedAt: Date.now(), finishedAt: null, result: null });
+      runFull().then(r => { job.result = r; }, e => { job.result = { error: String((e as Error)?.message ?? e).replace(/postgres(ql)?:\/\/\S+/gi, '[url]').slice(0, 200) }; })
+        .finally(() => { job.running = false; job.finishedAt = Date.now(); });
+    }
+    return res.json({ started: true, running: job.running, next: 'Wait about a minute, then call /speed?full=result' });
+  }
+  if (full === 'result') {
+    return res.json({ running: job.running, startedSecondsAgo: job.startedAt ? Math.round((Date.now() - job.startedAt) / 1000) : null, result: job.result });
+  }
+
+  // The plain call: three quick round trips, small enough to come back inside the 10 seconds crm.call_api allows even when each one is slow.
   const pings: number[] = [];
   try {
-    for (let i = 0; i < 5; i++) { const t0 = process.hrtime.bigint(); await prisma.$queryRaw`select 1`; pings.push(r1(Number(process.hrtime.bigint() - t0) / 1e6)); }
+    for (let i = 0; i < 3; i++) { const t0 = process.hrtime.bigint(); await prisma.$queryRaw`select 1`; pings.push(r1(Number(process.hrtime.bigint() - t0) / 1e6)); }
   } catch (e) {
     return res.status(500).json({ error: `Could not reach the database: ${String((e as Error)?.message ?? e).slice(-200)}`, verdict: dbVerdict(null) });
   }
   const steady = r1(median(pings.slice(1)));   // the first one may include opening the connection
-  let network: unknown;
-  let parallel: unknown;
-  let alternative: unknown;
-  if (req.query.deep === '1') {
-    const d = describeDb();
-    if (d) {
-      let dnsMs: number | null = null;
-      try { const t0 = process.hrtime.bigint(); await dnsp.lookup(d.host); dnsMs = r1(Number(process.hrtime.bigint() - t0) / 1e6); } catch { /* reported as null */ }
-      const probes = [];
-      for (let i = 0; i < 4; i++) probes.push(await probeOnce(d.host, Number(d.port)));
-      const trips = probes.map(p => p.roundTripMs).filter((x): x is number => x !== null);
-      const oneTrip = trips.length ? r1(median(trips)) : null;
-      // Five at once. The first burst may open new connections (each pays the full connection set-up), so it is a warm-up and only the second counts.
-      const burst = async () => { const t0 = process.hrtime.bigint(); await Promise.all([0, 1, 2, 3, 4].map(() => prisma.$queryRaw`select 1`)); return r1(Number(process.hrtime.bigint() - t0) / 1e6); };
-      await burst();
-      const fiveMs = await burst();
-      parallel = { oneQueryMs: steady, fiveAtOnceMs: fiveMs, verdict: parallelVerdict(steady, fiveMs) };
-      // The same host reached through DIRECT_URL (the session pooler when it is port 5432), in a throw-away client with a pool of 5. One run answers
-      // "would changing DATABASE_URL help?" without anyone editing Railway first.
-      const direct = process.env.DIRECT_URL;
-      if (direct && direct !== process.env.DATABASE_URL) {
-        let alt: PrismaClient | null = null;
-        try {
-          alt = new PrismaClient({ datasources: { db: { url: `${direct}${direct.includes('?') ? '&' : '?'}connection_limit=5` } } });
-          const m = await Promise.race([measureClient(alt), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timed out after 40 s')), 40000))]);
-          alternative = { what: 'DIRECT_URL, tried with a pool of 5', database: describeDb(direct), ...m, verdict: alternativeVerdict(steady, m.steadyMedianMs) };
-        } catch (e) {
-          alternative = { what: 'DIRECT_URL', database: describeDb(direct), error: String((e as Error)?.message ?? e).replace(/postgres(ql)?:\/\/\S+/gi, '[url]').slice(0, 160) };
-        } finally { try { await alt?.$disconnect(); } catch { /* nothing to do */ } }
-      }
-      network = { dnsMs, tcpConnectMs: probes.map(p => p.connectMs), postgresRoundTripMs: probes.map(p => p.roundTripMs), replies: probes.map(p => p.reply), oneTripMs: oneTrip, verdict: networkVerdict(steady, oneTrip) };
-    }
-  }
   res.json({
     railwayRegion: process.env.RAILWAY_REPLICA_REGION ?? process.env.RAILWAY_REGION ?? null,
     database: describeDb(),
     databaseRoundTripMs: { first: pings[0], steadyMedian: steady, all: pings },
     verdict: dbVerdict(steady),
-    ...(network ? { network } : {}),
-    ...(parallel ? { parallel } : {}),
-    ...(alternative ? { alternative } : {}),
     uptimeSeconds: Math.round(process.uptime()),
     memoryMb: Math.round(process.memoryUsage().rss / 1048576),
     slowestRoutes: slowestRoutes(12),
+    more: 'For the network test and the DIRECT_URL comparison: /speed?full=1, then a minute later /speed?full=result',
   });
 });
