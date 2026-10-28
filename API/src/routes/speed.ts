@@ -159,6 +159,12 @@ speedRouter.all('/', async (req, res) => {
     database: describeDb(),
     databaseRoundTripMs: { first: pings[0], steadyMedian: steady, all: pings },
     verdict: dbVerdict(steady),
+    // Which code is running: the commit Railway built it from, so "is my change live?" does not need the Railway dashboard.
+    deployed: {
+      commit: process.env.RAILWAY_GIT_COMMIT_SHA ? process.env.RAILWAY_GIT_COMMIT_SHA.slice(0, 7) : null,
+      message: process.env.RAILWAY_GIT_COMMIT_MESSAGE ? process.env.RAILWAY_GIT_COMMIT_MESSAGE.split('\n')[0].slice(0, 100) : null,
+      branch: process.env.RAILWAY_GIT_BRANCH ?? null,
+    },
     uptimeSeconds: Math.round(process.uptime()),
     memoryMb: Math.round(process.memoryUsage().rss / 1048576),
     slowestRoutes: slowestRoutes(12),

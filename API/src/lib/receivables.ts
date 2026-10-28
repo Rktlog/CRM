@@ -166,6 +166,14 @@ export async function openQuotes(rep: Rep, regions?: string[], terms?: string[] 
         where q.account_id = any(${accountIds}::uuid[])
           and q.source <> 'rhino-history' and q.number not like 'Q%' and q.misc_type is null
           and upper(coalesce(q.fulfillment_status, '')) not in ('VOIDED', 'CREDITED', 'DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING')
+          -- A PREPAYMENT customer pays before dispatch, so once their order has shipped or been dispatched it is not an open quote (an unpaid balance is then
+          -- chased under Unpaid invoices). Shipped, part shipped, completed, or a fulfilment whose shipping has been authorised (whichever DEAR has filled in).
+          -- A customer on payment terms ships before paying as a matter of course, so for them nothing changes. (Same test as termsLabel above.)
+          and (not (nullif(btrim(coalesce(a.payment_terms, '')), '') is null or a.payment_terms ~* 'prepay' or a.credit::text = 'prepay')
+               or (upper(coalesce(q.fulfillment_status, '')) <> 'COMPLETED'
+                   and upper(coalesce(q.shipping_status, '')) not in ('SHIPPED', 'PARTIALLY SHIPPED')
+                   and not exists (select 1 from jsonb_array_elements(case when jsonb_typeof(q.fulfilments) = 'array' then q.fulfilments else '[]'::jsonb end) f(val)
+                                   where upper(coalesce(f.val->>'ship', '')) = 'AUTHORISED')))
           -- No invoice detail yet and DEAR has it as paid: believed only when there is no money on record to check it against. DEAR
           -- switches the flag on for a part-paid deposit order too, so when a payment or held prepayment is on record the amounts decide.
           and not (q.amount_due is null and q.paid and coalesce(q.amount_paid, 0) <= 0.005 and coalesce(q.unapplied_credit, 0) <= 0.005)
@@ -255,6 +263,7 @@ export async function openQuotes(rep: Rep, regions?: string[], terms?: string[] 
     remaining: cents(rows.reduce((s, r) => s + r.remaining, 0)),
     terms: selected, termOptions,   // which payment terms are included, and every wording there is, for the filter
     repOptions,                     // every rep, for choosing who follows up
+    shippedRule: 'prepaid customers: shipped and dispatched orders are not listed',   // proof of which version of this list is running (browser Network tab, the /orders/views/quotes answer)
   };
 }
 
