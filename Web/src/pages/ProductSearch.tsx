@@ -179,7 +179,7 @@ export default function ProductSearch() {
                     <ProductPhoto url={p.imageUrl} name={p.name} sku={p.sku} size={44} />
                     <div>
                       <div className="acct-name">{p.name} <ProductStatusPill status={p.lifecycle} /></div>
-                      {p.category && <div className="acct-region">{p.category}</div>}
+                      {p.brand && <div className="acct-region show-sm">{p.brand}</div>}   {/* the Brand column is hidden on small screens, so the brand goes under the name there */}
                       {p.orderIncrement ? <div className="acct-region" style={{ fontWeight: 600 }}>Order increment: {p.orderIncrement}</div> : null}
                     </div>
                   </div>

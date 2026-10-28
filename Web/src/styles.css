@@ -403,11 +403,14 @@ textarea, input[type="email"], input[type="password"], input[type="text"], selec
 .spend-grid.two { grid-template-columns: repeat(2, 1fr); }
 .spend-grid.four { grid-template-columns: repeat(4, 1fr); }
 
+.product-row .show-sm { display: none; }   /* shown only where the Brand column is hidden */
+
 @media (max-width: 760px) {
   .spend-grid.four { grid-template-columns: repeat(2, 1fr); }
   .product-detail { grid-template-columns: 1fr; }
   .product-row { grid-template-columns: 0.9fr 2fr 0.8fr 0.8fr !important; }
   .product-row .hide-sm { display: none; }
+  .product-row .show-sm { display: block; }
   .order-totals { max-width: none; }
 }
 

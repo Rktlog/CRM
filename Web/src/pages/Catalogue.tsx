@@ -24,7 +24,6 @@ const qty = (n: number) => n.toLocaleString('en-AU', { maximumFractionDigits: 2 
 export default function Catalogue() {
   const [search, setSearch] = useState('');
   const [brand, setBrand] = useState('');
-  const [category, setCategory] = useState('');
   const [inStock, setInStock] = useState(false);
   const [withPhoto, setWithPhoto] = useState(true);
   const [status, setStatus] = useState<Set<string>>(new Set());   // none ticked = every status
@@ -37,7 +36,6 @@ export default function Catalogue() {
   const [items, setItems] = useState<Item[]>([]);
   const [total, setTotal] = useState(0);
   const [brands, setBrands] = useState<Facet[]>([]);
-  const [categories, setCategories] = useState<Facet[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const latest = useRef(0);   // ignore an answer that arrives after a newer request
@@ -46,7 +44,6 @@ export default function Catalogue() {
     const p = new URLSearchParams({ limit: String(PAGE), offset: String(offset) });
     if (search.trim()) p.set('q', search.trim());
     if (brand) p.set('brand', brand);
-    if (category) p.set('category', category);
     if (inStock) p.set('inStock', '1');
     if (withPhoto) p.set('withPhoto', '1');
     if (status.size) p.set('status', [...status].join(','));
@@ -63,7 +60,6 @@ export default function Catalogue() {
       setItems(prev => (append ? [...prev, ...d.items] : d.items));
       setTotal(d.total);
       setBrands(d.brands);
-      setCategories(d.categories);
       setStatuses(d.statuses ?? []);
     } catch (e: any) {
       if (id === latest.current) setError(e.message);
@@ -76,7 +72,7 @@ export default function Catalogue() {
   useEffect(() => {
     const t = setTimeout(() => load(0, false), search ? 300 : 0);
     return () => clearTimeout(t);
-  }, [search, brand, category, inStock, withPhoto, status, bump]);
+  }, [search, brand, inStock, withPhoto, status, bump]);
 
   const control: React.CSSProperties = { padding: '7px 10px', border: '1px solid var(--line)', borderRadius: 6, font: 'inherit', fontSize: 13, background: 'var(--panel)' };
 
@@ -94,10 +90,6 @@ export default function Catalogue() {
         <select value={brand} onChange={e => setBrand(e.target.value)} aria-label="Brand" style={control}>
           <option value="">All brands</option>
           {brands.map(b => <option key={b.name} value={b.name}>{b.name} ({b.count})</option>)}
-        </select>
-        <select value={category} onChange={e => setCategory(e.target.value)} aria-label="Category" style={control}>
-          <option value="">All categories</option>
-          {categories.map(c => <option key={c.name} value={c.name}>{c.name} ({c.count})</option>)}
         </select>
         {statuses.some(s => s.count > 0) && (
           <details className="terms-filter">
@@ -167,7 +159,7 @@ function Fragment({ item: it, showBrand }: { item: Item; showBrand: boolean }) {
         </div>
         <div>
           <Link to={`/products?q=${encodeURIComponent(it.sku)}`} className="order-link" style={{ fontSize: 11.5 }}>{it.sku}</Link>
-          {it.category && <div className="acct-region">{it.category}</div>}
+          {it.brand && <div className="acct-region">{it.brand}</div>}
           {it.orderIncrement ? <div className="acct-region" style={{ fontWeight: 600 }}>Order increment: {it.orderIncrement}</div> : null}
           {it.lifecycle && <div style={{ marginTop: 3 }}><ProductStatusPill status={it.lifecycle} /></div>}
         </div>
