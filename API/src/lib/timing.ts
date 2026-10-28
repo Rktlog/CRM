@@ -51,4 +51,4 @@ export function slowestRoutes(n = 12) {
   }).sort((a, b) => b.slowest5PercentMs - a.slowest5PercentMs).slice(0, n);
 }
 
-export function resetTiming() { stats.clear(); }\\
+export function resetTiming() { stats.clear(); }
