@@ -10,6 +10,8 @@ import CreditReservations from '../components/CreditReservations';
 import AccountEmails from '../components/marketing/AccountEmails';
 import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fmtDateWithYear, daysBetween, flagFor, isHistoryOrder, isOwingOrder, amountOwing, fmtDuration } from '../lib/types';
 import { pickCurrentOrder } from '../lib/currentOrder';
+import { productBreakdownFor } from '../lib/productBreakdown';
+import OrderLines from '../components/OrderLines';
 import { todayLocal, dateInputValue, isoForDay } from '../lib/logDate';
 import AccountGmail from '../components/AccountGmail';
 import DraftEmailButton from '../components/DraftEmailButton';
@@ -43,32 +45,13 @@ export default function AccountDetail() {
   const [editingActivityId, setEditingActivityId] = useState<string | null>(null);
   const [openOrderId, setOpenOrderId] = useState<string | null>(null);
 
-  // Year-filtered product breakdown, computed client-side from the
-  // real per-quote line items already in the response — no extra
-  // request needed when switching years.
+  // The year picker's list comes from the product totals by year in the response (productsByYear), so switching years needs no extra request.
   const availableProductYears = useMemo(() => {
     if (!account) return [];
     return [...new Set(account.quotes.map(q => new Date(q.sentAt).getFullYear()))].sort((a, b) => b - a);
   }, [account]);
 
-  const filteredProductBreakdown = useMemo(() => {
-    if (!account) return [];
-    const relevantQuotes = productYear === 'all'
-      ? account.quotes
-      : account.quotes.filter(q => new Date(q.sentAt).getFullYear() === Number(productYear));
-
-    const bySku = new Map<string, { productName: string; brand: string | null; quantity: number; total: number }>();
-    for (const q of relevantQuotes) {
-      for (const l of q.lines ?? []) {
-        const e = bySku.get(l.sku) ?? { productName: l.productName, brand: l.brand, quantity: 0, total: 0 };
-        e.quantity += l.quantity; e.total += l.lineTotal;
-        bySku.set(l.sku, e);
-      }
-    }
-    return [...bySku.entries()]
-      .map(([sku, v]) => ({ sku, ...v }))
-      .sort((a, b) => b.total - a.total);
-  }, [account, productYear]);
+  const filteredProductBreakdown = useMemo(() => (account ? productBreakdownFor(account, productYear) : []), [account, productYear]);
   const [editNote, setEditNote] = useState('');
   const [editType, setEditType] = useState<ActivityKind>('call');
   const [editSaving, setEditSaving] = useState(false);
@@ -77,7 +60,7 @@ export default function AccountDetail() {
 
   function load() {
     if (!id) return;
-    apiGet(`/accounts/${id}`).then(setAccount).catch(e => setError(e.message));
+    apiGet(`/accounts/${id}?lean=1`).then(setAccount).catch(e => setError(e.message));
   }
 
   useEffect(load, [id]);
@@ -511,18 +494,18 @@ export default function AccountDetail() {
                   .sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime())
                   .map(q => {
                     const open = openOrderId === q.id;
-                    const lines = q.lines ?? [];
+                    const lineCount = q.lineCount ?? (q.lines ?? []).length;   // the lean answer says how many items an order has; they load when it is opened
                     return (
                       <div key={q.id}>
                         <div
                           className="m-row"
-                          style={{ gridTemplateColumns: '1.1fr 0.9fr 1fr', padding: '9px 0', cursor: lines.length ? 'pointer' : 'default' }}
-                          onClick={() => lines.length && setOpenOrderId(open ? null : q.id)}
-                          aria-expanded={lines.length ? open : undefined}
+                          style={{ gridTemplateColumns: '1.1fr 0.9fr 1fr', padding: '9px 0', cursor: lineCount ? 'pointer' : 'default' }}
+                          onClick={() => lineCount > 0 && setOpenOrderId(open ? null : q.id)}
+                          aria-expanded={lineCount ? open : undefined}
                         >
                           <div>
                             <div className="acct-name">
-                              {lines.length > 0 && <span className="order-caret">{open ? '▾' : '▸'}</span>}
+                              {lineCount > 0 && <span className="order-caret">{open ? '▾' : '▸'}</span>}
                               {q.number}
                             </div>
                             <div className="acct-region">{fmtDateWithYear(q.sentAt)}</div>
@@ -538,21 +521,7 @@ export default function AccountDetail() {
                           </div>
                         </div>
 
-                        {open && (
-                          <div className="order-lines">
-                            {lines.map((l, i) => (
-                              <div className="order-line" key={i}>
-                                <div>
-                                  <div>{l.productName}</div>
-                                  <div className="acct-region num">{l.sku}{l.brand ? `, ${l.brand}` : ''}</div>
-                                </div>
-                                <div className="num">{l.quantity} × {fmtMoney(l.unitPrice)}</div>
-                                <div className="num">{fmtMoney(Math.round(l.lineTotal * 100) / 100)}</div>
-                              </div>
-                            ))}
-                            <Link to={`/orders/${q.id}`} className="order-link order-full-link">Full order details</Link>
-                          </div>
-                        )}
+                        {open && <OrderLines orderId={q.id} preloaded={q.lines} />}
                       </div>
                     );
                   })}

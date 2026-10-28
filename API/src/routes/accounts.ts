@@ -5,6 +5,7 @@ import { territoryWhere, canSeeAccount } from '../lib/territory';
 import { priceListOptions } from '../lib/priceList';
 import { LIVE_ORDER } from '../lib/orderSource';
 import { orderNoteSummary } from '../lib/orderNotes';
+import { stopwatch } from '../lib/timing';
 import { councilsFor } from '../lib/council';
 import { mergeCheck, mergeAccounts, MergeError, COLD_LEAD_REASON } from '../lib/accountMerge';
 import type { Db } from '../lib/accountMerge';
@@ -99,9 +100,13 @@ accountsRouter.get('/', async (req, res) => {
   });
 
   // Flatten rep.name onto repName, matching the rest of the API's flat shape.
-  const statuses = await statusFor(accounts.map(a => a.id));
-  const aliases = await aliasesFor(accounts.map(a => a.id));
-  const councils = await councilsFor(accounts.map(a => a.id));   // from the postcode in the address (council.sql)
+  // Three independent lookups: run together, because one after another each costs a full trip to the database.
+  const accountIds = accounts.map(a => a.id);
+  const [statuses, aliases, councils] = await Promise.all([
+    statusFor(accountIds),
+    aliasesFor(accountIds),
+    councilsFor(accountIds),   // from the postcode in the address (council.sql)
+  ]);
   const flattened = accounts.map(({ rep, quotes, ...a }) => ({
     ...a,
     council: councils.get(a.id)?.council ?? null,
@@ -235,56 +240,103 @@ accountsRouter.get('/:id/pricelist-options', async (req, res) => {
 });
 
 accountsRouter.get('/:id', async (req, res) => {
-  const account = await prisma.account.findUnique({
-    where: { id: req.params.id },
-    include: {
-      rep: { select: { name: true } },
-      activity: {
-        orderBy: { occurredAt: 'desc' },
-        include: { rep: { select: { name: true } }, quote: { select: { id: true, number: true } } },
-      },
-      quotes: { orderBy: { sentAt: 'desc' }, include: { lines: true } },
-    },
-  });
+  const sw = stopwatch('account page');
+  const id = req.params.id;
+  // ?lean=1 (what the account page asks for): the orders WITHOUT their lines. A big customer has thousands of lines (9,500 for one with 336 orders, about
+  // 3 MB of JSON) and the page needs them in only two ways: product totals by year, which the database now adds up, and one order's items when it is opened
+  // (GET /orders/:id/lines). Without ?lean=1 the answer is as it always was, lines included, so anything older keeps working.
+  const lean = req.query.lean === '1';
+  // The account, its orders (with their lines), its activity and the small lookups do not depend on each other, so they are asked for at the same time
+  // (one nested query used to load them one after another). The orders leave out the big columns that only the single-order page reads (it loads its
+  // own order): for a customer with large orders those were most of what was being fetched and sent.
+  const [account, quotes, activity, councils, statusMap, aliasMap, lineCounts, productRows] = await Promise.all([
+    prisma.account.findUnique({ where: { id }, include: { rep: { select: { name: true } } } }),
+    prisma.quote.findMany({
+      where: { accountId: id },
+      orderBy: { sentAt: 'desc' },
+      omit: { lineFulfilment: true, fulfilments: true, shipments: true, shippingDetails: true, memo: true, orderContact: true, orderEmail: true, orderPhone: true, taxTotal: true, goodsTotal: true },
+      include: { lines: !lean },
+    }),
+    prisma.activity.findMany({
+      where: { accountId: id },
+      orderBy: { occurredAt: 'desc' },
+      include: { rep: { select: { name: true } }, quote: { select: { id: true, number: true } } },
+    }),
+    councilsFor([id]),   // the council worked out from its postcode (council.sql)
+    statusFor([id]),
+    aliasesFor([id]),
+    // Lean only: how many lines each order has (so the page can show which orders open), and every product's quantity and total for each year, added up
+    // by the database (the name and brand are from its most recent order that has them).
+    lean
+      ? prisma.$queryRaw<{ quote_id: string; n: number }[]>`
+          select l.quote_id, count(*)::int as n from crm.quote_lines l join crm.quotes q on q.id = l.quote_id
+          where q.account_id = ${id}::uuid group by l.quote_id`
+      : Promise.resolve([] as { quote_id: string; n: number }[]),
+    lean
+      ? prisma.$queryRaw<{ year: number; sku: string; product_name: string; brand: string | null; quantity: number; total: number }[]>`
+          select extract(year from q.sent_at)::int as year, l.sku,
+                 (array_agg(l.product_name order by q.sent_at desc))[1] as product_name,
+                 (array_agg(l.brand order by q.sent_at desc) filter (where l.brand is not null))[1] as brand,
+                 sum(l.quantity)::float8 as quantity, sum(l.line_total)::float8 as total
+          from crm.quote_lines l join crm.quotes q on q.id = l.quote_id
+          where q.account_id = ${id}::uuid group by 1, l.sku`
+      : Promise.resolve([] as { year: number; sku: string; product_name: string; brand: string | null; quantity: number; total: number }[]),
+  ]);
+  sw.lap(lean ? 'account, orders, activity, product totals and lookups (together)' : 'account, orders with lines, activity and lookups (together)');
 
   if (!account) return res.status(404).json({ error: 'Account not found' });
 
   if (!(await canSeeAccount(req.rep!, account))) {
     return res.status(403).json({ error: 'This account is outside your states' });
   }
+  sw.lap('permission check');
 
-  const { rep, activity, ...rest } = account;
+  const { rep, ...rest } = account;
 
   // Aggregate every product/brand this account has ever bought,
   // across all their orders — real line-item history.
   const productTotals = new Map<string, { productName: string; brand: string | null; quantity: number; total: number }>();
-  for (const q of rest.quotes) {
-    for (const l of (q as any).lines ?? []) {
-      const existing = productTotals.get(l.sku) ?? { productName: l.productName, brand: l.brand, quantity: 0, total: 0 };
-      existing.quantity += l.quantity;
-      existing.total += l.lineTotal;
-      productTotals.set(l.sku, existing);
+  if (lean) {
+    const latest = new Map<string, number>();   // the year of the name and brand kept for each product: the most recent
+    for (const r of productRows) {
+      const existing = productTotals.get(r.sku) ?? { productName: r.product_name, brand: r.brand, quantity: 0, total: 0 };
+      existing.quantity += r.quantity;
+      existing.total += r.total;
+      if (r.year > (latest.get(r.sku) ?? -Infinity)) { latest.set(r.sku, r.year); existing.productName = r.product_name; existing.brand = r.brand ?? existing.brand; }
+      productTotals.set(r.sku, existing);
+    }
+  } else {
+    for (const q of quotes) {
+      for (const l of (q as any).lines ?? []) {
+        const existing = productTotals.get(l.sku) ?? { productName: l.productName, brand: l.brand, quantity: 0, total: 0 };
+        existing.quantity += l.quantity;
+        existing.total += l.lineTotal;
+        productTotals.set(l.sku, existing);
+      }
     }
   }
   const productBreakdown = [...productTotals.entries()]
     .map(([sku, v]) => ({ sku, ...v, total: Math.round(v.total * 100) / 100 }))
-    .sort((a, b) => b.total - a.total);
+    .sort((a, b) => b.total - a.total || (lean ? a.sku.localeCompare(b.sku) : 0));   // lean: products with equal totals in SKU order, so it does not depend on how the database returns them
 
-  const notes = await orderNoteSummary(rest.quotes.map(q => q.id));   // what the team has said about each order
-
-  const council = (await councilsFor([rest.id])).get(rest.id);   // the council worked out from its postcode (council.sql)
+  const notes = await orderNoteSummary(quotes.map(q => q.id));   // what the team has said about each order
+  sw.lap('order notes');
+  const council = councils.get(rest.id);
+  const lineCountOf = new Map(lineCounts.map(r => [r.quote_id, r.n]));
 
   const flattened = {
     ...rest,
     council: council?.council ?? null,
     postcode: council?.postcode ?? null,
-    quotes: rest.quotes.map(q => ({ ...q, ...(notes.get(q.id) ?? {}) })),
+    quotes: quotes.map(q => ({ ...q, ...(lean ? { lineCount: lineCountOf.get(q.id) ?? 0 } : {}), ...(notes.get(q.id) ?? {}) })),
+    ...(lean ? { productsByYear: productRows.map(r => ({ year: r.year, sku: r.sku, productName: r.product_name, brand: r.brand, quantity: r.quantity, total: r.total })) } : {}),
     repName: rep?.name ?? null,
     activity: activity.map(({ rep: activityRep, quote, ...a }) => ({ ...a, repName: activityRep?.name ?? null, orderId: quote?.id ?? null, orderNumber: quote?.number ?? null })),
     productBreakdown,
-    formerNames: (await aliasesFor([rest.id])).get(rest.id) ?? [],
-    status: rest.type === 'cold_lead' ? 'Cold lead' : ((await statusFor([rest.id])).get(rest.id) ?? 'Prospect'),
+    formerNames: aliasMap.get(rest.id) ?? [],
+    status: rest.type === 'cold_lead' ? 'Cold lead' : (statusMap.get(rest.id) ?? 'Prospect'),
   };
+  sw.lap('building the answer');
 
   res.json(flattened);
 });

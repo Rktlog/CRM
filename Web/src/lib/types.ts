@@ -85,6 +85,7 @@ export type Quote = {
   unappliedCredit?: number | null; // credit on account from this order (unused credit notes, unapplied prepayments)
   creditNotes?: unknown;
   lines?: QuoteLineItem[];
+  lineCount?: number;            // how many items the order has (the lean account answer sends this instead of the lines, which load when the order is opened)
   noteCount?: number;            // team notes on this order
   lastNote?: OrderLastNote | null;
 };
@@ -103,10 +104,13 @@ export type Activity = {
 
 export type ProductLine = { sku: string; productName: string; brand: string | null; quantity: number; total: number };
 
+export type ProductYearRow = ProductLine & { year: number };   // one product's totals for one year (the lean account answer)
+
 export type AccountDetail = Account & {
   activity: Activity[];
   quotes: Quote[];
   productBreakdown: ProductLine[];
+  productsByYear?: ProductYearRow[];   // present in the lean account answer: the year picker works from this instead of every order's lines
 };
 
 export function normalizeName(name: string): string {

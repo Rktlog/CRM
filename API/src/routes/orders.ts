@@ -360,6 +360,23 @@ ordersRouter.get('/views/:view', async (req, res) => {
   res.json(data);
 });
   
+// GET /orders/:id/lines: just the items of one order, for the account page, which shows an order's items when it is opened (instead of being sent every
+// line of every order up front). Held to the same rule as the account itself: a rep only sees orders of accounts in their states.
+ordersRouter.get('/:id/lines', async (req, res) => {
+  if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) return res.status(400).json({ error: 'Bad order' });
+  const o = await prisma.quote.findUnique({
+    where: { id: req.params.id },
+    select: {
+      id: true,
+      account: { select: { id: true, region: true, repId: true } },
+      lines: { select: { sku: true, productName: true, brand: true, quantity: true, unitPrice: true, lineTotal: true } },
+    },
+  });
+  if (!o) return res.status(404).json({ error: 'Order not found' });
+  if (!(await canSeeAccount(req.rep!, o.account))) return res.status(403).json({ error: 'This order is outside your states' });
+  res.json(o.lines);
+});
+
 ordersRouter.get('/:id', async (req, res) => {
   const o = await prisma.quote.findUnique({
     where: { id: req.params.id },

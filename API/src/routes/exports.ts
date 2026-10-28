@@ -395,35 +395,34 @@ exportsRouter.get('/:type', async (req, res) => {
         if (!account) return res.status(404).json({ error: 'Account not found' });
         if (!(await canSeeAccount(req.rep!, account))) return res.status(403).json({ error: 'This account is outside your states' });
 
-        const quotes = await prisma.quote.findMany({ where: { accountId }, select: { id: true } });
-        const lines = await prisma.quoteLine.findMany({ where: { quoteId: { in: quotes.map(q => q.id) } } });
+        // One query does it all: each product's quantity and total across every order of this account, with its current price, stock and barcode
+        // (crm.products, kept in sync with DEAR). It used to read every line of every order into the server, then the products, one after another.
+        // The name and brand shown are from the most recent order that has them.
+        const found = await prisma.$queryRaw<{ sku: string; product_name: string; brand: string | null; quantity: number; total: number; prices: unknown; available: number | null; barcode: string | null; in_products: boolean }[]>`
+          select l.sku,
+                 (array_agg(l.product_name order by q.sent_at desc))[1] as product_name,
+                 (array_agg(l.brand order by q.sent_at desc) filter (where l.brand is not null))[1] as brand,
+                 sum(l.quantity)::float8 as quantity, sum(l.line_total)::float8 as total,
+                 p.prices, p.available, p.barcode, (p.sku is not null) as in_products
+          from crm.quote_lines l
+          join crm.quotes q on q.id = l.quote_id
+          left join crm.products p on p.sku = l.sku
+          where q.account_id = ${accountId}::uuid
+          group by l.sku, p.sku, p.prices, p.available, p.barcode`;
 
-        const bySku = new Map<string, { productName: string; brand: string | null; quantity: number; total: number }>();
-        for (const l of lines) {
-          const e = bySku.get(l.sku) ?? { productName: l.productName, brand: l.brand, quantity: 0, total: 0 };
-          e.quantity += l.quantity; e.total += l.lineTotal;
-          bySku.set(l.sku, e);
-        }
-        // Current prices and stock from crm.products (kept in sync with DEAR).
-        const products = new Map((await prisma.product.findMany({
-          where: { sku: { in: [...bySku.keys()] } },
-          select: { sku: true, prices: true, available: true, barcode: true },
-        })).map(p => [p.sku, p]));
-
-        const rows = [...bySku.entries()]
-          .map(([sku, v]) => {
-            const p = products.get(sku);
-            const prices = p?.prices as Record<string, number> | undefined;
+        const rows = found
+          .map(r => {
+            const prices = r.prices as Record<string, number> | undefined;
             return {
-              SKU: sku,
-              Product: v.productName,
-              Brand: v.brand ?? 'Unbranded',
-              Barcode: p?.barcode ?? '',   // kept as text, so a leading zero survives (from DEAR, via crm.products)
-              Quantity: v.quantity,
-              Total: cents(v.total),
+              SKU: r.sku,
+              Product: r.product_name,
+              Brand: r.brand ?? 'Unbranded',
+              Barcode: r.barcode ?? '',   // kept as text, so a leading zero survives (from DEAR, via crm.products)
+              Quantity: r.quantity,
+              Total: cents(r.total),
               'Wholesale price': wholesalePrice(prices) ?? '',
               'Retail price': retailPrice(prices) ?? '',
-              'Available now': p ? p.available : '',
+              'Available now': r.in_products ? r.available : '',
             };
           })
           .sort((a, b) => b.Total - a.Total);

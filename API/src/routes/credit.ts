@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
+import { stopwatch } from '../lib/timing';
 import { canSeeAccount, territoryWhere } from '../lib/territory';
 import { dearGet } from '../sync/dearClient';
 import { readDearPayments, type DearPayments } from '../lib/dearPayments';
@@ -315,18 +316,17 @@ const denied = (e: 404 | 403) => ({ status: e, body: { error: e === 404 ? 'Accou
 // ---------- GET /credit/account/:id ----------
 creditRouter.get('/account/:id', async (req, res) => {
   try {
+    const sw = stopwatch('credit account');
     const v = await visibleAccount(req.rep!, req.params.id);
     if ('error' in v) { const d = denied(v.error!); return res.status(d.status).json(d.body); }
+    sw.lap('visibleAccount');
     await reconcile();
+    sw.lap('reconcile');
 
-    const [reservedNotes, reservedPrepaid, notes, heldRows] = await Promise.all([
+    // The reservations list does not depend on the other four, so it is asked for with them.
+    const [reservedNotes, reservedPrepaid, notes, heldRows, rows] = await Promise.all([
       reservedFrom(v.account.id, 'notes'), reservedFrom(v.account.id, 'prepaid'), loadCreditNotes(req.rep!, {}, v.account.id), loadHeld(req.rep!, {}, v.account.id),
-    ]);
-    const credit = notesTotal(notes);                          // credit notes on account
-    const prepaid = heldRows.filter(h => h.reservable);        // prepaid money on any order: reservable like a credit note (on a completed order, once DEAR confirms it)
-    const prepaidFree = cents(prepaid.reduce((t, h) => t + h.free, 0));   // a completed order's prepayment is not in this: it is only offered, see checkable
-    const held = heldTotal(heldRows.filter(h => !h.reservable));   // overpaid: not free
-    const rows = await prisma.$queryRaw<any[]>`
+      prisma.$queryRaw<any[]>`
       select c.id, coalesce(nullif(c.name, ''), ${v.account.name}) as "name", c.amount, nullif(c.order_ref, '') as "orderRef",
              c.credit_no as "creditNo", c.source_kind as "sourceKind", c.source_order as "sourceOrder", c.used_on_order as "usedOnOrder", c.note, c.status,
              c.created_at as "createdAt", c.resolved_at as "resolvedAt",
@@ -341,7 +341,13 @@ creditRouter.get('/account/:id', async (req, res) => {
       left join crm.reps rr on rr.id = c.resolved_by
       where c.from_account_id = ${v.account.id}::uuid or c.to_account_id = ${v.account.id}::uuid
       order by (c.status = 'reserved') desc, c.created_at desc
-      limit 100`;
+      limit 100`,
+    ]);
+    sw.lap('credit lookups and reservations (together)');
+    const credit = notesTotal(notes);                          // credit notes on account
+    const prepaid = heldRows.filter(h => h.reservable);        // prepaid money on any order: reservable like a credit note (on a completed order, once DEAR confirms it)
+    const prepaidFree = cents(prepaid.reduce((t, h) => t + h.free, 0));   // a completed order's prepayment is not in this: it is only offered, see checkable
+    const held = heldTotal(heldRows.filter(h => !h.reservable));   // overpaid: not free
 
     const onAccountOf = new Map(notes.map(n => [n.creditNo.toUpperCase(), n.onAccount]));
     res.json({
