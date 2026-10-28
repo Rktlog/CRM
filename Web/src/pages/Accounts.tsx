@@ -65,7 +65,7 @@ export default function Accounts() {
       if (stageFilter !== 'all' && a.stage !== stageFilter) return false;
       if (!inStates(regionFilter, a.region)) return false;
       if (q) {
-        const haystack = [a.name, a.contactName, a.phone, a.email, a.region].filter(Boolean).join(' ').toLowerCase();
+        const haystack = [a.name, ...(a.formerNames ?? []), a.contactName, a.phone, a.email, a.region].filter(Boolean).join(' ').toLowerCase();
         if (!haystack.includes(q)) return false;
       }
       return true;

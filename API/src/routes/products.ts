@@ -11,6 +11,10 @@ const dayOf = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) 
 
 export const productsRouter = Router();
 
+// DEAR keeps shipping lines, supplier deposits and similar charges as products under the category "Other". They are not things to sell, so the
+// catalogue and the product search never show them. (A product with no category at all is still shown.)
+const NOT_A_PRODUCT = { OR: [{ category: null }, { category: { not: 'Other' } }] };
+
 // Reads only from our own tables, never DEAR:
 //   crm.products        stock + price tiers  (sync-products)
 //   crm.purchases/lines incoming POs, history (sync-purchases)
@@ -351,7 +355,7 @@ productsRouter.get('/catalogue', async (req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit) || 48, 1), 96);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
 
-    const common: any[] = [{ OR: [{ status: null }, { status: { not: 'Deprecated' } }] }];
+    const common: any[] = [{ OR: [{ status: null }, { status: { not: 'Deprecated' } }] }, NOT_A_PRODUCT];
     for (const w of searchWords(q)) {
       common.push({ OR: [
         { sku: { contains: w, mode: 'insensitive' } },
@@ -431,6 +435,7 @@ productsRouter.get('/search', async (req, res) => {
             ],
           })),
           { OR: [{ status: null }, { status: { not: 'Deprecated' } }] },
+          NOT_A_PRODUCT,
         ],
       },
       take: CANDIDATES,

@@ -58,7 +58,7 @@ export default function AccountPicker({ accounts, onChange, autoFocus }: Props) 
     if (!accounts || selected) return [];
     const q = search.trim().toLowerCase();
     if (q.length < 2) return [];
-    return accounts.filter(a => a.name.toLowerCase().includes(q)).slice(0, 8);
+    return accounts.filter(a => a.name.toLowerCase().includes(q) || (a.formerNames ?? []).some(n => n.toLowerCase().includes(q))).slice(0, 8);
   }, [accounts, search, selected]);
 
   const possibleDuplicates = useMemo(

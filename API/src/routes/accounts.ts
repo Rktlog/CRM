@@ -6,6 +6,8 @@ import { priceListOptions } from '../lib/priceList';
 import { LIVE_ORDER } from '../lib/orderSource';
 import { orderNoteSummary } from '../lib/orderNotes';
 import { councilsFor } from '../lib/council';
+import { mergeCheck, mergeAccounts, MergeError, COLD_LEAD_REASON } from '../lib/accountMerge';
+import type { Db } from '../lib/accountMerge';
 
 export const accountsRouter = Router();
 
@@ -24,6 +26,19 @@ async function statusFor(ids: string[]) {
     select account_id, status from crm.account_status
     where account_id = any(${ids}::uuid[])`;
   return new Map(rows.map(r => [r.account_id, r.status]));
+}
+
+// Former names (from accounts merged into this one), so searching an old name still finds the account. Empty until account-merges.sql has been run.
+async function aliasesFor(ids: string[]) {
+  const out = new Map<string, string[]>();
+  if (!ids.length) return out;
+  try {
+    const rows = await prisma.$queryRaw<{ account_id: string; aliases: string[] }[]>`
+      select account_id::text as account_id, array_agg(alias order by alias) as aliases from crm.account_aliases
+      where account_id = any(${ids}::uuid[]) group by 1`;
+    for (const r of rows) out.set(r.account_id, r.aliases);
+  } catch { /* the table does not exist until account-merges.sql has been run */ }
+  return out;
 }
 
 // Registered before '/:id' — otherwise Express would treat
@@ -85,6 +100,7 @@ accountsRouter.get('/', async (req, res) => {
 
   // Flatten rep.name onto repName, matching the rest of the API's flat shape.
   const statuses = await statusFor(accounts.map(a => a.id));
+  const aliases = await aliasesFor(accounts.map(a => a.id));
   const councils = await councilsFor(accounts.map(a => a.id));   // from the postcode in the address (council.sql)
   const flattened = accounts.map(({ rep, quotes, ...a }) => ({
     ...a,
@@ -92,6 +108,7 @@ accountsRouter.get('/', async (req, res) => {
     postcode: councils.get(a.id)?.postcode ?? null,
     repName: rep?.name ?? null,
     hasHistoricalOrders: quotes.length > 0,
+    formerNames: aliases.get(a.id) ?? [],
     status: a.type === 'cold_lead' ? 'Cold lead' : (statuses.get(a.id) ?? 'Prospect'),   // the status view knows nothing about cold leads
   }));
   res.json(flattened);
@@ -265,6 +282,7 @@ accountsRouter.get('/:id', async (req, res) => {
     repName: rep?.name ?? null,
     activity: activity.map(({ rep: activityRep, quote, ...a }) => ({ ...a, repName: activityRep?.name ?? null, orderId: quote?.id ?? null, orderNumber: quote?.number ?? null })),
     productBreakdown,
+    formerNames: (await aliasesFor([rest.id])).get(rest.id) ?? [],
     status: rest.type === 'cold_lead' ? 'Cold lead' : ((await statusFor([rest.id])).get(rest.id) ?? 'Prospect'),
   };
 
@@ -325,7 +343,6 @@ accountsRouter.patch('/:id/region', async (req, res) => {
 //             scheduled for them, they are left out of Inactive stockists, and every email address they have is added to the marketing
 //             suppression list so no campaign or automation reaches them. Their orders still sync from DEAR. Changing the type back lifts it.
 // The customer sync only looks at accounts that are customers, so this is what starts or stops it for one account.
-const COLD_LEAD_REASON = 'Cold lead: does not want to be contacted';   // the reason stored on the suppression, so only these are lifted again
 accountsRouter.patch('/:id/type', async (req, res) => {
   if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Only a manager can change an account\'s type' });
   const raw = req.body?.type, type = typeof raw === 'string' ? raw.toLowerCase() : '';
@@ -408,6 +425,36 @@ accountsRouter.patch('/:id/archive', async (req, res) => {
   if (!account) return res.status(404).json({ error: 'Account not found' });
   await prisma.$executeRaw`update crm.accounts set archived = ${req.body.archived}, keep_archived = ${req.body.archived}, updated_at = now() where id = ${account.id}::uuid`;
   res.json(await prisma.account.findUnique({ where: { id: account.id } }));
+});
+
+// ---- Managers: merge a duplicate account into this one ----
+// A lead is often taken under the name the customer gave, and DEAR later sets them up under their trading name, so the CRM ends up with two accounts
+// for one business. On the account to KEEP, a manager picks the duplicate: everything that points at it (logs, tasks, orders, emails, comments,
+// credit reservations, marketing contacts and anything added later) moves here, its name is kept as a former name, and it is deleted. All in one
+// transaction. lib/accountMerge.ts has the rules; account-merges.sql creates the two small tables it needs.
+const dbOf = (c: any): Db => ({ query: (s, p = []) => c.$queryRawUnsafe(s, ...p), exec: (s, p = []) => c.$executeRawUnsafe(s, ...p) });
+
+// What a merge would do (counts, what the account becomes, warnings), for the confirmation window. Changes nothing.
+accountsRouter.get('/:id/merge-check', async (req, res) => {
+  if (!managerOnly(req, res, 'merge accounts')) return;
+  try {
+    res.json(await mergeCheck(dbOf(prisma), req.params.id, String(req.query.from ?? '')));
+  } catch (e) {
+    if (e instanceof MergeError) return res.status(e.status).json({ error: e.message });
+    throw e;
+  }
+});
+
+accountsRouter.post('/:id/merge', async (req, res) => {
+  if (!managerOnly(req, res, 'merge accounts')) return;
+  try {
+    const result = await prisma.$transaction(tx => mergeAccounts(dbOf(tx), req.params.id, String(req.body?.fromId ?? ''), req.rep!.id), { timeout: 60000, maxWait: 10000 });
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    if (e instanceof MergeError) return res.status(e.status).json({ error: e.message });
+    console.error('merge accounts failed', e);
+    res.status(500).json({ error: `The merge failed and nothing was changed: ${(e as Error).message}` });
+  }
 });
 
 // Toggle the misc flag — marketing/warranty/internal orders that are

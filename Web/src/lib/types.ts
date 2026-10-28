@@ -33,6 +33,7 @@ export type Account = {
   type: 'prospect' | 'lead' | 'customer' | 'cold_lead';
   stage: Stage;
   status?: AccountStatus;           // from the crm.account_status view
+  formerNames?: string[];           // names of accounts merged into this one, so searching an old name still finds it
   contactName: string | null;
   phone: string | null;
   email: string | null;

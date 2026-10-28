@@ -164,8 +164,11 @@ function Fragment({ item: it, showBrand }: { item: Item; showBrand: boolean }) {
           {it.lifecycle && <div style={{ marginTop: 3 }}><ProductStatusPill status={it.lifecycle} /></div>}
         </div>
         <div>
-          <span className={`pill ${tone} num`}>{qty(it.available)} available</span>
-          {it.onOrder > 0 && it.available <= 0 && <div className="acct-region" style={{ marginTop: 3 }}>{qty(it.onOrder)} on order</div>}
+          {/* One box: what is available now, and under it anything on order (shown whenever there is some, even if there is stock too). */}
+          <span className={`pill ${tone} num`}>
+            <span style={{ display: 'block' }}>{qty(it.available)} available</span>
+            {it.onOrder > 0 && <span style={{ display: 'block', fontSize: 11.5, fontWeight: 400 }}>{qty(it.onOrder)} on order</span>}
+          </span>
           {it.eta && (it.available <= 0 || it.onOrder > 0) && <div style={{ marginTop: 2 }}><EtaText eta={it.eta} /></div>}
         </div>
         {(it.wholesale != null || it.retail != null) && (

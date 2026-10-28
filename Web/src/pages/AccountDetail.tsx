@@ -15,9 +15,12 @@ import AccountGmail from '../components/AccountGmail';
 import DraftEmailButton from '../components/DraftEmailButton';
 import DictationTextarea from '../components/DictationTextarea';
 import DeleteLogLink from '../components/DeleteLogLink';
+import type { Account } from '../lib/types';
 
 // The council worked out from the postcode in the address (the API sends it with the account).
 const councilOf = (a: unknown): string | null => (a as { council?: string | null }).council ?? null;
+// Names of accounts that were merged into this one (the API sends them with the account).
+const formerNamesOf = (a: unknown): string[] => (a as { formerNames?: string[] }).formerNames ?? [];
 
 export default function AccountDetail() {
   const { id } = useParams<{ id: string }>();
@@ -172,6 +175,7 @@ export default function AccountDetail() {
     <>
       <Link className="back-link" to="/accounts">&larr; All accounts</Link>
       <h2 style={{ margin: '0 0 2px 0' }}>{account.name}</h2>
+      {formerNamesOf(account).length > 0 && <div className="acct-region" style={{ marginBottom: 2 }}>Also known as {formerNamesOf(account).join(', ')}</div>}
       <div style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 18 }}>
         {account.region} · {account.credit === 'prepay' ? 'Pays before dispatch' : 'On credit account'}
       </div>
@@ -467,7 +471,7 @@ export default function AccountDetail() {
                 <span className="num">{fmtDate(account.nextFollowUpAt)}</span>
               </div>
             )}
-            <AccountAdmin account={account} onChanged={updated => setAccount(a => (a ? { ...a, ...updated } : a))} />
+            <AccountAdmin account={account} onChanged={updated => setAccount(a => (a ? { ...a, ...updated } : a))} onMerged={load} />
           </div>
 
           <div className="card">
@@ -765,7 +769,7 @@ function TypeRow({ account, onSaved }: { account: { id: string; type: AccountKin
 // Managers: archive an account, or delete it. An account with orders cannot be deleted (its orders count in the sales figures): the check
 // says so and offers to archive it instead. Deleting asks you to type the account's name.
 type DeleteCheck = { name: string; linkedToDear: boolean; canDelete: boolean; reason: string | null; orders: number; logs: number; tasks: number; emails: number };
-function AccountAdmin({ account, onChanged }: { account: { id: string; name: string; archived: boolean }; onChanged: (a: any) => void }) {
+function AccountAdmin({ account, onChanged, onMerged }: { account: { id: string; name: string; archived: boolean }; onChanged: (a: any) => void; onMerged: () => void }) {
   const me = useMe();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -773,6 +777,7 @@ function AccountAdmin({ account, onChanged }: { account: { id: string; name: str
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState<'archive' | 'delete' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [mergeOpen, setMergeOpen] = useState(false);
   if (me?.role !== 'manager') return null;
 
   async function archive(archived: boolean) {
@@ -802,6 +807,8 @@ function AccountAdmin({ account, onChanged }: { account: { id: string; name: str
           {account.archived
             ? <button className="link-btn" disabled={!!busy} onClick={() => archive(false)}>{busy === 'archive' ? 'Restoring…' : 'Restore account'}</button>
             : <button className="link-btn" disabled={!!busy} onClick={() => archive(true)}>{busy === 'archive' ? 'Archiving…' : 'Archive account'}</button>}
+          {' · '}
+          <button className="link-btn" disabled={!!busy} onClick={() => setMergeOpen(o => !o)}>Merge another account into this one…</button>
           {' · '}
           <button className="link-btn" style={{ color: 'var(--rust)' }} disabled={!!busy} onClick={startDelete}>Delete account…</button>
         </span>
@@ -838,9 +845,113 @@ function AccountAdmin({ account, onChanged }: { account: { id: string; name: str
             )}
           </span>
         )}
+        {mergeOpen && <MergeAccount account={account} onMerged={onMerged} onClose={() => setMergeOpen(false)} />}
         {error && <span className="save-msg err">{error}</span>}
       </span>
     </div>
+  );
+}
+
+// Managers: merge a duplicate account into this one. Find the duplicate, see exactly what will move, then type its name to confirm.
+// (Usually a lead taken under one name, whose trading name DEAR later set up as a second account.) Everything on the duplicate moves here, its
+// name is kept as a former name so searching either name finds this account, and the duplicate is deleted. This cannot be undone.
+type MergeCheckResult = {
+  from: { name: string; type: string; region: string; repName: string | null; dearLinked: boolean };
+  canMerge: boolean; reason: string | null;
+  moves: { logs: number; tasks: number; orders: number; emails: number; other: number };
+  becomes: { type: string };
+  warnings: string[];
+};
+const MERGE_TYPE_WORD: Record<string, string> = { customer: 'Customer', lead: 'Lead', prospect: 'Prospect', cold_lead: 'Cold lead' };
+function MergeAccount({ account, onMerged, onClose }: { account: { id: string; name: string }; onMerged: () => void; onClose: () => void }) {
+  const [accounts, setAccounts] = useState<(Account & { archived?: boolean })[] | null>(null);
+  const [q, setQ] = useState('');
+  const [picked, setPicked] = useState<(Account & { archived?: boolean }) | null>(null);
+  const [check, setCheck] = useState<MergeCheckResult | null>(null);
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Live accounts and archived ones: a duplicate is often archived before anyone thinks to merge it.
+  useEffect(() => {
+    Promise.all([apiGet('/accounts'), apiGet('/accounts?archived=true').catch(() => [])])
+      .then(([live, archived]) => setAccounts([...(live as Account[]), ...(archived as Account[]).map(a => ({ ...a, archived: true }))]))
+      .catch((e: any) => setError(e.message));
+  }, []);
+
+  const matches = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (!accounts || picked || s.length < 2) return [];
+    return accounts
+      .filter(a => a.id !== account.id && [a.name, ...(a.formerNames ?? []), a.contactName ?? '', a.email ?? ''].some(v => v.toLowerCase().includes(s)))
+      .slice(0, 8);
+  }, [accounts, q, picked, account.id]);
+
+  async function choose(a: Account & { archived?: boolean }) {
+    setPicked(a); setCheck(null); setTyped(''); setError(null);
+    try { setCheck(await apiGet(`/accounts/${account.id}/merge-check?from=${a.id}`, { fresh: true })); }
+    catch (e: any) { setError(e.message); }
+  }
+  function chooseAnother() { setPicked(null); setCheck(null); setTyped(''); setError(null); }
+  async function merge() {
+    if (!picked) return;
+    setBusy(true); setError(null);
+    try { await apiPost(`/accounts/${account.id}/merge`, { fromId: picked.id }); onMerged(); onClose(); }
+    catch (e: any) { setError(e.message); setBusy(false); }
+  }
+
+  const confirmed = !!picked && typed.trim().toLowerCase() === picked.name.trim().toLowerCase();
+  const n = (count: number, one: string, many = `${one}s`) => `${count.toLocaleString('en-AU')} ${count === 1 ? one : many}`;
+  const bits = check ? [
+    check.moves.logs ? n(check.moves.logs, 'logged activity', 'logged activities') : '', check.moves.tasks ? n(check.moves.tasks, 'task') : '',
+    check.moves.orders ? n(check.moves.orders, 'order') : '', check.moves.emails ? n(check.moves.emails, 'logged email') : '', check.moves.other ? n(check.moves.other, 'other record') : '',
+  ].filter(Boolean) : [];
+
+  return (
+    <span role="dialog" aria-label="Merge another account into this one" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 12px', background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: 6, maxWidth: 420 }}>
+      <b>Merge a duplicate into {account.name}</b>
+      {!picked && (
+        <>
+          <span className="acct-region">Find the duplicate by its name, contact or email. Its logs, tasks, orders and emails move to this account, and its name is kept so either name finds it.</span>
+          <input aria-label="Find the duplicate account" autoFocus placeholder="Start typing a name, contact or email" value={q} onChange={e => setQ(e.target.value)} autoComplete="off"
+            style={{ padding: '4px 6px', border: '1px solid var(--line)', borderRadius: 6 }} />
+          {!accounts && !error && <span className="acct-region">Loading accounts…</span>}
+          {q.trim().length >= 2 && accounts && matches.length === 0 && <span className="acct-region">No other account matches.</span>}
+          {matches.map(a => (
+            <button key={a.id} type="button" className="link-btn" style={{ textAlign: 'left', display: 'block' }} onClick={() => choose(a)}>
+              <span className="acct-name">{a.name}</span>
+              <span className="acct-region" style={{ display: 'block' }}>{[a.region, a.archived ? 'archived' : a.status, a.repName, a.email].filter(Boolean).join(' · ')}</span>
+            </button>
+          ))}
+        </>
+      )}
+      {picked && (
+        <>
+          <span>Merge <b>{picked.name}</b> into <b>{account.name}</b>?</span>
+          {!check && !error && <span className="acct-region">Checking what would move…</span>}
+          {check && !check.canMerge && <span>{check.reason}</span>}
+          {check && check.canMerge && (
+            <>
+              <span>Moves to this account: <b>{bits.length ? bits.join(', ') : 'nothing else'}</b>.</span>
+              <span className="acct-region">&ldquo;{picked.name}&rdquo; is kept as a former name, so searching either name finds this account. The duplicate account is then deleted. <b>This cannot be undone.</b></span>
+              {check.warnings.map(w => <span key={w} className="acct-region">• {w}</span>)}
+              <label className="acct-region" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                Type the duplicate&rsquo;s name to confirm
+                <input aria-label="Type the duplicate account's name to confirm" value={typed} onChange={e => setTyped(e.target.value)} autoComplete="off"
+                  style={{ padding: '4px 6px', border: '1px solid var(--line)', borderRadius: 6 }} />
+              </label>
+              <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button className="btn" style={{ padding: '4px 10px', fontSize: 12, background: 'var(--rust)' }} disabled={!confirmed || busy} onClick={merge}>{busy ? 'Merging…' : 'Merge accounts'}</button>
+                <button className="link-btn" disabled={busy} onClick={chooseAnother}>Choose another</button>
+              </span>
+            </>
+          )}
+          {check && !check.canMerge && <button className="link-btn" style={{ textAlign: 'left' }} onClick={chooseAnother}>Choose another account</button>}
+        </>
+      )}
+      {error && <span className="save-msg err">{error}</span>}
+      <button className="link-btn" style={{ textAlign: 'left' }} disabled={busy} onClick={onClose}>Close</button>
+    </span>
   );
 }
 
