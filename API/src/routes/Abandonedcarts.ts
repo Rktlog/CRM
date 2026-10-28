@@ -143,7 +143,7 @@ export async function loadCarts(rep: { id: string; role: string }, days: string)
 
   // ---- Match accounts: by email (account or past order), then by name ----
   const [accounts, orderEmails, products] = await Promise.all([
-    prisma.account.findMany({ select: { id: true, name: true, email: true, region: true, repId: true, rep: { select: { name: true } } } }),
+    prisma.account.findMany({ select: { id: true, name: true, email: true, phone: true, region: true, repId: true, rep: { select: { name: true } } } }),
     prisma.quote.findMany({
       where: { orderEmail: { not: null } },
       select: { orderEmail: true, accountId: true },
@@ -167,6 +167,19 @@ export async function loadCarts(rep: { id: string; role: string }, days: string)
     ...c,
     account: accountByEmail.get(c.email) ?? accountByName.get(normalize(c.contact)) ?? null,
   }));
+
+  // The phone to show on a cart: the account's own, or when it has none the phone on that customer's most recent order.
+  const needPhone = [...new Set(matched.map(m => m.account).filter((a): a is NonNullable<typeof a> => !!a && !a.phone?.trim()).map(a => a.id))];
+  const orderPhone = new Map<string, string>();
+  if (needPhone.length) {
+    const rows = await prisma.quote.findMany({
+      where: { accountId: { in: needPhone }, orderPhone: { not: null } },
+      select: { accountId: true, orderPhone: true },
+      orderBy: { sentAt: 'desc' },
+    });
+    for (const r of rows) if (r.orderPhone?.trim() && !orderPhone.has(r.accountId)) orderPhone.set(r.accountId, r.orderPhone.trim());
+  }
+  const phoneFor = (a: { id: string; phone: string | null }) => a.phone?.trim() || orderPhone.get(a.id) || null;
 
   // Same territory rule as Accounts (lib/territory): reps see carts for
   // accounts in their assigned states only; managers see everything,
@@ -227,7 +240,7 @@ export async function loadCarts(rep: { id: string; role: string }, days: string)
       abandonedAt: c.abandonedAt,
       contact: c.contact,
       email: c.email,
-      account: c.account ? { id: c.account.id, name: c.account.name, rep: c.account.rep?.name ?? null, region: c.account.region ?? null } : null,   // region is the customer's state
+      account: c.account ? { id: c.account.id, name: c.account.name, rep: c.account.rep?.name ?? null, region: c.account.region ?? null, phone: phoneFor(c.account) } : null,   // region is the customer's state
       itemCount: items.length,
       units: items.reduce((s, i) => s + i.quantity, 0),
       value: Math.round(items.reduce((s, i) => s + i.total, 0) * 100) / 100,

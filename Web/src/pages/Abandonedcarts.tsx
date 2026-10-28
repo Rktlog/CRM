@@ -14,7 +14,7 @@ type Cart = {
   abandonedAt: string;
   contact: string;
   email: string;
-  account: { id: string; name: string; rep: string | null; region: string | null } | null;   // region: the customer's state
+  account: { id: string; name: string; rep: string | null; region: string | null; phone: string | null } | null;   // region: the customer's state
   itemCount: number;
   units: number;
   value: number;
@@ -290,6 +290,7 @@ function CartDetail({ cart: c, logsAvailable, onLogs }: { cart: Cart; logsAvaila
             ? <Link to={`/accounts/${c.account.id}`} className="acct-name order-link">{c.account.name}</Link>
             : <div className="acct-name">{c.contact}</div>}
           <div className="pd-sub"><a href={`mailto:${c.email}`} className="order-link">{c.email}</a></div>
+          {c.account?.phone && <div className="pd-sub"><a href={`tel:${c.account.phone.replace(/[^\d+]/g, '')}`} className="order-link">{c.account.phone}</a></div>}
           <div className="pd-sub">Abandoned {when(c.abandonedAt)}</div>
           {!c.account && <div className="pd-sub" style={{ marginTop: 6 }}>Not matched to a CRM account yet.</div>}
         </div>
