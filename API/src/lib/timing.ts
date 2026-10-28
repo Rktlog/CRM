@@ -11,7 +11,11 @@ const stats = new Map<string, number[]>();
 
 export function routeKey(req: Request): string {
   if (!req.route) return `${req.method} (no route)`;
-  const path = `${req.baseUrl}${req.route.path ?? ''}`.replace(/\/+$/, '') || '/';
+  let path = `${req.baseUrl}${req.route.path ?? ''}`.replace(/\/+$/, '') || '/';
+  // The Orders views are one route with four very different jobs (quotes, to-ship, unpaid, balances): show which, so a slow one is not averaged into the
+  // fast ones. Only these known names are used, so a made-up one cannot add entries.
+  const view = (req.params as Record<string, unknown> | undefined)?.view;
+  if (typeof view === 'string' && path.includes(':view') && ['quotes', 'to-ship', 'unpaid', 'balances'].includes(view)) path = path.replace(':view', view);
   return `${req.method} ${path}`;
 }
 
@@ -47,4 +51,4 @@ export function slowestRoutes(n = 12) {
   }).sort((a, b) => b.slowest5PercentMs - a.slowest5PercentMs).slice(0, n);
 }
 
-export function resetTiming() { stats.clear(); }
+export function resetTiming() { stats.clear(); }\\

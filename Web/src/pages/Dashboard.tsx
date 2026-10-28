@@ -9,6 +9,8 @@ import BackorderCard from '../components/BackorderCard';
 import TeamActivityCard from '../components/TeamActivityCard';
 import TeamLogCard from '../components/TeamLogCard';
 import ConversionCard from '../components/ConversionCard';
+import SummarySheet from '../components/SummarySheet';
+import RepSummaries from '../components/RepSummaries';
 import MyOrderFollowUps from '../components/MyOrderFollowUps';
 
 export default function Dashboard() {
@@ -23,6 +25,7 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
   const { role } = useAuth();
+  const fy = new Date().getMonth() >= 6 ? new Date().getFullYear() : new Date().getFullYear() - 1;   // the financial year that started this July or last
 
   useEffect(() => {
     apiGet('/accounts').then(setAccounts).catch(e => setError(e.message));
@@ -145,7 +148,16 @@ export default function Dashboard() {
         );
       })()}
 
-      <ConversionCard />
+      {/* Reps see their own monthly summary here (it used to be on Sales Data). Managers see Conversion, and every rep's summary folded away by state and rep. */}
+      {role === 'rep' && <div className="section"><SummarySheet fy={fy} /></div>}
+      {role === 'manager' && (
+        <>
+          <ConversionCard />
+          <div className="section">
+            <RepSummaries fy={fy} />
+          </div>
+        </>
+      )}
 
       {role === 'manager' && (
         <>

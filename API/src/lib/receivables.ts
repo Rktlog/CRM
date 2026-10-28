@@ -312,6 +312,8 @@ export async function toShip(rep: Rep, regions?: string[]) {
       OR: [{ shippingStatus: null }, { shippingStatus: { not: 'SHIPPED' } }],
     },
     orderBy: { sentAt: 'asc' },
+    // Only what the rows below use (not the big JSON columns).
+    select: { id: true, number: true, accountId: true, sentAt: true, fulfillmentStatus: true, shippingStatus: true, pickingStatus: true, miscType: true, total: true, amount: true },
   });
   const rows = quotes.map(q => {
     const status = (q.fulfillmentStatus ?? '').toUpperCase();
@@ -348,6 +350,12 @@ export async function unpaidInvoices(rep: Rep, regions?: string[]) {
   const accounts = await scope(rep, regions);
   const quotes = (await prisma.quote.findMany({
     where: { ...LIVE, accountId: { in: [...accounts.keys()] }, OR: [{ amountDue: { gt: 0.005 } }, { amountDue: null, paid: false, invoiceDate: { not: null } }] },
+    // Only what is used below (and by isOwing). A whole order carries big JSON columns (shipments, fulfilments, credit notes, line progress) that this
+    // list never reads; every one of them was being dragged across the network for every unpaid order.
+    select: {
+      id: true, number: true, accountId: true, source: true, paid: true, miscType: true, fulfillmentStatus: true,
+      amount: true, total: true, amountPaid: true, amountDue: true, creditedTotal: true, invoiceNumber: true, invoiceDate: true, sentAt: true, invoices: true,
+    },
   })).filter(q => isOwing(q));
 
   const rows = quotes.flatMap(q => {

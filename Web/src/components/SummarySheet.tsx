@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { apiGet } from '../lib/api';
 import { CELL_STYLES, COLUMN_WIDTHS, DEFAULT_FONT_SIZE, FONT, ROW_HEIGHTS, type CellStyle } from '../lib/summarySheetStyle';
 
-// The rep's Summary sheet on Sales Data: the team's Summary_Rhonda sheet, cell for cell. The API works out every cell (with the sheet's own
-// formulas) and this draws them with the sheet's own fonts, fills, borders, number formats and column widths (lib/summarySheetStyle.ts,
-// generated from the sheet). Reps only: managers download the same sheet for every rep from Reports.
+// The rep's Summary on the Dashboard: the team's Summary_Rhonda sheet, cell for cell, but only its two monthly tables (rows 1 to 20: budget,
+// percentage to budget, invoiced sales this year and last, variance, quotes awaiting payment, new and reactivated stockists). The quarter budget
+// block and the unpaid quotes list that sit below them on the sheet are left off the screen. The API works out every cell (with the sheet's own
+// formulas) and this draws them with the sheet's own fonts, fills, borders, number formats and column widths (lib/summarySheetStyle.ts, generated
+// from the sheet). Managers see every rep's on the Dashboard (RepSummaries) and download the full sheet, with everything, from Reports.
 type Cell = { v: string | number | null; f?: string };
 type Unpaid = { order: string; orderId: string; accountId: string };
 type Model = { fy: number; title: string; regions: string[]; budgetSource: 'months' | 'quarters' | 'none'; cells: Record<string, Cell>; unpaid: Unpaid[] };
@@ -36,32 +37,12 @@ export function cellColour(addr: string, v: Cell['v'], style: CellStyle): { colo
   return { color: style.color ? `#${style.color}` : undefined };
 }
 
-export default function SummarySheet({ fy }: { fy: number }) {
-  const [model, setModel] = useState<Model | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setModel(null); setError(null);
-    apiGet(`/summary-sheet?fy=${fy}`).then(setModel).catch(e => setError(e.message));
-  }, [fy]);
-
-  if (error) return <div className="empty-state">Couldn't load your summary: {error}</div>;
-  if (!model) return <div className="empty-state">Loading your summary…</div>;
-
-  const lastRow = Math.max(31, 31 + model.unpaid.length);
+export function SummaryTable({ model }: { model: Model }) {
+  const lastRow = 20;   // the two monthly tables; everything below (the quarter budget block, the unpaid quotes) is not shown
   const rows = Array.from({ length: lastRow }, (_, i) => i + 1);
   const width = COLS.reduce((s, L) => s + pxOf(COLUMN_WIDTHS[L]), 0);
-
   return (
-    <>
-      <div className="ledger-section-head">
-        <h2>My summary</h2>
-        <span className="ledger-note">FY {model.fy}/{String(model.fy + 1).slice(2)}</span>
-      </div>
-      {model.regions.length === 0 && <div className="territory-note" style={{ marginBottom: 8 }}>You have no states assigned, so every figure below is zero. A manager can assign your states in Settings.</div>}
-      {model.budgetSource === 'none' && <div className="territory-note" style={{ marginBottom: 8 }}>No budget has been set for this financial year yet, so the budget rows show zero.</div>}
-      {model.budgetSource === 'quarters' && <div className="territory-note" style={{ marginBottom: 8 }}>The monthly budget is the quarterly target from Settings, spread over its months by last year's sales.</div>}
-      <div className="ledger-table-scroll" style={{ maxHeight: 'none', overflowX: 'auto', background: '#fff', border: '1px solid var(--line)' }}>
+    <div className="ledger-table-scroll" style={{ maxHeight: 'none', overflowX: 'auto', background: '#fff', border: '1px solid var(--line)' }}>
         <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', width, fontFamily: `${FONT}, Helvetica, sans-serif`, color: '#000' }} aria-label="Summary">
           <colgroup>{COLS.map(L => <col key={L} style={{ width: pxOf(COLUMN_WIDTHS[L]) }} />)}</colgroup>
           <tbody>
@@ -71,18 +52,13 @@ export default function SummarySheet({ fy }: { fy: number }) {
                   const addr = `${L}${r}`;
                   if (r === 1 && L >= 'B' && L <= 'J') return null;   // the title is merged across A to J
                   const cell = model.cells[addr];
-                  const listRow = r >= 32 && L <= 'E';
-                  const style: CellStyle = CELL_STYLES[addr] ?? (listRow ? { al: L === 'C' ? 'left' : 'center', fmt: L === 'D' ? '#,##0.00' : undefined } : {});
+                  const style: CellStyle = CELL_STYLES[addr] ?? {};
                   const { color, bold } = cellColour(addr, cell?.v ?? null, style);
                   const sides = style.bd ?? '----';
                   const text = fmtCell(cell?.v ?? null, style.fmt);
                   const spills = typeof cell?.v === 'string' && cell.v.length > 14 && !style.fill && !['A', 'B', 'C'].includes(L) && r < 32;   // a note running over its empty neighbours, as in the sheet
                   const align = style.al === 'center' ? 'center' : style.al === 'right' ? 'right' : style.al === 'left' ? 'left' : typeof cell?.v === 'number' ? 'right' : 'left';
-                  const content = r >= 32 && L === 'A' && cell && model.unpaid[r - 32]
-                    ? <Link to={`/orders/${model.unpaid[r - 32].orderId}`} style={{ color: 'inherit', textDecoration: 'none' }} title="Open this order">{text}</Link>
-                    : r >= 32 && L === 'C' && cell && model.unpaid[r - 32]
-                      ? <Link to={`/accounts/${model.unpaid[r - 32].accountId}`} style={{ color: 'inherit', textDecoration: 'none' }} title="Open this stockist">{text}</Link>
-                      : text;
+                  const content = text;
                   return (
                     <td key={L} colSpan={r === 1 && L === 'A' ? 10 : undefined} data-cell={addr}
                       style={{
@@ -101,6 +77,33 @@ export default function SummarySheet({ fy }: { fy: number }) {
           </tbody>
         </table>
       </div>
+  );
+}
+
+export default function SummarySheet({ fy, repId, heading = true }: { fy: number; repId?: string; heading?: boolean }) {
+  const [model, setModel] = useState<Model | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setModel(null); setError(null);
+    apiGet(`/summary-sheet?fy=${fy}${repId ? `&repId=${repId}` : ''}`).then(setModel).catch(e => setError(e.message));
+  }, [fy, repId]);
+
+  if (error) return <div className="empty-state">Couldn't load {repId ? 'this summary' : 'your summary'}: {error}</div>;
+  if (!model) return <div className="empty-state">Loading {repId ? 'the summary' : 'your summary'}…</div>;
+
+  return (
+    <>
+      {heading && (
+        <div className="ledger-section-head">
+          <h2>My summary</h2>
+          <span className="ledger-note">FY {model.fy}/{String(model.fy + 1).slice(2)}</span>
+        </div>
+      )}
+      {model.regions.length === 0 && <div className="territory-note" style={{ marginBottom: 8 }}>{repId ? 'This rep has no states assigned, so every figure below is zero.' : 'You have no states assigned, so every figure below is zero. A manager can assign your states in Settings.'}</div>}
+      {model.budgetSource === 'none' && <div className="territory-note" style={{ marginBottom: 8 }}>No budget has been set for this financial year yet, so the budget rows show zero.</div>}
+      {model.budgetSource === 'quarters' && <div className="territory-note" style={{ marginBottom: 8 }}>The monthly budget is the quarterly target from Settings, spread over its months by last year's sales.</div>}
+      <SummaryTable model={model} />
     </>
   );
 }

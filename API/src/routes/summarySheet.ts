@@ -7,6 +7,7 @@ import { summaryWorkbook } from '../lib/summarySheetXlsx';
 // The Summary sheet (the team's Summary_Rhonda layout) for one rep.
 //   GET /summary-sheet?fy=2026            a rep gets their own (fy is the year the financial year starts: 2026 is FY 2026/27)
 //                                         a manager asks for a rep with &repId=
+//   GET /summary-sheet/reps               managers only: every rep that has states, with those states (for the Dashboard's folded rep summaries)
 //   GET /summary-sheet/download?fy=&repId=   managers only: the Excel file, one tab per rep (all reps with states if no repId)
 export const summarySheetRouter = Router();
 
@@ -30,6 +31,24 @@ summarySheetRouter.get('/', async (req, res) => {
   } catch (e) {
     console.error('summary sheet failed:', (e as Error).message);
     res.status(500).json({ error: 'Could not load the summary' });
+  }
+});
+
+const STATE_ORDER = ['NSW', 'ACT', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'NZ'];
+const stateRank = (s: string) => (STATE_ORDER.indexOf(s) < 0 ? 100 : STATE_ORDER.indexOf(s));
+summarySheetRouter.get('/reps', async (req, res) => {
+  try {
+    if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Managers only' });
+    const links = await prisma.repRegion.findMany({ select: { repId: true, region: true } });
+    const ids = [...new Set(links.map(l => l.repId))];
+    const reps = ids.length ? await prisma.rep.findMany({ where: { id: { in: ids } }, select: { id: true, name: true }, orderBy: { name: 'asc' } }) : [];
+    res.json(reps.map(r => ({
+      id: r.id, name: r.name,
+      regions: [...new Set(links.filter(l => l.repId === r.id).map(l => l.region))].sort((a, b) => stateRank(a) - stateRank(b) || a.localeCompare(b)),   // each state once
+    })));
+  } catch (e) {
+    console.error('summary sheet reps failed:', (e as Error).message);
+    res.status(500).json({ error: 'Could not load the reps' });
   }
 });
 
