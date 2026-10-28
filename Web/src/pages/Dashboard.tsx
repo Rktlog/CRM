@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiGet } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
-import { Account, fmtDate, fmtMoney, daysBetween, isOverdueCustomer, fmtDuration } from '../lib/types';
+import { fmtDate, fmtMoney, daysBetween, fmtDuration } from '../lib/types';
+import { loadDashboardData, type DashboardData } from '../lib/dashboardData';
 import { HEALTH_COLUMNS, Health, healthOf } from '../lib/customerHealth';
 import AccountTable from '../components/AccountTable';
 import BackorderCard from '../components/BackorderCard';
@@ -15,11 +16,10 @@ import RepSummaries from '../components/RepSummaries';
 import MyOrderFollowUps from '../components/MyOrderFollowUps';
 
 export default function Dashboard() {
-  const [accounts, setAccounts] = useState<Account[] | null>(null);
-  // Same list as the Customers board, so the counts always match it.
+  // The lead and prospect counts, the overdue customers, the follow-ups due and the customer figures, in one request (see lib/dashboardData.ts).
+  const [data, setData] = useState<DashboardData | null>(null);
   // Money owed across the person's accounts (same figures as Orders → Balances).
   const [owed, setOwed] = useState<{ balance: number; over60: number; d30: number; d60: number } | null>(null);
-  const [customers, setCustomers] = useState<{ lastOrderAt: string | null; avgOrderGapDays: number | null; spend365: number }[] | null>(null);
   // Stockists set up in DEAR that never ordered, or haven't for 12+ months: just the
   // numbers here; the list is on its own page.
   const [stockists, setStockists] = useState<{ never: number; lapsed: number } | null>(null);
@@ -29,40 +29,21 @@ export default function Dashboard() {
   const fy = new Date().getMonth() >= 6 ? new Date().getFullYear() : new Date().getFullYear() - 1;   // the financial year that started this July or last
 
   useEffect(() => {
-    apiGet('/accounts').then(setAccounts).catch(e => setError(e.message));
-    apiGet('/accounts/customers').then(setCustomers).catch(() => {});
+    loadDashboardData().then(setData).catch(e => setError(e.message));
     apiGet('/orders/views/balances').then(b => setOwed(b.totals)).catch(() => {});
     // Never blocks the Dashboard: if this fails the card just doesn't show.
     apiGet('/accounts/inactive-stockists?limit=0').then(d => setStockists({ never: d.neverCount, lapsed: d.lapsedCount })).catch(() => {});
   }, []);
 
   if (error) return <div className="empty-state">Couldn't load accounts: {error}</div>;
-  if (!accounts) return <div className="empty-state">Loading…</div>;
+  if (!data) return <div className="empty-state">Loading…</div>;
 
-  // New Lead: set up in DEAR, no order yet, being worked toward a first order
-  // (approached, quote sent, or awaiting dispatch). Status comes from the
-  // crm.account_status view, so old stages on accounts that have ordered
-  // are ignored.
-  const isLead = (a: Account) => a.status === 'New Lead';
-  const approached = accounts.filter(a => isLead(a) && a.stage === 'approached').length;
-  const quoteSent = accounts.filter(a => isLead(a) && a.stage === 'quote_sent').length;
-  const paymentCleared = accounts.filter(a => isLead(a) && a.stage === 'payment_cleared').length;
+  // New Lead: set up in DEAR, no order yet, being worked toward a first order (approached, quote sent, or awaiting dispatch). Prospect: identified,
+  // not set up in DEAR yet. Inactive: customers overdue against their own usual reorder gap, most overdue first, so the top of "Needs attention" is who
+  // to call. Follow-ups due: soonest first. All of it is worked out by the API (GET /accounts/dashboard), from the same status view as the Accounts list.
+  const { approached, quoteSent, paymentCleared, prospects } = data.counts;
   const openDeals = approached + quoteSent + paymentCleared;
-  // Prospect: identified, not set up in DEAR yet.
-  const prospects = accounts.filter(a => a.status === 'Prospect').length;
-
-  // Inactive: customers overdue against their own usual reorder gap.
-  // Most overdue first, so the top of "Needs attention" is who to call.
-  const overdueBy = (a: Account) => {
-    const threshold = a.avgOrderGapDays ? Math.max(a.avgOrderGapDays * 1.5, 14) : 75;
-    return daysBetween(a.lastOrderAt!) - threshold;
-  };
-  const inactive = accounts.filter(isOverdueCustomer).sort((a, b) => overdueBy(b) - overdueBy(a));
-
-  const now = Date.now();
-  const dueFollowUps = accounts
-    .filter(a => a.nextFollowUpAt && new Date(a.nextFollowUpAt).getTime() <= now)
-    .sort((a, b) => new Date(a.nextFollowUpAt!).getTime() - new Date(b.nextFollowUpAt!).getTime());
+  const { inactive, dueFollowUps, customers } = data;
 
   return (
     <>

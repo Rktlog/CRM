@@ -27,12 +27,16 @@ async function fail(res: Response, method: string, path: string): Promise<never>
 // A page is built from several requests, and the same question is often asked from more than one place (who am I, the list of
 // accounts). Each trip to the server is slow, so:
 //   1. The same question asked twice at the same moment is sent once, and both get the answer.
-//   2. An answer is kept for 10 seconds, so going back to a page you have just left shows at once.
+//   2. An answer is kept for 10 seconds, so going back to a page you have just left shows at once. The two full account lists are big and slow, and
+//      are asked for from many pages (Dashboard, Accounts, log a visit, add a task...), so they are kept for a minute.
 // Anything you change (save, add, delete, import) throws the kept answers away, and so does signing in or out, so you never see
 // an old list after changing it, or someone else's after switching person. A few areas are never kept after they arrive,
 // because they change on their own while you watch: the assistant, marketing progress, Gmail and calendar status.
 // Pass { fresh: true } to skip the kept answer and ask the server.
 const KEEP_MS = 10_000;
+const KEEP_LONG_MS = 60_000;
+const LONG_KEPT = ['/accounts', '/accounts?archived=true'];
+const keepFor = (path: string) => (LONG_KEPT.includes(path) ? KEEP_LONG_MS : KEEP_MS);
 const NEVER_KEEP = ['/ai/', '/marketing/', '/gmail/', '/calendar/'];
 type Entry = { text: Promise<string>; doneAt: number | null };
 const answers = new Map<string, Entry>();
@@ -60,7 +64,7 @@ function ask(path: string): Entry {
 
 export async function apiGet(path: string, opts: { fresh?: boolean } = {}) {
   let entry = opts.fresh ? undefined : answers.get(path);
-  if (entry && entry.doneAt !== null && Date.now() - entry.doneAt >= KEEP_MS) entry = undefined;
+  if (entry && entry.doneAt !== null && Date.now() - entry.doneAt >= keepFor(path)) entry = undefined;
   if (!entry) entry = ask(path);
   return JSON.parse(await entry.text);   // each caller gets its own copy, so changing one never changes another
 }

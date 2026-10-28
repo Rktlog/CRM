@@ -6,6 +6,7 @@ import { priceListOptions } from '../lib/priceList';
 import { LIVE_ORDER } from '../lib/orderSource';
 import { orderNoteSummary } from '../lib/orderNotes';
 import { stopwatch } from '../lib/timing';
+import { DAY, leadCounts, overdueList, dueList, statusOf } from '../lib/dashboardAccounts';
 import { councilsFor } from '../lib/council';
 import { mergeCheck, mergeAccounts, MergeError, COLD_LEAD_REASON } from '../lib/accountMerge';
 import type { Db } from '../lib/accountMerge';
@@ -70,9 +71,13 @@ accountsRouter.get('/backorders', async (req, res) => {
 // them. ?scope=all is still accepted from older pages but no longer
 // widens a rep's view beyond their territory.
 accountsRouter.get('/', async (req, res) => {
+  const sw = stopwatch('account list');
   const showArchived = req.query.archived === 'true';
   const region = req.query.region as string | undefined;
-  const accounts = await prisma.account.findMany({
+  // Which accounts have an order from the old spreadsheet import. It used to be a nested lookup on every account (a second query after the accounts, with
+  // a list of every account id in it); it does not depend on the accounts, so it is asked for at the same time as them.
+  const historyP = prisma.$queryRaw<{ account_id: string }[]>`select distinct account_id::text as account_id from crm.quotes where source = 'rhino-history'`;
+  const accountsP = prisma.account.findMany({
     where: {
       AND: [
         await territoryWhere(req.rep!),
@@ -92,12 +97,12 @@ accountsRouter.get('/', async (req, res) => {
     },
     include: {
       rep: { select: { name: true } },
-      // Just enough to know if this account has any order that came
-      // from the old spreadsheet import, without pulling all of them.
-      quotes: { where: { source: 'rhino-history' }, take: 1, select: { id: true } },
     },
     orderBy: { updatedAt: 'desc' },
   });
+  const [accounts, historyRows] = await Promise.all([accountsP, historyP]);
+  const hasHistory = new Set(historyRows.map(r => r.account_id));
+  sw.lap('accounts (with their rep) and the history flag (together)');
 
   // Flatten rep.name onto repName, matching the rest of the API's flat shape.
   // Three independent lookups: run together, because one after another each costs a full trip to the database.
@@ -107,16 +112,57 @@ accountsRouter.get('/', async (req, res) => {
     aliasesFor(accountIds),
     councilsFor(accountIds),   // from the postcode in the address (council.sql)
   ]);
-  const flattened = accounts.map(({ rep, quotes, ...a }) => ({
+  sw.lap('status, former names and councils (together)');
+  const flattened = accounts.map(({ rep, ...a }) => ({
     ...a,
     council: councils.get(a.id)?.council ?? null,
     postcode: councils.get(a.id)?.postcode ?? null,
     repName: rep?.name ?? null,
-    hasHistoricalOrders: quotes.length > 0,
+    hasHistoricalOrders: hasHistory.has(a.id),
     formerNames: aliases.get(a.id) ?? [],
     status: a.type === 'cold_lead' ? 'Cold lead' : (statuses.get(a.id) ?? 'Prospect'),   // the status view knows nothing about cold leads
   }));
+  sw.lap('building the answer');
   res.json(flattened);
+});
+
+// GET /accounts/dashboard: everything the Dashboard takes from the accounts, worked out here. The Dashboard used to download the whole account list (and the
+// whole customers list) and count a few things and pick out two short lists in the browser, and showed "Loading…" until all of it had arrived. Now it asks
+// for just: the lead and prospect counts, the overdue customers (Needs attention), the follow-ups due, and the three figures per customer its "Active
+// customers" card needs. The rules are the Dashboard's own, in lib/dashboardAccounts.ts; the visibility rule is the account list's.
+accountsRouter.get('/dashboard', async (req, res) => {
+  const sw = stopwatch('dashboard accounts');
+  const now = Date.now();
+  const territory = await territoryWhere(req.rep!);
+  const visible = { archived: false, misc: false, OR: [{ quotes: { none: {} } }, { quotes: { some: { miscType: null } } }] };   // as in the account list
+  const [slim, statusRows, dueRows, overdueRows, customers] = await Promise.all([
+    prisma.account.findMany({ where: { AND: [territory, visible] }, select: { id: true, type: true, stage: true } }),
+    prisma.$queryRaw<{ account_id: string; status: string }[]>`select account_id::text as account_id, status from crm.account_status`,
+    prisma.account.findMany({
+      where: { AND: [territory, visible, { nextFollowUpAt: { lte: new Date(now) } }] },
+      include: { rep: { select: { name: true } } },
+      orderBy: [{ nextFollowUpAt: 'asc' }, { updatedAt: 'desc' }],
+    }),
+    // Only customers who have ordered and not in the last 14 days can be overdue (the shortest allowed gap), then the rule is applied below.
+    prisma.account.findMany({
+      where: { AND: [territory, visible, { type: 'customer', lastOrderAt: { lt: new Date(now - 14 * DAY) } }] },
+      include: { rep: { select: { name: true } } },
+      orderBy: { updatedAt: 'desc' },
+    }),
+    prisma.account.findMany({
+      where: { AND: [territory, { type: 'customer', archived: false, misc: false }] },
+      select: { lastOrderAt: true, avgOrderGapDays: true, spend365: true },
+    }),
+  ]);
+  sw.lap('accounts, statuses, follow-ups, overdue customers and customer figures (together)');
+  const statuses = new Map(statusRows.map(r => [r.account_id, r.status]));
+  const shape = ({ rep, ...a }: (typeof dueRows)[number]) => ({ ...a, repName: rep?.name ?? null, status: statusOf(a, statuses) });
+  res.json({
+    counts: leadCounts(slim, statuses),
+    inactive: overdueList(overdueRows, now).map(shape),
+    dueFollowUps: dueList(dueRows).map(shape),
+    customers,
+  });
 });
 
 // Existing customers for the Customers board, with what a rep needs on

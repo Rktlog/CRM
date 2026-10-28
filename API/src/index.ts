@@ -35,6 +35,7 @@ import { gzipJson } from './lib/gzipJson';
 import { requestTiming } from './lib/timing';
 import { speedRouter } from './routes/speed';
 import { prisma } from './lib/prisma';
+import { startKeepWarm } from './lib/keepWarm';
 
 keepRunning();   // a mistake in one request is logged; it can no longer stop the whole API
 
@@ -92,10 +93,10 @@ app.use(errorHandler);  // and the person gets the reason as a normal error, wit
 const port = process.env.PORT || 4000;
 app.listen(port, () => {
   console.log(`API listening on :${port}`);
-  // Open the database connection now, and touch it every 4 minutes, so the first page after a quiet spell does not pay for
-  // setting up a new connection (several round trips) on top of its own work.
+  // Open the database connections now, and keep several of them warm (a tiny query on each every minute), so the first page after a quiet spell does
+  // not pay for setting up new connections (several round trips each) on top of its own work. See lib/keepWarm.ts.
   void prisma.$connect().catch(e => console.error('Database connection failed at start:', e));
-  setInterval(() => { void prisma.$queryRaw`select 1`.catch(() => {}); }, 4 * 60_000).unref();
+  startKeepWarm();
   // Gmail is normally started by Supabase's scheduler (POST /gmail-cron). Set GMAIL_JOB=on to have this service do it itself instead.
   startGmailSchedule();
 });
