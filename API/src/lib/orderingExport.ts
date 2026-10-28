@@ -102,7 +102,7 @@ export async function runReport(key: ReportKey, r: Range): Promise<Table> {
     case 'availability': {
       const [products, stages] = await Promise.all([prisma.$queryRaw<any[]>`
         select sku, name, brand, category, lifecycle, uom, on_hand::float8 as on_hand, allocated::float8 as allocated, available::float8 as available, on_order::float8 as on_order, locations, prices,
-               to_char(eta, 'YYYY-MM-DD') as eta, order_increment, barcode, to_char(stock_synced_at, 'YYYY-MM-DD HH24:MI') as synced
+               to_char(eta, 'YYYY-MM-DD') as eta, order_increment, barcode, (select to_char((last_synced_at at time zone 'UTC') at time zone 'Australia/Melbourne', 'YYYY-MM-DD HH24:MI') from crm.sync_state where key = 'stock') as synced
         from crm.products order by brand nulls last, sku limit ${CAP}`, stageLabels()]);
       // One column per DEAR price tier, by the tier's own name (tier names are set per account, e.g. Wholesale or RRP). A product without that tier is left blank.
       const tiers = [...new Set(products.flatMap((p: any) => Object.keys(p.prices && typeof p.prices === 'object' ? p.prices : {})))].sort((a, b) => a.localeCompare(b));
