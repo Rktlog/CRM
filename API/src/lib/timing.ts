@@ -42,6 +42,38 @@ export function requestTiming() {
   };
 }
 
+// ---- Steps inside a route: a stopwatch that records how long each stage took ----
+// A route can be slow for very different reasons (a slow query, a lot of data, a long loop). Putting laps between its stages shows which:
+//     const sw = stopwatch('openQuotes'); ... await something; sw.lap('something'); ...
+// Each lap records the time since the previous one under "openQuotes: something", shown by /speed (slowestSteps) and logged as
+// "SLOW STEP openQuotes: something 4200 ms" when over SLOW_STEP_MS (default 1000). The names are fixed in the code, so they cannot pile up.
+const SLOW_STEP_MS = Number(process.env.SLOW_STEP_MS) || 1000;
+const stepStats = new Map<string, number[]>();
+
+export function stopwatch(name: string) {
+  let last = process.hrtime.bigint();
+  return {
+    lap(label: string) {
+      const now = process.hrtime.bigint(), ms = Number(now - last) / 1e6;
+      last = now;
+      const key = `${name}: ${label}`;
+      const list = stepStats.get(key) ?? [];
+      list.push(ms); if (list.length > KEEP) list.shift();
+      stepStats.set(key, list);
+      if (ms >= SLOW_STEP_MS) console.warn(`SLOW STEP ${key} ${Math.round(ms)} ms`);
+    },
+  };
+}
+
+// The slowest stages, by their worst time.
+export function slowestSteps(n = 12) {
+  const round = (v: number) => Math.round(v * 10) / 10;
+  return [...stepStats].map(([step, d]) => {
+    const sorted = [...d].sort((a, b) => a - b);
+    return { step, requests: d.length, medianMs: round(sorted[Math.floor(sorted.length / 2)]), worstMs: round(sorted[sorted.length - 1]) };
+  }).sort((a, b) => b.worstMs - a.worstMs).slice(0, n);
+}
+
 // The routes with the slowest worst-5%, most useful first.
 export function slowestRoutes(n = 12) {
   const round = (v: number) => Math.round(v * 10) / 10;

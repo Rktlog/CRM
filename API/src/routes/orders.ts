@@ -6,6 +6,7 @@ import { searchWords } from './products';
 import * as XLSX from 'xlsx';
 import { openQuotes, toShip, unpaidInvoices, balances, AGE_BUCKETS, followUpState, followUpAnchor, followUpReps, filterFollowUp, filterFollowUpBy, myFollowUps, melDay, paymentState } from '../lib/receivables';
 import { orderNoteSummary } from '../lib/orderNotes';
+import { stopwatch } from '../lib/timing';
 
 export const ordersRouter = Router();
 
@@ -251,6 +252,7 @@ ordersRouter.post('/:id/follow-up/undo', async (req, res) => {
 const xlDate = (d: Date | null | undefined) => (d ? new Date(d).toISOString().slice(0, 10) : '');
 
 ordersRouter.get('/views/:view', async (req, res) => {
+  const sw = stopwatch(`view ${String(req.params.view).slice(0, 12)}`);   // laps are only recorded for the four real views (an unknown one answers 404 first)
   const regions = typeof req.query.region === 'string' && req.query.region ? req.query.region.split(',') : undefined;
   const rep = req.rep!;
   let data: any;
@@ -306,6 +308,7 @@ ordersRouter.get('/views/:view', async (req, res) => {
       return res.status(404).json({ error: 'Unknown view' });
   }
 
+  sw.lap('the view itself');
   // ?terms=30 Days EOM|30 days: only customers on the ticked payment terms
   // (unpaid, balances). Several are separated by "|".
   const terms = typeof req.query.terms === 'string' && req.query.terms
@@ -353,6 +356,7 @@ ordersRouter.get('/views/:view', async (req, res) => {
     const notes = await orderNoteSummary(data.rows.map((r: any) => r.orderId ?? r.id));
     data = { ...data, rows: data.rows.map((r: any) => { const n = notes.get(r.orderId ?? r.id); return n ? { ...r, ...n } : r; }) };
   }
+  sw.lap('order notes');
   res.json(data);
 });
   

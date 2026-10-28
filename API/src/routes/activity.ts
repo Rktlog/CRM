@@ -143,15 +143,14 @@ activityRouter.post('/', async (req, res) => {
 // Every log the team adds or edits, newest first, without opening each
 // account. ?rep=<repId> ?type=call|email|visit|remark ?days=1|7|30|90 ?q=<text>
 // ?before=<ISO time> for the next page (pass the last row's sortAt).
-activityRouter.get('/feed', async (req, res) => {
-  if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Managers only' });
-
-  const repId = typeof req.query.rep === 'string' && req.query.rep ? req.query.rep : null;
-  const type = ['call', 'email', 'visit', 'remark'].includes(String(req.query.type)) ? String(req.query.type) : null;
-  const days = Math.min(365, Math.max(1, Number(req.query.days) || 7));
+// One page of the activity feed, newest first. repId limits it to one rep's entries: the manager's rep filter on the team log, or, for "My log",
+// always the signed-in person (see /mine below).
+async function feedPage(query: Record<string, unknown>, repId: string | null) {
+  const type = ['call', 'email', 'visit', 'remark'].includes(String(query.type)) ? String(query.type) : null;
+  const days = Math.min(365, Math.max(1, Number(query.days) || 7));
   const since = new Date(Date.now() - days * 86400000);
-  const q = typeof req.query.q === 'string' && req.query.q.trim() ? `%${req.query.q.trim()}%` : null;
-  const before = typeof req.query.before === 'string' && !Number.isNaN(Date.parse(req.query.before)) ? new Date(req.query.before) : null;
+  const q = typeof query.q === 'string' && query.q.trim() ? `%${query.q.trim()}%` : null;
+  const before = typeof query.before === 'string' && !Number.isNaN(Date.parse(query.before)) ? new Date(query.before) : null;
   const PAGE = 50;
 
   const rows = await prisma.$queryRaw<any[]>`
@@ -173,12 +172,22 @@ activityRouter.get('/feed', async (req, res) => {
     order by "sortAt" desc
     limit ${PAGE + 1}`;
 
+  return { rows: rows.slice(0, PAGE).map(r => ({ ...r, edited: !!r.updatedAt })), hasMore: rows.length > PAGE };
+}
+
+activityRouter.get('/feed', async (req, res) => {
+  if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Managers only' });
+  const repId = typeof req.query.rep === 'string' && req.query.rep ? req.query.rep : null;
+  const page = await feedPage(req.query, repId);
   const reps = await prisma.rep.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } });
-  res.json({
-    rows: rows.slice(0, PAGE).map(r => ({ ...r, edited: !!r.updatedAt })),
-    hasMore: rows.length > PAGE,
-    reps,
-  });
+  res.json({ ...page, reps });
+});
+
+// ---------- GET /activity/mine ("My log" on the Dashboard) ----------
+// The entries the signed-in person added or edited, newest first, for anyone (reps and managers alike). It is ALWAYS their own: a ?rep= in the
+// address is ignored, so this can never be used to read someone else's log (managers have the team log for that).
+activityRouter.get('/mine', async (req, res) => {
+  res.json(await feedPage(req.query, req.rep!.id));
 });
 
 activityRouter.patch('/:id', async (req, res) => {

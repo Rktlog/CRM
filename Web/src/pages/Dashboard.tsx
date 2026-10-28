@@ -8,6 +8,7 @@ import AccountTable from '../components/AccountTable';
 import BackorderCard from '../components/BackorderCard';
 import TeamActivityCard from '../components/TeamActivityCard';
 import TeamLogCard from '../components/TeamLogCard';
+import MyLogCard from '../components/MyLogCard';
 import ConversionCard from '../components/ConversionCard';
 import SummarySheet from '../components/SummarySheet';
 import RepSummaries from '../components/RepSummaries';
@@ -169,6 +170,11 @@ export default function Dashboard() {
           </div>
         </>
       )}
+
+      {/* Everyone's own log: the entries they added or edited. (Managers also have the team log above.) */}
+      <div className="section">
+        <MyLogCard />
+      </div>
 
       <MyOrderFollowUps />
 

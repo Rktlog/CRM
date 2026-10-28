@@ -1,4 +1,5 @@
 import { prisma } from './prisma';
+import { stopwatch } from './timing';
 import { territoryWhere } from './territory';
 import { isOwing } from './orderSource';
 import { orderNoteSummary } from './orderNotes';
@@ -139,11 +140,14 @@ export const termsLabel = (terms: string | null | undefined, credit: string | nu
 // terms: which customers to include by payment terms. Left out = the default, Prepayment customers only. 'all' = every customer.
 // Otherwise the list of labels to include (an empty list includes nobody).
 export async function openQuotes(rep: Rep, regions?: string[], terms?: string[] | 'all') {
+  const sw = stopwatch('openQuotes');
   const accounts = await scope(rep, regions);
+  sw.lap('accounts in territory');
   const termsOf = accounts.size
     ? await prisma.$queryRaw<{ id: string; payment_terms: string | null; credit: string | null }[]>`
         select id, payment_terms, credit::text as credit from crm.accounts where id = any(${[...accounts.keys()]}::uuid[])`
     : [];
+  sw.lap('payment terms');
   const labelById = new Map<string, string>(termsOf.map((r): [string, string] => [r.id, termsLabel(r.payment_terms, r.credit)]));
   const termOptions = [...new Set(labelById.values())].sort((x, y) => (x === PREPAYMENT ? -1 : y === PREPAYMENT ? 1 : x.localeCompare(y)));
   const selected = terms === 'all' ? termOptions : terms ?? [PREPAYMENT];
@@ -152,6 +156,7 @@ export async function openQuotes(rep: Rep, regions?: string[], terms?: string[] 
   // Before that column is added nobody is set aside this way.
   try { for (const r of await prisma.$queryRaw<{ id: string }[]>`select id from crm.accounts where skip_open_quotes`) accounts.delete(r.id); }
   catch (e) { /* the column has not been added yet */ }
+  sw.lap('set-aside accounts');
   const accountIds = [...accounts.keys()];
 
   // Confirmed orders that are not fully paid, for any customer. Picked in the database so only those are read.
@@ -182,6 +187,7 @@ export async function openQuotes(rep: Rep, regions?: string[], terms?: string[] 
                                 then (select sum(nullif(c->>'onAccount', '')::numeric) from jsonb_array_elements(q.credit_notes) c) end, 0), 0) - rv.taken, 0)) >= greatest(least(1, 0.01 * coalesce(q.total, q.amount)), 0.005)
           and not (q.amount_due is not null and q.amount_due <= 0.005 and coalesce(q.invoiced_total, 0) + coalesce(q.credited_total, 0) >= coalesce(q.total, q.amount) - 0.005)`
     : [];
+  sw.lap('owing orders (SQL)');
   const quotes = await prisma.quote.findMany({
     where: {
       OR: [
@@ -192,6 +198,7 @@ export async function openQuotes(rep: Rep, regions?: string[], terms?: string[] 
     orderBy: { sentAt: 'asc' },
     select: { id: true, number: true, accountId: true, sentAt: true, fulfillmentStatus: true, reference: true, total: true, amount: true, amountPaid: true, unappliedCredit: true, amountDue: true, invoicedTotal: true, creditedTotal: true, creditNotes: true },
   });
+  sw.lap('the orders (findMany)');
   const ids = quotes.map(q => q.id);
   // Prepayments on these orders that have been reserved for another order (a use in the last 2 days counts until the sync catches up).
   const reservedBy = new Map<string, number>(quotes.length
@@ -201,6 +208,7 @@ export async function openQuotes(rep: Rep, regions?: string[], terms?: string[] 
           and (status = 'reserved' or (status = 'used' and resolved_at > now() - interval '2 days'))
         group by source_order`).map((r): [string, number] => [r.number, r.taken])
     : []);
+  sw.lap('reservations');
   const [fuRows, notes, repOf, repOptions] = await Promise.all([
     ids.length
       ? prisma.$queryRaw<{ id: string; follow_up_at: Date | null; fu1_done_on: Date | null; fu2_done_on: Date | null; invoices: unknown }[]>`
@@ -210,6 +218,7 @@ export async function openQuotes(rep: Rep, regions?: string[], terms?: string[] 
     followUpReps(ids),
     prisma.$queryRaw<{ id: string; name: string }[]>`select id, name from crm.reps order by name`,   // for the "followed up by" choice
   ]);
+  sw.lap('follow-ups, notes and reps (together)');
   const day = (d: Date | null) => (d ? new Date(d).toISOString().slice(0, 10) : null);   // date columns come back as midnight UTC
   type FuState = { manualOn: string | null; fu1DoneOn: string | null; fu2DoneOn: string | null };
   const invoicesById = new Map<string, unknown>(fuRows.map((r): [string, unknown] => [r.id, r.invoices]));
@@ -257,6 +266,7 @@ export async function openQuotes(rep: Rep, regions?: string[], terms?: string[] 
   })
   // It leaves only when it is both paid and confirmed.
   .filter(r => !(r.confirmed && r.payment === 'paid'));
+  sw.lap('building the rows');
   return {
     rows, count: rows.length,
     total: cents(rows.reduce((s, r) => s + r.amount, 0)),
@@ -303,7 +313,9 @@ export async function myFollowUps(rep: Rep, today: string = melDay(), days = 7) 
 
 // ---------- To ship: confirmed but not fully shipped, oldest first ----------
 export async function toShip(rep: Rep, regions?: string[]) {
+  const sw = stopwatch('toShip');
   const accounts = await scope(rep, regions);
+  sw.lap('accounts in territory');
   const quotes = await prisma.quote.findMany({
     where: {
       ...LIVE,
@@ -315,6 +327,7 @@ export async function toShip(rep: Rep, regions?: string[]) {
     // Only what the rows below use (not the big JSON columns).
     select: { id: true, number: true, accountId: true, sentAt: true, fulfillmentStatus: true, shippingStatus: true, pickingStatus: true, miscType: true, total: true, amount: true },
   });
+  sw.lap('the orders (findMany)');
   const rows = quotes.map(q => {
     const status = (q.fulfillmentStatus ?? '').toUpperCase();
     const ship = (q.shippingStatus ?? '').toUpperCase();
@@ -340,6 +353,7 @@ export async function toShip(rep: Rep, regions?: string[]) {
       amount: cents(q.total ?? q.amount),
     };
   });
+  sw.lap('building the rows');
   return { rows, count: rows.length, total: cents(rows.reduce((s, r) => s + r.amount, 0)) };
 }
 
@@ -347,7 +361,9 @@ export async function toShip(rep: Rep, regions?: string[]) {
 type InvoiceDoc = { number: string | null; date: string | null; dueDate: string | null; total: number; paid: number; paidAt?: string | null; credited?: number; due?: number };
 
 export async function unpaidInvoices(rep: Rep, regions?: string[]) {
+  const sw = stopwatch('unpaidInvoices');
   const accounts = await scope(rep, regions);
+  sw.lap('accounts in territory');
   const quotes = (await prisma.quote.findMany({
     where: { ...LIVE, accountId: { in: [...accounts.keys()] }, OR: [{ amountDue: { gt: 0.005 } }, { amountDue: null, paid: false, invoiceDate: { not: null } }] },
     // Only what is used below (and by isOwing). A whole order carries big JSON columns (shipments, fulfilments, credit notes, line progress) that this
@@ -358,6 +374,7 @@ export async function unpaidInvoices(rep: Rep, regions?: string[]) {
     },
   })).filter(q => isOwing(q));
 
+  sw.lap('the unpaid orders (findMany)');
   const rows = quotes.flatMap(q => {
     const acct = accounts.get(q.accountId);
     const base = {
@@ -402,6 +419,7 @@ export async function unpaidInvoices(rep: Rep, regions?: string[]) {
       due: cents(q.amountDue ?? Math.max(0, total - (q.amountPaid ?? 0))),
     }];
   }).sort((a, b) => b.daysOverdue - a.daysOverdue || b.due - a.due);
+  sw.lap('building the rows');
 
   return {
     rows,
@@ -422,8 +440,11 @@ export const AGE_BUCKETS = [
 type BucketKey = (typeof AGE_BUCKETS)[number]['key'];
 
 export async function balances(rep: Rep, regions?: string[]) {
+  const sw = stopwatch('balances');
   const accounts = await scope(rep, regions);
+  sw.lap('accounts in territory');
   const invoices = await unpaidInvoices(rep, regions);
+  sw.lap('unpaid invoices (all of it)');
 
   // Credit still on account (unused credit notes, unapplied prepayments),
   // from any live order, paid or not.
@@ -442,6 +463,7 @@ export async function balances(rep: Rep, regions?: string[]) {
   });
   for (const o of overpaid) creditBy.set(o.accountId, (creditBy.get(o.accountId) ?? 0) - (o._sum.amountDue ?? 0));
 
+  sw.lap('credit queries');
   type Bal = { accountId: string; customer: string; region: string; repName: string | null; terms: string; invoices: number; oldestDays: number; owing: number; credit: number; balance: number } & Record<BucketKey, number>;
   const byAccount = new Map<string, Bal>();
   const blank = (accountId: string): Bal => {

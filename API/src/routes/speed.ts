@@ -3,7 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import { promises as dnsp } from 'dns';
 import net from 'net';
 import { prisma } from '../lib/prisma';
-import { slowestRoutes } from '../lib/timing';
+import { slowestRoutes, slowestSteps } from '../lib/timing';
 
 // How fast is the API, and why? Started with the same secret as the other scheduled jobs (header x-sync-secret), from SQL:
 //     select crm.call_api('/speed');
@@ -168,6 +168,7 @@ speedRouter.all('/', async (req, res) => {
     uptimeSeconds: Math.round(process.uptime()),
     memoryMb: Math.round(process.memoryUsage().rss / 1048576),
     slowestRoutes: slowestRoutes(12),
+    slowestSteps: slowestSteps(14),   // the stages inside the slow routes (see lib/timing.ts, stopwatch)
     more: 'For the network test and the DIRECT_URL comparison: /speed?full=1, then a minute later /speed?full=result',
   });
 });

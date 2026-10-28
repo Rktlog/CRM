@@ -7,13 +7,13 @@ import { apiGet } from '../lib/api';
 // The list sits in a panel of fixed height so the dashboard stays short, and it scrolls: the next page of entries loads by itself as
 // you reach the bottom, so there is no "limited to 3" and no button to press. PANEL_HEIGHT is how tall the panel is.
 
-type LogRow = {
+export type LogRow = {
   id: string; type: 'call' | 'email' | 'visit' | 'remark'; note: string; photoUrl: string | null; orderId?: string | null; orderNumber?: string | null;
   occurredAt: string; createdAt: string; updatedAt: string | null; sortAt: string; edited: boolean;
   accountId: string; accountName: string; accountRegion: string; repId: string; repName: string;
 };
 
-const TYPES = [
+export const TYPES = [
   { key: '', label: 'All' },
   { key: 'call', label: 'Phone' },
   { key: 'email', label: 'Email' },
@@ -26,7 +26,7 @@ const PERIODS = [
   { days: 30, label: '30 days' },
   { days: 90, label: '90 days' },
 ];
-const TYPE_LABEL = { call: 'Phone', email: 'Email', visit: 'F2F visit', remark: 'Remark' } as const;
+export const TYPE_LABEL = { call: 'Phone', email: 'Email', visit: 'F2F visit', remark: 'Remark' } as const;
 const REFRESH_MS = 60_000;
 const PANEL_HEIGHT = 'min(70vh, 560px)';   // about six entries; change this to show more or fewer at once
 const NEAR_BOTTOM = 120;                    // px from the bottom at which the next page starts loading
@@ -39,7 +39,7 @@ export function mergeLatest(prev: { id: string; sortAt: string }[], fresh: { row
   return [...fresh.rows, ...prev.filter(r => new Date(r.sortAt).getTime() < edge)];
 }
 
-function when(iso: string): string {
+export function when(iso: string): string {
   const d = new Date(iso);
   const today = new Date();
   const yesterday = new Date(today.getTime() - 86400000);
@@ -48,7 +48,7 @@ function when(iso: string): string {
   if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${time}`;
   return d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }) + ` ${time}`;
 }
-const sameDay = (a: string, b: string) => new Date(a).toDateString() === new Date(b).toDateString();
+export const sameDay = (a: string, b: string) => new Date(a).toDateString() === new Date(b).toDateString();
 
 export default function TeamLogCard() {
   const [rows, setRows] = useState<LogRow[] | null>(null);

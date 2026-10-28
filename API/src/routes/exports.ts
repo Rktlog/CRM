@@ -407,7 +407,7 @@ exportsRouter.get('/:type', async (req, res) => {
         // Current prices and stock from crm.products (kept in sync with DEAR).
         const products = new Map((await prisma.product.findMany({
           where: { sku: { in: [...bySku.keys()] } },
-          select: { sku: true, prices: true, available: true },
+          select: { sku: true, prices: true, available: true, barcode: true },
         })).map(p => [p.sku, p]));
 
         const rows = [...bySku.entries()]
@@ -418,6 +418,7 @@ exportsRouter.get('/:type', async (req, res) => {
               SKU: sku,
               Product: v.productName,
               Brand: v.brand ?? 'Unbranded',
+              Barcode: p?.barcode ?? '',   // kept as text, so a leading zero survives (from DEAR, via crm.products)
               Quantity: v.quantity,
               Total: cents(v.total),
               'Wholesale price': wholesalePrice(prices) ?? '',
