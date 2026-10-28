@@ -698,12 +698,13 @@ function ReorderGapRow({ account, onSaved }: {
 }
 
 // Type (Customer or Prospect), with a Change button for managers. A customer is kept up to date from DEAR; a prospect's details stay with the rep.
-type AccountKind = 'prospect' | 'lead' | 'customer';
-const TYPE_LABEL: Record<AccountKind, string> = { customer: 'Customer', lead: 'Lead', prospect: 'Prospect' };
+type AccountKind = 'prospect' | 'lead' | 'customer' | 'cold_lead';
+const TYPE_LABEL: Record<AccountKind, string> = { customer: 'Customer', lead: 'Lead', prospect: 'Prospect', cold_lead: 'Cold lead' };
 const TYPE_HELP: Record<AccountKind, string> = {
   customer: 'A customer is kept up to date from DEAR (contact details, payment terms and orders) and gets reorder follow-ups in the Planner.',
   lead: "A lead has shown interest. Their details stay with the rep, DEAR does not update them, and the Planner does not suggest them for cold outreach.",
   prospect: "A prospect has not been approached yet. Their details stay with the rep, DEAR does not update them, and the Planner can suggest them for outreach.",
+  cold_lead: "A cold lead does not want to be contacted. The Planner never suggests them and no task can be scheduled for them, they are left out of Inactive stockists and marketing emails, and their orders still come in from DEAR.",
 };
 function TypeRow({ account, onSaved }: { account: { id: string; type: AccountKind; lastOrderAt: string | null }; onSaved: (a: any) => void }) {
   const me = useMe();
@@ -742,6 +743,7 @@ function TypeRow({ account, onSaved }: { account: { id: string; type: AccountKin
               <option value="customer">Customer</option>
               <option value="lead">Lead</option>
               <option value="prospect">Prospect</option>
+              <option value="cold_lead">Cold lead</option>
             </select>
             <button className="btn secondary" style={{ padding: '4px 10px', fontSize: 12 }} disabled={saving || value === account.type} onClick={save}>
               {saving ? 'Saving…' : 'Save'}
@@ -750,7 +752,8 @@ function TypeRow({ account, onSaved }: { account: { id: string; type: AccountKin
           </span>
           <span className="acct-region" style={{ maxWidth: 340 }}>
             {TYPE_HELP[value]}
-            {value !== 'customer' && account.type === 'customer' && account.lastOrderAt ? ` This account has ordered before: as a ${value} it stops being updated from DEAR.` : ''}
+            {value !== 'customer' && value !== 'cold_lead' && account.type === 'customer' && account.lastOrderAt ? ` This account has ordered before: as a ${value} it stops being updated from DEAR.` : ''}
+            {value === 'cold_lead' && account.type !== 'cold_lead' ? ' Their email addresses are also taken off the marketing lists. Changing the type back puts them back.' : ''}
           </span>
           {error && <span className="save-msg err">{error}</span>}
         </span>

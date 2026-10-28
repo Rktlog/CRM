@@ -5,7 +5,7 @@ export const createAccountSchema = z.object({
   region: z.string().min(1),
   repId: z.string().uuid(),
   credit: z.enum(['prepay', 'account']),
-  type: z.enum(['prospect', 'lead', 'customer']).default('prospect'),
+  type: z.enum(['prospect', 'lead', 'customer', 'cold_lead']).default('prospect'),
   contactName: z.string().min(1).optional(),
   phone: z.string().min(1).optional(),
   email: z.string().email().optional(),

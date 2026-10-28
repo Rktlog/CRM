@@ -92,7 +92,7 @@ accountsRouter.get('/', async (req, res) => {
     postcode: councils.get(a.id)?.postcode ?? null,
     repName: rep?.name ?? null,
     hasHistoricalOrders: quotes.length > 0,
-    status: statuses.get(a.id) ?? 'Prospect',
+    status: a.type === 'cold_lead' ? 'Cold lead' : (statuses.get(a.id) ?? 'Prospect'),   // the status view knows nothing about cold leads
   }));
   res.json(flattened);
 });
@@ -118,7 +118,7 @@ accountsRouter.get('/inactive-stockists', async (req, res) => {
       AND: [
         await territoryWhere(req.rep!),
         {
-          archived: false, misc: false, dearCustomerId: { not: null },
+          archived: false, misc: false, dearCustomerId: { not: null }, type: { not: 'cold_lead' },   // a cold lead is not offered for outreach
           // same visibility rule as the Accounts list
           OR: [{ quotes: { none: {} } }, { quotes: { some: { miscType: null } } }],
         },
@@ -265,7 +265,7 @@ accountsRouter.get('/:id', async (req, res) => {
     repName: rep?.name ?? null,
     activity: activity.map(({ rep: activityRep, quote, ...a }) => ({ ...a, repName: activityRep?.name ?? null, orderId: quote?.id ?? null, orderNumber: quote?.number ?? null })),
     productBreakdown,
-    status: (await statusFor([rest.id])).get(rest.id) ?? 'Prospect',
+    status: rest.type === 'cold_lead' ? 'Cold lead' : ((await statusFor([rest.id])).get(rest.id) ?? 'Prospect'),
   };
 
   res.json(flattened);
@@ -316,21 +316,43 @@ accountsRouter.patch('/:id/region', async (req, res) => {
   res.json(updated);
 });
 
-// Managers: change an account's type: Customer, Lead or Prospect.
+// Managers: change an account's type: Customer, Lead, Prospect or Cold lead.
 //   Customer  kept up to date from DEAR (contact details, payment terms, orders); gets reorder follow-ups in the Planner.
 //   Lead      someone who has shown interest. Details stay with the rep, DEAR does not update them, and the Planner does not offer
 //             it as a cold outreach (it is already being worked).
 //   Prospect  not yet approached. Details stay with the rep, DEAR does not update them, and the Planner can offer it for outreach.
+//   Cold lead someone who does not want to be contacted (often an existing customer). The Planner never suggests them and no task can be
+//             scheduled for them, they are left out of Inactive stockists, and every email address they have is added to the marketing
+//             suppression list so no campaign or automation reaches them. Their orders still sync from DEAR. Changing the type back lifts it.
 // The customer sync only looks at accounts that are customers, so this is what starts or stops it for one account.
+const COLD_LEAD_REASON = 'Cold lead: does not want to be contacted';   // the reason stored on the suppression, so only these are lifted again
 accountsRouter.patch('/:id/type', async (req, res) => {
   if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Only a manager can change an account\'s type' });
   const raw = req.body?.type, type = typeof raw === 'string' ? raw.toLowerCase() : '';
-  if (type !== 'customer' && type !== 'lead' && type !== 'prospect') return res.status(400).json({ error: 'Type must be customer, lead or prospect' });
+  if (type !== 'customer' && type !== 'lead' && type !== 'prospect' && type !== 'cold_lead') return res.status(400).json({ error: 'Type must be customer, lead, prospect or cold_lead' });
   const account = await prisma.account.findUnique({ where: { id: req.params.id } });
   if (!account) return res.status(404).json({ error: 'Account not found' });
   if (account.type === type) return res.json(account);
-  const updated = await prisma.account.update({ where: { id: account.id }, data: { type } });
-  res.json(updated);
+  // Going to or from Cold lead also switches marketing off or on for every address this account has (its own and any marketing contact linked to it).
+  // Done in the same transaction as the type change, so a cold lead can never end up changed but still emailable.
+  try {
+    const touchesMarketing = type === 'cold_lead' || account.type === 'cold_lead';
+    const emails = touchesMarketing
+      ? (await prisma.$queryRaw<{ email: string }[]>`
+          select lower(btrim(email)) as email from crm.accounts where id = ${account.id}::uuid and email is not null and btrim(email) <> ''
+          union select lower(btrim(email)) from crm.marketing_contacts where account_id = ${account.id}::uuid and btrim(email) <> ''`).map(r => r.email)
+      : [];
+    const change = prisma.account.update({ where: { id: account.id }, data: { type } });
+    if (!emails.length) return res.json(await change);
+    const marketing = type === 'cold_lead'
+      ? prisma.$executeRaw`insert into crm.marketing_suppressions (email, reason) select unnest(${emails}::text[]), ${COLD_LEAD_REASON} on conflict (email) do nothing`
+      : prisma.$executeRaw`delete from crm.marketing_suppressions where email = any(${emails}::text[]) and reason = ${COLD_LEAD_REASON}`;
+    const [updated] = await prisma.$transaction([change, marketing]);
+    res.json(updated);
+  } catch (e) {
+    console.error('change account type failed', e);
+    res.status(500).json({ error: `Could not change the type: ${(e as Error).message}` });
+  }
 });
 
 // ---- Managers: delete an account, or archive it ----

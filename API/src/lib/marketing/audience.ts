@@ -72,7 +72,7 @@ export async function syncFromCrm() {
   const [counts] = await prisma.$queryRaw<{ with_email: number; invalid: number }[]>`
     select count(*) filter (where email is not null and btrim(email) <> '')::int as with_email,
            count(*) filter (where email is not null and btrim(email) <> '' and btrim(email) !~* ${EMAIL_SQL})::int as invalid
-    from crm.accounts where archived = false and misc = false`;
+    from crm.accounts where archived = false and misc = false and type <> 'cold_lead'`;
   const rows = await prisma.$queryRaw<{ inserted: boolean; status: string }[]>`
     with src as (
       select distinct on (lower(btrim(a.email)))
@@ -84,7 +84,7 @@ export async function syncFromCrm() {
              case when a.type <> 'customer' then 'prospect'
                   when a.last_order_at is null or a.last_order_at < now() - interval '12 months' then 'inactive' else 'customer' end as contact_type
       from crm.accounts a
-      where a.archived = false and a.misc = false and a.email is not null and btrim(a.email) ~* ${EMAIL_SQL}
+      where a.archived = false and a.misc = false and a.type <> 'cold_lead' and a.email is not null and btrim(a.email) ~* ${EMAIL_SQL}
       order by lower(btrim(a.email)), (a.type = 'customer') desc, a.last_order_at desc nulls last
     )
     insert into crm.marketing_contacts (email, first_name, last_name, company, account_id, source, status, consent_note, region, contact_type)

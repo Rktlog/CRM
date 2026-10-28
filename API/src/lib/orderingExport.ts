@@ -106,14 +106,19 @@ export async function runReport(key: ReportKey, r: Range): Promise<Table> {
         from crm.products order by brand nulls last, sku limit ${CAP}`, stageLabels()]);
       // One column per DEAR price tier, by the tier's own name (tier names are set per account, e.g. Wholesale or RRP). A product without that tier is left blank.
       const tiers = [...new Set(products.flatMap((p: any) => Object.keys(p.prices && typeof p.prices === 'object' ? p.prices : {})))].sort((a, b) => a.localeCompare(b));
+      // Managers only (costs.sql): DEAR's average cost and what the stock on hand is worth at it. Left out until the table exists.
+      const hasCosts = (await prisma.$queryRaw<{ ok: boolean }[]>`select to_regclass('crm.product_costs') is not null as ok`)[0]?.ok === true;
+      const avgCost = hasCosts ? new Map((await prisma.$queryRaw<{ sku: string; average_cost: number }[]>`select sku, average_cost::float8 as average_cost from crm.product_costs`).map(c => [c.sku, c.average_cost])) : null;
       const rows: Cell[][] = [];
       for (const p of products) {
+        const cost = avgCost?.get(p.sku);
+        const costCells: Cell[] = avgCost ? [cost ?? null, cost != null ? Math.round(p.on_hand * cost * 100) / 100 : null] : [];
         const tierPrices = tiers.map(t => { const v = Number(p.prices?.[t]); return Number.isFinite(v) && p.prices?.[t] != null ? v : null; });
         const locs: any[] = Array.isArray(p.locations) && p.locations.length ? p.locations : [null];
         for (const l of locs) rows.push([p.sku, p.name, p.brand, p.category, p.lifecycle ? stages.get(p.lifecycle) ?? p.lifecycle : '', p.uom, l?.location ?? '', l ? l.onHand : p.on_hand, l ? l.allocated : p.allocated, l ? l.available : p.available, l ? l.onOrder : p.on_order,
-          p.on_hand, p.available, p.eta, p.order_increment, p.barcode, p.synced, ...tierPrices]);
+          p.on_hand, p.available, p.eta, p.order_increment, p.barcode, p.synced, ...tierPrices, ...costCells]);
       }
-      return finish(['SKU', 'Product', 'Brand', 'Category', 'Stage', 'Unit', 'Location', 'On hand', 'Allocated', 'Available', 'On order', 'Product on hand (all locations)', 'Product available (all locations)', 'Next arrival', 'Order increment', 'Barcode', 'Stock last synced', ...tiers.map(t => `Price tier: ${t}`)], rows);
+      return finish(['SKU', 'Product', 'Brand', 'Category', 'Stage', 'Unit', 'Location', 'On hand', 'Allocated', 'Available', 'On order', 'Product on hand (all locations)', 'Product available (all locations)', 'Next arrival', 'Order increment', 'Barcode', 'Stock last synced', ...tiers.map(t => `Price tier: ${t}`), ...(avgCost ? ['Average cost', 'Stock value (all locations, on hand x average cost)'] : [])], rows);
     }
     case 'sale-order-details': {
       const x = await prisma.$queryRaw<any[]>`
@@ -179,6 +184,13 @@ export async function runReport(key: ReportKey, r: Range): Promise<Table> {
           from crm.purchase_receipts r join crm.purchases p on p.id = r.purchase_id left join crm.products p2 on p2.sku = r.sku
           where r.received_at >= ${r.from}::date and r.received_at < (${r.to}::date + 1)
           union all` : Prisma.empty;
+      // Customer returns: what a credit note put back on the shelf (crm.sale_returns, from sale-returns.sql), on the day it went back.
+      const hasReturns = (await prisma.$queryRaw<{ ok: boolean }[]>`select to_regclass('crm.sale_returns') is not null as ok`)[0]?.ok === true;
+      const returnRows = hasReturns ? Prisma.sql`
+          select sr.returned_at::date, 'Customer return', sr.sku, p5.name, p5.brand, sr.quantity::float8, coalesce(sr.credit_note, q5.number), a5.name, sr.location, null
+          from crm.sale_returns sr join crm.quotes q5 on q5.id = sr.quote_id join crm.accounts a5 on a5.id = q5.account_id left join crm.products p5 on p5.sku = sr.sku
+          where sr.returned_at >= ${r.from}::date and sr.returned_at < (${r.to}::date + 1)
+          union all` : Prisma.empty;
       const noReceiptRows = hasReceipts ? Prisma.sql`and not exists (select 1 from crm.purchase_receipts rr where rr.purchase_id = pl.purchase_id)` : Prisma.empty;
       const x = await prisma.$queryRaw<any[]>`
         select * from (
@@ -204,6 +216,7 @@ export async function runReport(key: ReportKey, r: Range): Promise<Table> {
               where upper(coalesce(f2.val->>'ship', '')) = 'AUTHORISED' and f2.val->>'shippedAt' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}')
           union all
           ${receiptRows}
+          ${returnRows}
           select pl.last_received_at::date, 'Purchase received', pl.sku, pl.product_name, p2.brand, pl.quantity_received::float8, p.number, p.supplier, null, null
           from crm.purchase_lines pl join crm.purchases p on p.id = pl.purchase_id left join crm.products p2 on p2.sku = pl.sku
           where pl.quantity_received > 0 and pl.last_received_at >= ${r.from}::date and pl.last_received_at < (${r.to}::date + 1) ${noReceiptRows}
@@ -229,13 +242,17 @@ export async function runReport(key: ReportKey, r: Range): Promise<Table> {
         x.map(o => [o.number, o.supplier, o.status, o.receiving_status, o.odate, o.required, o.sku, o.product_name, o.brand, o.ordered, o.received, o.outstanding, o.overdue]));
     }
     case 'purchase-order-details': {
+      // Managers only (costs.sql): each line's cost in the SUPPLIER's currency, the order's currency and DEAR's exchange rate. Left out until the table exists.
+      const hasCosts = (await prisma.$queryRaw<{ ok: boolean }[]>`select to_regclass('crm.purchase_costs') is not null as ok`)[0]?.ok === true;
+      const costCols = hasCosts ? Prisma.sql`, pc.unit_cost::float8 as unit_cost, pc.line_total::float8 as line_total, pc.currency as currency, pc.currency_rate::float8 as currency_rate, pc.base_currency as base_currency` : Prisma.empty;
+      const costJoin = hasCosts ? Prisma.sql`left join crm.purchase_costs pc on pc.purchase_id = l.purchase_id and pc.sku = l.sku` : Prisma.empty;
       const x = await prisma.$queryRaw<any[]>`
         select p.number, p.supplier, p.status, p.receiving_status, to_char(p.order_date, 'YYYY-MM-DD') as odate, to_char(p.required_by, 'YYYY-MM-DD') as required, l.sku, l.product_name, p2.brand,
-               l.quantity_ordered::float8 as ordered, l.quantity_received::float8 as received, greatest(l.quantity_ordered - l.quantity_received, 0)::float8 as outstanding, to_char(l.last_received_at, 'YYYY-MM-DD') as last_received
-        from crm.purchase_lines l join crm.purchases p on p.id = l.purchase_id left join crm.products p2 on p2.sku = l.sku
+               l.quantity_ordered::float8 as ordered, l.quantity_received::float8 as received, greatest(l.quantity_ordered - l.quantity_received, 0)::float8 as outstanding, to_char(l.last_received_at, 'YYYY-MM-DD') as last_received${costCols}
+        from crm.purchase_lines l join crm.purchases p on p.id = l.purchase_id left join crm.products p2 on p2.sku = l.sku ${costJoin}
         where p.order_date >= ${r.from}::date and p.order_date < (${r.to}::date + 1) order by p.order_date, p.number, l.sku limit ${CAP}`;
-      return finish(['PO no', 'Supplier', 'Status', 'Receiving status', 'Order date', 'Required by', 'SKU', 'Product', 'Brand', 'Ordered', 'Received', 'Outstanding', 'Last received'],
-        x.map(o => [o.number, o.supplier, o.status, o.receiving_status, o.odate, o.required, o.sku, o.product_name, o.brand, o.ordered, o.received, o.outstanding, o.last_received]));
+      return finish(['PO no', 'Supplier', 'Status', 'Receiving status', 'Order date', 'Required by', 'SKU', 'Product', 'Brand', 'Ordered', 'Received', 'Outstanding', 'Last received', ...(hasCosts ? ['Unit cost (supplier currency)', 'Line total (supplier currency)', 'Supplier currency', 'Currency rate (DEAR)', 'Base currency'] : [])],
+        x.map(o => [o.number, o.supplier, o.status, o.receiving_status, o.odate, o.required, o.sku, o.product_name, o.brand, o.ordered, o.received, o.outstanding, o.last_received, ...(hasCosts ? [o.unit_cost, o.line_total, o.currency, o.currency_rate, o.base_currency] : [])]));
     }
   }
 }
@@ -260,9 +277,10 @@ export function readme(today: string, period: Range, year: Range, counts: Record
     ...REPORTS.map(r => `  ${r.no}. ${r.title}: ${counts[r.key]?.rows.toLocaleString('en-AU') ?? 0} rows${counts[r.key]?.capped ? ' (STOPPED at the row limit: shorten the range)' : ''}. ${r.note}`),
     '',
     'Things to know',
-    '  - Inventory Movement Details is built from what the CRM holds, not DEAR\'s full movement ledger: sales on the day each fulfilment shipped (an order with no dated shipment falls back to its invoice date), purchases on the day each part was received, and completed stock adjustments by effective date (drafts and voided ones are left out). Customer returns and credit notes are NOT included yet.',
+    '  - Inventory Movement Details is built from what the CRM holds, not DEAR\'s full movement ledger: sales on the day each fulfilment shipped (an order with no dated shipment falls back to its invoice date), purchases on the day each part was received, and completed stock adjustments by effective date (drafts and voided ones are left out), customer returns (stock a credit note put back on the shelf) on the day it went back.',
     '  - Pending Purchase Orders and Purchase Order Details cover the purchase orders synced into the CRM. Check an order is missing from them before assuming it does not exist.',
     '  - Sale Outstanding Quotes lists quotes, drafts and orders still at Ordering status. Ordering-status orders are also in Sale Order Details (Counts as a sale = No), so count each one once.',
+    '  - Costs are for managers only: Average cost and Stock value on Availability, and cost, currency and exchange rate on Purchase Order Details. Purchase costs are in the SUPPLIER\'s currency with DEAR\'s own exchange rate beside them, so check one order against DEAR before converting. Stock value is on hand times DEAR\'s average cost, which can differ from DEAR\'s own stock value for FIFO products.',
     '  - History imported from the old sales spreadsheet has order numbers starting with Q and the source "rhino-history".',
   ];
   return lines.join('\r\n') + '\r\n';

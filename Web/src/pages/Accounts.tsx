@@ -7,7 +7,7 @@ import AccountTable, { SortKey } from '../components/AccountTable';
 import NewLeadModal from '../components/NewLeadModal';
 import { useMe, stateOptionsFor, territoryLabel } from '../lib/useMe';
 
-type Tab = 'Active' | 'Inactive' | 'New Lead' | 'Prospect' | 'all' | 'archived';
+type Tab = 'Active' | 'Inactive' | 'New Lead' | 'Prospect' | 'Cold lead' | 'all' | 'archived';
 
 
 export default function Accounts() {
@@ -50,7 +50,7 @@ export default function Accounts() {
   const counts = useMemo(() => {
     const n = (s: string) => accounts?.filter(a => a.status === s).length ?? 0;
     return {
-      Active: n('Active'), Inactive: n('Inactive'), 'New Lead': n('New Lead'), Prospect: n('Prospect'),
+      Active: n('Active'), Inactive: n('Inactive'), 'New Lead': n('New Lead'), Prospect: n('Prospect'), 'Cold lead': n('Cold lead'),
       all: accounts?.length ?? 0, archived: archived?.length ?? 0,
     };
   }, [accounts, archived]);
@@ -99,7 +99,7 @@ export default function Accounts() {
       </div>
 
       <div className="tab-bar">
-        {(['Active', 'Inactive', 'New Lead', 'Prospect', 'all'] as const).map(t => (
+        {(['Active', 'Inactive', 'New Lead', 'Prospect', 'Cold lead', 'all'] as const).map(t => (
           <button key={t} className={'tab' + (tab === t ? ' active' : '')} onClick={() => setTab(t)}>
             {t === 'all' ? 'All' : t} <span className="tab-count">{counts[t]}</span>
           </button>

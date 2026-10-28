@@ -21,7 +21,7 @@ export const STAGES: Stage[] = [
   'dispatched',
 ];
 
-export type AccountStatus = 'Prospect' | 'New Lead' | 'Active' | 'Inactive';
+export type AccountStatus = 'Prospect' | 'New Lead' | 'Active' | 'Inactive' | 'Cold lead';
 
 export type Account = {
   id: string;
@@ -30,7 +30,7 @@ export type Account = {
   repId: string;
   repName: string | null;
   credit: 'prepay' | 'account';
-  type: 'prospect' | 'lead' | 'customer';
+  type: 'prospect' | 'lead' | 'customer' | 'cold_lead';
   stage: Stage;
   status?: AccountStatus;           // from the crm.account_status view
   contactName: string | null;
