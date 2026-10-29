@@ -1,0 +1,60 @@
+import pg from 'pg';
+
+// How a query is run. Every query goes inside a transaction that is READ ONLY, with a time limit, wrapped so that no more than maxRows + 1 rows ever come back
+// (the extra one tells us whether there were more). The transaction is always rolled back. The connection itself is the scoped read-only database user
+// (radar-readonly-role.sql), which is the real guard; this is the belt to its braces.
+
+export type Queryable = { query(text: string): Promise<{ rows: Record<string, unknown>[]; fields: string[] }> };
+export type Db = { withClient<T>(fn: (c: Queryable) => Promise<T>): Promise<T>; close?(): Promise<void> };
+export type QueryResult = { columns: string[]; rows: Record<string, unknown>[]; truncated: boolean; ms: number };
+
+export async function runReadOnly(db: Db, sql: string, opts: { maxRows: number; timeoutMs: number }): Promise<QueryResult> {
+  const t0 = Date.now();
+  return db.withClient(async c => {
+    await c.query('BEGIN READ ONLY');
+    try {
+      await c.query(`SET LOCAL statement_timeout = ${Math.max(1000, Math.floor(opts.timeoutMs))}`);
+      await c.query('SET LOCAL lock_timeout = 2000');
+      const r = await c.query(`SELECT * FROM (\n${sql}\n) AS q LIMIT ${Math.floor(opts.maxRows) + 1}`);
+      const truncated = r.rows.length > opts.maxRows;
+      return { columns: r.fields, rows: truncated ? r.rows.slice(0, opts.maxRows) : r.rows, truncated, ms: Date.now() - t0 };
+    } finally {
+      await c.query('ROLLBACK').catch(() => { /* the connection is already gone */ });
+    }
+  });
+}
+
+/** The real database, through a small pool. Dates and numbers come back exactly as the database writes them (text), never shifted by this server's time zone. */
+export function pgDb(connectionString: string, opts: { ssl?: boolean } = {}): Db {
+  for (const oid of [pg.types.builtins.TIMESTAMP, pg.types.builtins.TIMESTAMPTZ, pg.types.builtins.DATE, pg.types.builtins.NUMERIC]) pg.types.setTypeParser(oid, (v: string) => v);
+  const pool = new pg.Pool({
+    connectionString, max: 3, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 10_000,
+    ssl: opts.ssl === false ? false : { rejectUnauthorized: false },   // Supabase's pooler certificate is signed by Supabase's own authority
+  });
+  pool.on('error', e => console.error('database pool error:', e.message));
+  return {
+    async withClient(fn) {
+      const c = await pool.connect();
+      try { return await fn({ query: async t => { const r = await c.query(t); return { rows: r.rows, fields: (r.fields ?? []).map(f => f.name) }; } }); }
+      finally { c.release(); }
+    },
+    close: () => pool.end(),
+  };
+}
+
+// ---- turning rows into text for Claude: CSV is compact and easy for it to read ----
+const cell = (v: unknown): string => {
+  if (v === null || v === undefined) return '';
+  const s = v instanceof Date ? v.toISOString() : typeof v === 'object' ? JSON.stringify(v) : String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+export function toCsv(columns: string[], rows: Record<string, unknown>[], maxChars: number): { text: string; shown: number } {
+  const lines = [columns.map(cell).join(',')];
+  let size = lines[0].length, shown = 0;
+  for (const r of rows) {
+    const line = columns.map(c => cell(r[c])).join(',');
+    if (size + line.length + 1 > maxChars) break;
+    lines.push(line); size += line.length + 1; shown++;
+  }
+  return { text: lines.join('\n'), shown };
+}

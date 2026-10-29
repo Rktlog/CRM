@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import http from 'node:http';
 import express from 'express';
 import cors from 'cors';
 import { requireAuth } from './middleware/auth';
@@ -36,6 +37,7 @@ import { requestTiming } from './lib/timing';
 import { speedRouter } from './routes/speed';
 import { prisma } from './lib/prisma';
 import { startKeepWarm } from './lib/keepWarm';
+import { startEmbeddedMcp, type EmbeddedMcp } from './mcp/embed';
 
 keepRunning();   // a mistake in one request is logged; it can no longer stop the whole API
 
@@ -91,8 +93,14 @@ guardApp(app);          // from here every route hands its errors to Express ins
 app.use(errorHandler);  // and the person gets the reason as a normal error, with the CORS headers
 
 const port = process.env.PORT || 4000;
-app.listen(port, () => {
+// The Radar ordering connector for Claude (src/mcp, see EMBEDDED-MCP.md). It does nothing unless MCP_ACCESS_CODES is set, and a mistake in its settings only switches it off.
+// Requests for its few addresses (/mcp, /authorize, /token, /register, /oauth/..., /.well-known/oauth-...) are handed to it here, before the API's own middleware (login,
+// CORS, body parsing) sees them; every other request goes to the API exactly as before.
+let mcp: EmbeddedMcp | null = null;
+const server = http.createServer((req, res) => (mcp && mcp.handles(req.url) ? mcp.handle(req, res) : app(req, res)));
+server.listen(port, () => {
   console.log(`API listening on :${port}`);
+  void startEmbeddedMcp().then(m => { mcp = m; if (m) console.log(`Radar ordering connector is on, as database user "${m.databaseUser}"`); });
   // Open the database connections now, and keep several of them warm (a tiny query on each every minute), so the first page after a quiet spell does
   // not pay for setting up new connections (several round trips each) on top of its own work. See lib/keepWarm.ts.
   void prisma.$connect().catch(e => console.error('Database connection failed at start:', e));
