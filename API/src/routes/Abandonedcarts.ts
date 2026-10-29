@@ -1,6 +1,7 @@
 import express, { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { assignedRegions, hiddenAccountIds } from '../lib/territory';
+import { applyLogEffects } from '../lib/activityLog';
 
 // DEAR statuses of a quote that is not yet an order, and of an order that no longer stands.
 const QUOTE_STAGE = ['DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING'];
@@ -262,6 +263,15 @@ export async function loadCarts(rep: { id: string; role: string }, days: string)
 const METHODS = ['note', 'called', 'emailed', 'left_message'];
 const MAX_NOTE = 2000;
 type LogRow = { id: string; cart_key: string; method: string | null; note: string; created_at: Date; rep_id: string; rep_name: string | null };
+// A cart log is also an entry in the account's activity log (the Team log, My log and the account's own history all read crm.activity, so before this a
+// cart log showed only on the cart). A call or a left message is a Phone entry, an email is an Email entry, a note is a Remark; the text says it was about
+// an abandoned cart. Exported for scripts/backfill-cart-activity.ts.
+const ACTIVITY_TYPE = { note: 'remark', called: 'call', left_message: 'call', emailed: 'email' } as const;
+const ACTIVITY_PREFIX = { note: 'Abandoned cart: ', called: 'Abandoned cart, called: ', left_message: 'Abandoned cart, left a message: ', emailed: 'Abandoned cart, emailed: ' } as const;
+export const cartLogAsActivity = (method: string | null, note: string) => {
+  const m = (method && method in ACTIVITY_TYPE ? method : 'note') as keyof typeof ACTIVITY_TYPE;
+  return { type: ACTIVITY_TYPE[m], note: ACTIVITY_PREFIX[m] + note };
+};
 const shapeLog = (l: LogRow, me: string) => ({ id: l.id, method: l.method ?? 'note', note: l.note, at: new Date(l.created_at).toISOString(), by: l.rep_name, mine: l.rep_id === me });
 
 async function loadLogs(keys: string[], me: string): Promise<{ logs: Map<string, ReturnType<typeof shapeLog>[]>; available: boolean }> {
@@ -294,9 +304,8 @@ abandonedCartsRouter.post('/log', async (req, res) => {
   const visible = (await loadCarts(req.rep!, String(Math.ceil((Date.now() - at.getTime()) / 86400000) + 1))).find(c => c.id === cart);
   if (!visible) return res.status(404).json({ error: 'That cart was not found' });
   try {
-    const [row] = await prisma.$queryRaw<LogRow[]>`
-      with ins as (insert into crm.abandoned_cart_logs (cart_key, rep_id, method, note) values (${cart}, ${req.rep!.id}::uuid, ${method}, ${note}) returning *)
-      select ins.id, ins.cart_key, ins.method, ins.note, ins.created_at, ins.rep_id, r.name as rep_name from ins left join crm.reps r on r.id = ins.rep_id`;
+    // visible.account is null for a cart from someone not in the CRM yet (managers see those): such a log stays on the cart, as there is no account to put it on.
+    const row = await saveCartLog({ cart, repId: req.rep!.id, method, note, accountId: visible.account?.id ?? null });
     res.status(201).json(shapeLog(row, req.rep!.id));
   } catch (e) {
     if (/abandoned_cart_logs/.test((e as Error).message)) return res.status(503).json({ error: 'Cart logs are not set up yet. Run abandoned-cart-logs.sql in the database.' });
@@ -304,15 +313,52 @@ abandonedCartsRouter.post('/log', async (req, res) => {
   }
 });
 
+// Saves the log, and (when the cart is matched to an account) the activity entry with it, in one go. crm.abandoned_cart_logs.activity_id links them so
+// deleting the cart log takes its activity entry with it (abandoned-cart-activity.sql). Until that column has been added the log is saved without the link.
+async function saveCartLog(a: { cart: string; repId: string; method: string; note: string; accountId: string | null }): Promise<LogRow> {
+  const run = (linked: boolean) => prisma.$transaction(async tx => {
+    let activityId: string | null = null;
+    if (a.accountId) {
+      const account = await tx.account.findUnique({ where: { id: a.accountId }, select: { id: true, stage: true } });
+      if (account) {
+        const entry = cartLogAsActivity(a.method, a.note);
+        const activity = await tx.activity.create({ data: { accountId: account.id, repId: a.repId, type: entry.type, note: entry.note } });
+        await applyLogEffects(tx, account, activity);   // contacting a new lead = approached; a follow-up phrase sets the reminder, as for any log
+        activityId = activity.id;
+      }
+    }
+    const rows = linked
+      ? await tx.$queryRaw<LogRow[]>`
+          with ins as (insert into crm.abandoned_cart_logs (cart_key, rep_id, method, note, activity_id) values (${a.cart}, ${a.repId}::uuid, ${a.method}, ${a.note}, ${activityId}::uuid) returning *)
+          select ins.id, ins.cart_key, ins.method, ins.note, ins.created_at, ins.rep_id, r.name as rep_name from ins left join crm.reps r on r.id = ins.rep_id`
+      : await tx.$queryRaw<LogRow[]>`
+          with ins as (insert into crm.abandoned_cart_logs (cart_key, rep_id, method, note) values (${a.cart}, ${a.repId}::uuid, ${a.method}, ${a.note}) returning *)
+          select ins.id, ins.cart_key, ins.method, ins.note, ins.created_at, ins.rep_id, r.name as rep_name from ins left join crm.reps r on r.id = ins.rep_id`;
+    return rows[0];
+  });
+  try {
+    return await run(true);
+  } catch (e) {
+    if (/activity_id/.test((e as Error).message)) return run(false);   // the column has not been added yet (the failed attempt was rolled back whole)
+    throw e;
+  }
+}
+
 // DELETE /abandoned-carts/log/:id   the person who wrote it, or a manager
 abandonedCartsRouter.delete('/log/:id', async (req, res) => {
   const id = String(req.params.id);
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return res.status(404).json({ error: 'That entry was not found' });
   try {
-    const [row] = await prisma.$queryRaw<{ rep_id: string }[]>`select rep_id from crm.abandoned_cart_logs where id = ${id}::uuid`;
+    let row: { rep_id: string; activity_id?: string | null } | undefined;
+    try { [row] = await prisma.$queryRaw<{ rep_id: string; activity_id: string | null }[]>`select rep_id, activity_id from crm.abandoned_cart_logs where id = ${id}::uuid`; }
+    catch (e) { if (!/activity_id/.test((e as Error).message)) throw e; [row] = await prisma.$queryRaw<{ rep_id: string }[]>`select rep_id from crm.abandoned_cart_logs where id = ${id}::uuid`; }
     if (!row) return res.status(404).json({ error: 'That entry was not found' });
     if (row.rep_id !== req.rep!.id && req.rep!.role !== 'manager') return res.status(403).json({ error: 'You can only delete your own entries' });
-    await prisma.$queryRaw`delete from crm.abandoned_cart_logs where id = ${id}::uuid`;
+    // The cart log and the activity entry that was saved with it go together.
+    await prisma.$transaction([
+      prisma.$queryRaw`delete from crm.abandoned_cart_logs where id = ${id}::uuid`,
+      ...(row.activity_id ? [prisma.activity.deleteMany({ where: { id: row.activity_id } })] : []),
+    ]);
     res.json({ ok: true });
   } catch (e) {
     if (/abandoned_cart_logs/.test((e as Error).message)) return res.status(503).json({ error: 'Cart logs are not set up yet. Run abandoned-cart-logs.sql in the database.' });

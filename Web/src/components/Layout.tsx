@@ -1,56 +1,90 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useCloseDropdowns } from '../lib/useCloseDropdowns';
+import { HOME, visibleGroups, groupKeyForPath } from '../lib/navMenu';
 
-const NAV = [
-  { to: '/', label: 'Dashboard' },
-  { to: '/planner', label: 'Planner' },
-  { to: '/pipeline', label: 'Pipeline' },
-  { to: '/customers', label: 'Customers' },
-  { to: '/accounts', label: 'Accounts' },
-  { to: '/orders', label: 'Orders' },
-  { to: '/credit', label: 'Credit' },
-  { to: '/products', label: 'Products' },
-  { to: '/ordering', label: 'Ordering', managerOnly: true },
-  { to: '/catalogue', label: 'Catalogue' },
-  { to: '/abandoned-carts', label: 'Abandoned carts' },
-  { to: '/marketing', label: 'Marketing', managerOnly: true },
-  { to: '/sales-data', label: 'Sales Data' },
-  { to: '/assistant', label: 'Assistant' },
-  { to: '/reports', label: 'Reports' },
-  { to: '/activity', label: 'Activity log' },
-  { to: '/misc', label: 'Misc' },
-  { to: '/settings', label: 'Settings' },
-];
-
+// The top bar: the brand and the person's name on the first row, and on the second the Dashboard and the six dropdown tabs (lib/navMenu.ts).
+// Pressing a tab opens its list; pressing another one (or moving onto it, while one is open) switches; pressing anywhere else, Escape, tabbing away or
+// choosing a page closes it. On a phone the tabs fold into a menu button, and each tab opens in place.
 export default function Layout() {
   const { signOut, name, role } = useAuth();
- useCloseDropdowns();   // tick-box dropdowns close when you click anywhere outside them
- 
+  useCloseDropdowns();   // tick-box dropdowns close when you click anywhere outside them
+  const { pathname } = useLocation();
+  const groups = visibleGroups(role);
+  const here = groupKeyForPath(pathname);
+  const [open, setOpen] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const bar = useRef<HTMLElement>(null);
+
+  // Going to a page closes whatever was open.
+  useEffect(() => { setOpen(null); setMenuOpen(false); }, [pathname]);
+
+  useEffect(() => {
+    const away = (e: Event) => {
+      if (bar.current && !bar.current.contains(e.target as Node)) { setOpen(null); setMenuOpen(false); }
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(null); setMenuOpen(false); } };
+    // pointerdown (not click) so a tap on empty space counts on phones; focusin so tabbing out of the bar closes it too.
+    document.addEventListener('pointerdown', away, true);
+    document.addEventListener('focusin', away, true);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', away, true);
+      document.removeEventListener('focusin', away, true);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, []);
+
+  const toggleMenu = () => {
+    setOpen(menuOpen ? null : here);   // opening the phone menu shows the tab you are in
+    setMenuOpen(!menuOpen);
+  };
+
   return (
     <div id="app">
-      <div className="rail">
+      <header className={'topnav' + (menuOpen ? ' menu-open' : '')} ref={bar}>
         <div className="brand">Rhino <span>Radar</span></div>
-        {NAV.filter(item => !('managerOnly' in item) || role === 'manager').map(item => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}
-          >
-            {item.label}
-          </NavLink>
-        ))}
-      </div>
-      <div className="main">
-        <div className="top-header">
-          <div className="top-header-user">
-            {name && <span className="top-header-name">{name}</span>}
-            {role && <span className="badge muted" style={{ textTransform: 'capitalize' }}>{role}</span>}
-          </div>
+
+        <button type="button" className="topnav-burger" aria-label="Menu" aria-expanded={menuOpen} aria-controls="topnav-tabs" onClick={toggleMenu}>
+          {menuOpen ? '✕' : '☰'}
+        </button>
+
+        <nav className="topnav-tabs" id="topnav-tabs" aria-label="Main">
+          <NavLink to={HOME.to} end className={({ isActive }) => 'topnav-tab' + (isActive ? ' active' : '')}>{HOME.label}</NavLink>
+          {groups.map(g => {
+            const isOpen = open === g.key;
+            return (
+              <div key={g.key} className={'topnav-group' + (isOpen ? ' open' : '') + (here === g.key ? ' has-active' : '')}>
+                <button
+                  type="button"
+                  className="topnav-tab"
+                  aria-haspopup="true"
+                  aria-expanded={isOpen}
+                  onClick={() => setOpen(isOpen ? null : g.key)}
+                  onMouseEnter={() => { if (open && open !== g.key) setOpen(g.key); }}
+                >
+                  {g.label}<span className="topnav-caret" aria-hidden="true">▾</span>
+                </button>
+                <div className="topnav-panel">
+                  {g.items.map(item => (
+                    <NavLink key={item.to} to={item.to} className={({ isActive }) => 'topnav-link' + (isActive ? ' active' : '')}>{item.label}</NavLink>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </nav>
+
+        <div className="topnav-user">
+          {name && <span className="topnav-name">{name}</span>}
+          {role && <span className="topnav-role">{role}</span>}
           <button className="btn secondary" style={{ padding: '5px 12px', fontSize: 12 }} onClick={signOut}>
             Sign out
           </button>
         </div>
+      </header>
+      <div className="main">
         <div className="content">
           <Outlet />
         </div>

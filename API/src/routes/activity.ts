@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { territoryWhere, canSeeAccount } from '../lib/territory';
 import { createActivitySchema, updateActivitySchema } from '../schemas';
-import { parseFollowUp } from '../lib/followup';
+import { applyLogEffects } from '../lib/activityLog';
 
 export const activityRouter = Router();
 
@@ -109,27 +109,8 @@ activityRouter.post('/', async (req, res) => {
     },
   });
 
-  const updates: Record<string, unknown> = {};
-
-  // The one manual stage transition: logging any activity against a
-  // brand-new lead is what "approached" means. Every stage after this
-  // is driven by Cin7 sync data once that job exists, not by this route.
-  // A remark (a comment or feedback) is not a contact with the customer, so it does not count as approaching them.
-  const isRemark = parsed.data.type === 'remark';
-  if (!isRemark && account.stage === 'new_lead') {
-    updates.stage = 'approached';
-  }
-
-  // Read the note for a follow-up phrase ("follow up in 3 weeks") and
-  // set the reminder automatically if one's found.
-  const followUpDate = isRemark ? null : parseFollowUp(activity.note, activity.occurredAt);
-  if (followUpDate) {
-    updates.nextFollowUpAt = followUpDate;
-  }
-
-  if (Object.keys(updates).length > 0) {
-    await prisma.account.update({ where: { id: account.id }, data: updates });
-  }
+  // Contacting a brand-new lead makes it "approached"; a follow-up phrase in the note sets the reminder (lib/activityLog.ts).
+  await applyLogEffects(prisma, account, activity);
 
   res.status(201).json(activity);
 });

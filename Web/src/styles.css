@@ -30,41 +30,52 @@ h1, h2, h3 { font-family: 'Space Grotesk', sans-serif; margin: 0 0 16px 0; }
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; cursor: pointer; }
 
-#app { display: flex; min-height: 100vh; }
+#app { display: flex; flex-direction: column; min-height: 100vh; }
 
-.rail {
-  width: 236px;
-  flex-shrink: 0;
-  background: var(--ink);
-  color: var(--paper);
-  display: flex;
-  flex-direction: column;
-  padding: 22px 16px;
+/* ---- Top navigation: the brand and the person on the first row; the Dashboard and six dropdown tabs on the second (lib/navMenu.ts) ---- */
+.topnav {
+  position: sticky; top: 0; z-index: 60;
+  background: var(--ink); color: var(--paper);
+  display: grid; grid-template-columns: 1fr auto;
+  grid-template-areas: "brand user" "tabs tabs";
+  align-items: center;
+  padding: 0 24px;
 }
-.brand { font-size: 18.5px; font-weight: 700; padding: 0 8px 20px 8px; border-bottom: 1px solid rgba(255,255,255,0.12); margin-bottom: 18px; font-family: 'Space Grotesk', sans-serif; }
+.brand { grid-area: brand; font-size: 18.5px; font-weight: 700; padding: 11px 0 9px; font-family: 'Space Grotesk', sans-serif; }
 .brand span { color: var(--amber); }
-.nav-item {
-  display: block;
-  padding: 9px 10px;
-  border-radius: 4px;
-  font-size: 15px;
-  color: rgba(243,245,241,0.72);
-  margin-bottom: 2px;
-  border-left: 2px solid transparent;
+.topnav-user { grid-area: user; display: flex; align-items: center; gap: 10px; }
+.topnav-name { font-size: 14.5px; font-weight: 500; color: var(--paper); }
+.topnav-role { font-size: 12px; text-transform: capitalize; color: rgba(243,245,241,0.72); border: 1px solid rgba(255,255,255,0.22); border-radius: 10px; padding: 1px 9px; }
+.topnav .btn.secondary { background: transparent; color: var(--paper); border-color: rgba(255,255,255,0.35); }
+.topnav .btn.secondary:hover { background: rgba(255,255,255,0.1); }
+
+.topnav-tabs { grid-area: tabs; display: flex; flex-wrap: wrap; align-items: stretch; gap: 2px; border-top: 1px solid rgba(255,255,255,0.12); }
+.topnav-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: none; border: none; border-bottom: 3px solid transparent; border-radius: 0;
+  padding: 10px 14px 7px; font-family: inherit; font-size: 14.5px; line-height: 1.5;
+  color: rgba(243,245,241,0.76); cursor: pointer; white-space: nowrap;
 }
-.nav-item:hover { background: rgba(255,255,255,0.06); color: var(--paper); }
-.nav-item.active { background: rgba(255,255,255,0.08); color: var(--paper); border-left-color: var(--amber); font-weight: 500; }
-.rail-foot { margin-top: auto; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.12); }
+.topnav-tab:hover, .topnav-group.open > .topnav-tab { color: var(--paper); background: rgba(255,255,255,0.07); }
+.topnav-tab.active, .topnav-group.has-active > .topnav-tab { color: var(--paper); border-bottom-color: var(--amber); font-weight: 500; }
+.topnav-caret { font-size: 10px; opacity: 0.7; }
+
+.topnav-group { position: relative; display: flex; }
+.topnav-panel {
+  display: none; position: absolute; top: 100%; left: 0; z-index: 70;
+  min-width: 240px; padding: 6px;
+  background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 0 0 6px 6px; box-shadow: 0 12px 28px rgba(27,36,48,0.2);
+}
+.topnav-group.open .topnav-panel { display: block; }
+.topnav-group:nth-last-child(-n+2) .topnav-panel { left: auto; right: 0; }   /* the last two open leftwards, so they never run off the right edge */
+.topnav-link { display: block; padding: 9px 12px; border-radius: 4px; border-left: 3px solid transparent; font-size: 14.5px; color: var(--ink); white-space: nowrap; }
+.topnav-link:hover { background: var(--paper); }
+.topnav-link.active { background: var(--amber-bg); border-left-color: var(--amber); font-weight: 500; }
+.topnav-burger { display: none; }
 
 .main { flex: 1; min-width: 0; }
 .content { padding: 26px 28px; }
-
-.top-header {
-  display: flex; justify-content: flex-end; align-items: center; gap: 12px;
-  padding: 12px 28px; border-bottom: 1px solid var(--line); background: var(--paper);
-}
-.top-header-user { display: flex; align-items: center; gap: 8px; }
-.top-header-name { font-size: 14.5px; font-weight: 500; color: var(--ink); }
 
 .btn {
   background: var(--ink);
@@ -329,32 +340,25 @@ textarea, input[type="email"], input[type="password"], input[type="text"], selec
 .login-error { color: var(--rust); font-size: 14.5px; }
 
 @media (max-width: 900px) {
-  /* Sidebar becomes a horizontal, scrollable top bar instead of
-     vanishing — the old rule hid it with nothing to replace it,
-     which meant no way to navigate at all on a phone. */
-  #app { flex-direction: column; min-height: auto; }
-  .rail {
-    width: 100%;
-    flex-direction: row;
-    align-items: center;
-    padding: 10px 12px;
-    overflow-x: auto;
-    gap: 4px;
-    flex-shrink: 0;
+  /* The top navigation folds into a menu button: the tabs open in place, one at a time, and the person's name and Sign out come last. */
+  .topnav { grid-template-areas: "brand burger" "tabs tabs" "user user"; padding: 0 12px; }
+  .topnav.menu-open { max-height: 100vh; overflow-y: auto; }
+  .topnav-burger {
+    display: inline-flex; grid-area: burger; align-items: center; justify-content: center;
+    width: 42px; height: 36px; background: none; color: var(--paper);
+    border: 1px solid rgba(255,255,255,0.3); border-radius: 4px; font-size: 18px; line-height: 1;
   }
-  .brand {
-    padding: 0 12px 0 0;
-    margin-bottom: 0;
-    border-bottom: none;
-    border-right: 1px solid rgba(255,255,255,0.12);
-    flex-shrink: 0;
-  }
-  .nav-item { flex-shrink: 0; white-space: nowrap; margin-bottom: 0; }
-  .rail-foot { margin-top: 0; margin-left: auto; padding-top: 0; border-top: none; flex-shrink: 0; }
-  .rail-foot .btn { width: auto !important; padding: 6px 12px !important; font-size: 14px !important; white-space: nowrap; }
+  .topnav-tabs, .topnav-user { display: none; }
+  .topnav.menu-open .topnav-tabs { display: flex; flex-direction: column; flex-wrap: nowrap; gap: 0; }
+  .topnav.menu-open .topnav-user { display: flex; padding: 10px 0 12px; border-top: 1px solid rgba(255,255,255,0.12); }
+  .topnav-tab { width: 100%; padding: 12px 6px 11px; border-bottom: none; border-left: 3px solid transparent; justify-content: space-between; }
+  .topnav-tab.active, .topnav-group.has-active > .topnav-tab { border-bottom-color: transparent; border-left-color: var(--amber); }
+  .topnav-group { display: block; position: static; }
+  .topnav-panel { position: static; min-width: 0; margin: 0 0 8px 12px; border-radius: 6px; box-shadow: none; }
+  .topnav-group:nth-last-child(-n+2) .topnav-panel { left: auto; right: auto; }
+  .topnav-link { white-space: normal; }
 
   .content { padding: 16px; }
-  .top-header { padding: 10px 16px; }
   .detail-grid { grid-template-columns: 1fr; }
   .stat-row { grid-template-columns: repeat(2, 1fr); }
 
@@ -370,9 +374,8 @@ textarea, input[type="email"], input[type="password"], input[type="text"], selec
 }
 
 @media (max-width: 480px) {
-  .rail { padding: 8px 10px; }
+  .topnav { padding: 0 10px; }
   .brand { font-size: 16.5px; }
-  .nav-item { padding: 7px 9px; font-size: 14.5px; }
 }
 
 /* ---- Account order history: expandable line items ---- */
