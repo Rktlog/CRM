@@ -6,7 +6,7 @@ import { createApp } from './app.js';
 
 // The connector living INSIDE another web service (the CRM API), instead of as a service of its own.
 //
-//  - It is off unless MCP_ACCESS_CODES is set, so deploying this code changes nothing until then.
+//  - It is off unless MCP_ACCESS_CODES is set, so deploying this code changes nothing until then (it says so in the log, once, at start-up).
 //  - Every setting is prefixed MCP_ (MCP_DATABASE_URL, MCP_OAUTH_SECRET, MCP_ACCESS_CODES, and optionally MCP_PUBLIC_URL, which otherwise
 //    falls back to the service's own PUBLIC_API_URL), so none of the service's own settings are read or changed.
 //  - Requests for the connector are handed over at the very top, before the service's own middleware (login checks, CORS, body parsing) ever sees them,
@@ -25,7 +25,11 @@ export async function startEmbeddedMcp(
   env: Record<string, string | undefined> = process.env,
   opts: { db?: Db; now?: () => number; log?: (entry: Record<string, unknown>) => void } = {},
 ): Promise<EmbeddedMcp | null> {
-  if (!env.MCP_ACCESS_CODES?.trim()) return null;
+  if (!env.MCP_ACCESS_CODES?.trim()) {
+    // Say so, once: a silent "off" cannot be told apart from "this code is not deployed", which is exactly the confusion this line removes.
+    console.log('Radar ordering connector is OFF: MCP_ACCESS_CODES is not set on this service (add it in Railway Variables, then Deploy, to switch the connector on)');
+    return null;
+  }
   try {
     const cfg = loadConfig({ ...env, MCP_PUBLIC_URL: env.MCP_PUBLIC_URL?.trim() || env.PUBLIC_API_URL }, 'MCP_');
     const db = opts.db ?? pgDb(cfg.databaseUrl, { ssl: cfg.databaseSsl });
