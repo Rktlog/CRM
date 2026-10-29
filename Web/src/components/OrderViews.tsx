@@ -7,6 +7,7 @@ import { apiGet, apiDownload } from '../lib/api';
 import { fmtMoney, fmtDateWithYear, fmtDuration, fmtPayDate } from '../lib/types';
 import { useMe, stateOptionsFor } from '../lib/useMe';
 import { todayLocal } from '../lib/logDate';
+import { bySecondFollowUpDate } from '../lib/followUpOrder';
 
 // Order tracking views on the Orders page. Each loads from
 // /orders/views/<view>, can be narrowed to a state, and downloads exactly
@@ -86,10 +87,12 @@ export default function OrderViews({ view }: { view: ViewKey }) {
     all: base.length, fu1: base.filter(r => fuKind(r) === 'fu1').length, fu2: base.filter(r => fuKind(r) === 'fu2').length,
     late: base.filter(isLate).length,
   }, [base, view, today]);
-  const rows: any[] = useMemo(
-    () => view !== 'quotes' ? base : base.filter(r => (fu === 'all' || fuKind(r) === fu) && (!overdueOnly || isLate(r))),
-    [base, view, fu, overdueOnly, today],
-  );
+  const rows: any[] = useMemo(() => {
+    if (view !== 'quotes') return base;
+    const kept = base.filter(r => (fu === 'all' || fuKind(r) === fu) && (!overdueOnly || isLate(r)));
+    // The 2nd list: oldest follow-up date first (the most overdue at the top); a 2nd still waiting for its date last. The 1st and All keep the usual order.
+    return fu === 'fu2' ? [...kept].sort(bySecondFollowUpDate) : kept;
+  }, [base, view, fu, overdueOnly, today]);
   useEffect(() => { setShown(PAGE); }, [fu, overdueOnly, search, fuBy]);
 
   async function download() {

@@ -41,11 +41,11 @@ button { font-family: inherit; cursor: pointer; }
   align-items: center;
   padding: 0 24px;
 }
-.brand { grid-area: brand; font-size: 18.5px; font-weight: 700; padding: 11px 0 9px; font-family: 'Space Grotesk', sans-serif; }
+.brand { grid-area: brand; font-size: 21px; font-weight: 700; padding: 11px 0 9px; font-family: 'Space Grotesk', sans-serif; }
 .brand span { color: var(--amber); }
 .topnav-user { grid-area: user; display: flex; align-items: center; gap: 10px; }
-.topnav-name { font-size: 14.5px; font-weight: 500; color: var(--paper); }
-.topnav-role { font-size: 12px; text-transform: capitalize; color: rgba(243,245,241,0.72); border: 1px solid rgba(255,255,255,0.22); border-radius: 10px; padding: 1px 9px; }
+.topnav-name { font-size: 16px; font-weight: 500; color: var(--paper); }
+.topnav-role { font-size: 13.5px; text-transform: capitalize; color: rgba(243,245,241,0.72); border: 1px solid rgba(255,255,255,0.22); border-radius: 10px; padding: 1px 9px; }
 .topnav .btn.secondary { background: transparent; color: var(--paper); border-color: rgba(255,255,255,0.35); }
 .topnav .btn.secondary:hover { background: rgba(255,255,255,0.1); }
 
@@ -53,26 +53,32 @@ button { font-family: inherit; cursor: pointer; }
 .topnav-tab {
   display: inline-flex; align-items: center; gap: 6px;
   background: none; border: none; border-bottom: 3px solid transparent; border-radius: 0;
-  padding: 10px 14px 7px; font-family: inherit; font-size: 14.5px; line-height: 1.5;
+  padding: 10px 12px 7px; font-family: inherit; font-size: 16px; line-height: 1.5;
   color: rgba(243,245,241,0.76); cursor: pointer; white-space: nowrap;
 }
 .topnav-tab:hover, .topnav-group.open > .topnav-tab { color: var(--paper); background: rgba(255,255,255,0.07); }
 .topnav-tab.active, .topnav-group.has-active > .topnav-tab { color: var(--paper); border-bottom-color: var(--amber); font-weight: 500; }
-.topnav-caret { font-size: 10px; opacity: 0.7; }
+.topnav-caret { font-size: 11px; opacity: 0.7; }
 
 .topnav-group { position: relative; display: flex; }
 .topnav-panel {
   display: none; position: absolute; top: 100%; left: 0; z-index: 70;
-  min-width: 240px; padding: 6px;
+  min-width: 260px; padding: 6px;
   background: var(--panel); color: var(--ink);
   border: 1px solid var(--line); border-radius: 0 0 6px 6px; box-shadow: 0 12px 28px rgba(27,36,48,0.2);
 }
 .topnav-group.open .topnav-panel { display: block; }
 .topnav-group:nth-last-child(-n+2) .topnav-panel { left: auto; right: 0; }   /* the last two open leftwards, so they never run off the right edge */
-.topnav-link { display: block; padding: 9px 12px; border-radius: 4px; border-left: 3px solid transparent; font-size: 14.5px; color: var(--ink); white-space: nowrap; }
+.topnav-link { display: block; padding: 10px 14px; border-radius: 4px; border-left: 3px solid transparent; font-size: 16px; color: var(--ink); white-space: nowrap; }
 .topnav-link:hover { background: var(--paper); }
 .topnav-link.active { background: var(--amber-bg); border-left-color: var(--amber); font-weight: 500; }
 .topnav-burger { display: none; }
+
+/* The bar's text grows with the window and shrinks only as far as it must to stay on one row (measured with the real fonts, with room for the page scrollbar). */
+@media (min-width: 1450px) { .topnav-tab { font-size: 17.5px; } .topnav-link { font-size: 17px; } .topnav-name { font-size: 17px; } }
+@media (min-width: 1520px) { .topnav-tab { font-size: 18px; padding-left: 14px; padding-right: 14px; } .topnav-link { font-size: 17.5px; } .topnav-name { font-size: 17.5px; } }
+@media (min-width: 901px) and (max-width: 1349px) { .topnav-tab { padding-left: 9px; padding-right: 9px; } }
+@media (min-width: 901px) and (max-width: 1309px) { .topnav-tab { font-size: 15px; padding-left: 8px; padding-right: 8px; } .topnav-link { font-size: 15.5px; } }
 
 .main { flex: 1; min-width: 0; }
 .content { padding: 26px 28px; }
@@ -351,12 +357,12 @@ textarea, input[type="email"], input[type="password"], input[type="text"], selec
   .topnav-tabs, .topnav-user { display: none; }
   .topnav.menu-open .topnav-tabs { display: flex; flex-direction: column; flex-wrap: nowrap; gap: 0; }
   .topnav.menu-open .topnav-user { display: flex; padding: 10px 0 12px; border-top: 1px solid rgba(255,255,255,0.12); }
-  .topnav-tab { width: 100%; padding: 12px 6px 11px; border-bottom: none; border-left: 3px solid transparent; justify-content: space-between; }
+  .topnav-tab { width: 100%; font-size: 17px; padding: 12px 6px 11px; border-bottom: none; border-left: 3px solid transparent; justify-content: space-between; }
   .topnav-tab.active, .topnav-group.has-active > .topnav-tab { border-bottom-color: transparent; border-left-color: var(--amber); }
   .topnav-group { display: block; position: static; }
   .topnav-panel { position: static; min-width: 0; margin: 0 0 8px 12px; border-radius: 6px; box-shadow: none; }
   .topnav-group:nth-last-child(-n+2) .topnav-panel { left: auto; right: auto; }
-  .topnav-link { white-space: normal; }
+  .topnav-link { white-space: normal; font-size: 16.5px; padding: 11px 14px; }
 
   .content { padding: 16px; }
   .detail-grid { grid-template-columns: 1fr; }

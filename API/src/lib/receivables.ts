@@ -20,14 +20,27 @@ const CLOSED_STATUSES = ['VOIDED', 'CREDITED', 'COMPLETED'];
 const cents = (n: number) => Math.round(n * 100) / 100;
 const daysSince = (d: Date) => Math.floor((Date.now() - d.getTime()) / DAY);
 
+const ACCOUNT_SELECT = { id: true, name: true, region: true, paymentTerms: true, credit: true, repId: true, rep: { select: { name: true } } } as const;
+
+// Which accounts a person may see (and, when asked for, only some regions), as a database filter.
+async function accountFilter(rep: Rep, regions?: string[]) {
+  return { AND: [await territoryWhere(rep), regions?.length ? { region: { in: regions } } : {}] };
+}
+
 async function loadScope(rep: Rep, regions?: string[]) {
-  const accounts = await prisma.account.findMany({
-    where: { AND: [await territoryWhere(rep), regions?.length ? { region: { in: regions } } : {}] },
-    select: { id: true, name: true, region: true, paymentTerms: true, credit: true, repId: true, rep: { select: { name: true } } },
-  });
+  const accounts = await prisma.account.findMany({ where: await accountFilter(rep, regions), select: ACCOUNT_SELECT });
   return new Map(accounts.map(a => [a.id, a]));
 }
 type ScopeMap = Awaited<ReturnType<typeof loadScope>>;
+
+// Just the accounts an answer actually mentions. The unpaid, to-ship and balances views used to load EVERY account a person can see (about 1 MB, and the
+// list of their ids sent back to the database three times) only to look up the names of the few hundred that have something owing or to ship. Now the
+// orders are found with the territory rule as a filter on them (account: filter), and then only their accounts are fetched.
+async function accountsByIds(ids: string[]): Promise<ScopeMap> {
+  if (!ids.length) return new Map();
+  const accounts = await prisma.account.findMany({ where: { id: { in: ids } }, select: ACCOUNT_SELECT });
+  return new Map(accounts.map(a => [a.id, a]));
+}
 
 // The accounts a person can see. One Dashboard load asks for this several times at once (open quotes, balances, follow-ups), always the same answer
 // from a query over every account, so asks that arrive together share ONE query, and the answer is kept for a few seconds. Each caller gets its own
@@ -145,6 +158,26 @@ export function filterFollowUp<T extends { followUp: { next: { kind: string; dat
     if (overdue && !(r.followUp.next && r.followUp.next.date < today)) return false;
     return true;
   });
+}
+
+// The 2nd follow-up list is shown with the oldest follow-up date first, so the most overdue is at the top. A 2nd still waiting for its date has no date,
+// so those come last. Orders with the same follow-up date (or none) go oldest order first. (An order's date is a Date here and text on the web page.)
+const whenOf = (v: unknown) => (v instanceof Date ? v.getTime() : Date.parse(String(v)));
+export function bySecondFollowUpDate<T extends { number?: string; date: unknown; followUp: { next: { date: string } | null } }>(a: T, b: T): number {
+  const da = a.followUp.next?.date, db = b.followUp.next?.date;
+  if (da && db && da !== db) return da < db ? -1 : 1;
+  if (!da !== !db) return da ? -1 : 1;
+  return whenOf(a.date) - whenOf(b.date) || String(a.number ?? '').localeCompare(String(b.number ?? ''));
+}
+
+// Which rows of the open quotes list to keep for ?fu=, ?overdue=1 and ?fuBy=, as positions in the list, in the order they should appear (the 2nd, by follow-up date).
+export function followUpSelection<T extends { number?: string; date: unknown; followUp: { next: { kind: string; date: string } | null } }>(
+  rows: T[], q: { fu?: string; overdue: boolean; by?: string }, today: string,
+): number[] {
+  const keep = new Set(filterFollowUpBy(filterFollowUp(rows, q.fu, q.overdue, today), q.by));
+  const idx = rows.map((r, i) => (keep.has(r) ? i : -1)).filter(i => i >= 0);
+  if (q.fu === 'fu2' || q.fu === 'manual') idx.sort((i, j) => bySecondFollowUpDate(rows[i], rows[j]));
+  return idx;
 }
 
 export const PREPAYMENT = 'Prepayment';
@@ -330,12 +363,11 @@ export async function myFollowUps(rep: Rep, today: string = melDay(), days = 7) 
 // ---------- To ship: confirmed but not fully shipped, oldest first ----------
 export async function toShip(rep: Rep, regions?: string[]) {
   const sw = stopwatch('toShip');
-  const accounts = await scope(rep, regions);
-  sw.lap('accounts in territory');
+  const filter = await accountFilter(rep, regions);
   const quotes = await prisma.quote.findMany({
     where: {
       ...LIVE,
-      accountId: { in: [...accounts.keys()] },
+      account: filter,
       fulfillmentStatus: { notIn: [...QUOTE_STATUSES, ...CLOSED_STATUSES] },
       OR: [{ shippingStatus: null }, { shippingStatus: { not: 'SHIPPED' } }],
     },
@@ -344,6 +376,8 @@ export async function toShip(rep: Rep, regions?: string[]) {
     select: { id: true, number: true, accountId: true, sentAt: true, fulfillmentStatus: true, shippingStatus: true, pickingStatus: true, miscType: true, total: true, amount: true },
   });
   sw.lap('the orders (findMany)');
+  const accounts = await accountsByIds([...new Set(quotes.map(q => q.accountId))]);
+  sw.lap('their accounts');
   const rows = quotes.map(q => {
     const status = (q.fulfillmentStatus ?? '').toUpperCase();
     const ship = (q.shippingStatus ?? '').toUpperCase();
@@ -376,12 +410,9 @@ export async function toShip(rep: Rep, regions?: string[]) {
 // ---------- Unpaid invoices: one row per invoice with money owing ----------
 type InvoiceDoc = { number: string | null; date: string | null; dueDate: string | null; total: number; paid: number; paidAt?: string | null; credited?: number; due?: number };
 
-export async function unpaidInvoices(rep: Rep, regions?: string[], preloaded?: ScopeMap) {
-  const sw = stopwatch('unpaidInvoices');
-  const accounts = preloaded ?? await scope(rep, regions);
-  sw.lap('accounts in territory');
-  const quotes = (await prisma.quote.findMany({
-    where: { ...LIVE, accountId: { in: [...accounts.keys()] }, OR: [{ amountDue: { gt: 0.005 } }, { amountDue: null, paid: false, invoiceDate: { not: null } }] },
+async function loadOwingQuotes(filter: Awaited<ReturnType<typeof accountFilter>>) {
+  return (await prisma.quote.findMany({
+    where: { ...LIVE, account: filter, OR: [{ amountDue: { gt: 0.005 } }, { amountDue: null, paid: false, invoiceDate: { not: null } }] },
     // Only what is used below (and by isOwing). A whole order carries big JSON columns (shipments, fulfilments, credit notes, line progress) that this
     // list never reads; every one of them was being dragged across the network for every unpaid order.
     select: {
@@ -389,8 +420,20 @@ export async function unpaidInvoices(rep: Rep, regions?: string[], preloaded?: S
       amount: true, total: true, amountPaid: true, amountDue: true, creditedTotal: true, invoiceNumber: true, invoiceDate: true, sentAt: true, invoices: true,
     },
   })).filter(q => isOwing(q));
+}
+type OwingQuote = Awaited<ReturnType<typeof loadOwingQuotes>>[number];
 
+export async function unpaidInvoices(rep: Rep, regions?: string[]) {
+  const sw = stopwatch('unpaidInvoices');
+  const quotes = await loadOwingQuotes(await accountFilter(rep, regions));
   sw.lap('the unpaid orders (findMany)');
+  const accounts = await accountsByIds([...new Set(quotes.map(q => q.accountId))]);
+  sw.lap('their accounts');
+  return unpaidRows(quotes, accounts, sw);
+}
+
+// The unpaid-invoice rows, from the orders and the accounts they belong to.
+function unpaidRows(quotes: OwingQuote[], accounts: ScopeMap, sw: ReturnType<typeof stopwatch>) {
   const rows = quotes.flatMap(q => {
     const acct = accounts.get(q.accountId);
     const base = {
@@ -457,28 +500,30 @@ type BucketKey = (typeof AGE_BUCKETS)[number]['key'];
 
 export async function balances(rep: Rep, regions?: string[]) {
   const sw = stopwatch('balances');
-  const accounts = await scope(rep, regions);
-  sw.lap('accounts in territory');
-  // The invoices and the two credit sums do not depend on each other, so they are asked for together (balances already has the accounts, which it hands on).
-  const accountIds = [...accounts.keys()];
-  const [invoices, creditRows, overpaid] = await Promise.all([
-    unpaidInvoices(rep, regions, accounts),
+  // The unpaid orders and the two credit sums do not depend on each other, so they are asked for together, each with the territory rule as a filter
+  // (no list of every account id). Only the accounts that turn up in them are then fetched, for their names.
+  const filter = await accountFilter(rep, regions);
+  const [owing, creditRows, overpaid] = await Promise.all([
+    loadOwingQuotes(filter),
     // Credit still on account (unused credit notes, unapplied prepayments), from any live order, paid or not.
     prisma.quote.groupBy({
       by: ['accountId'],
-      where: { ...LIVE, accountId: { in: accountIds }, unappliedCredit: { gt: 0.005 } },
+      where: { ...LIVE, account: filter, unappliedCredit: { gt: 0.005 } },
       _sum: { unappliedCredit: true },
     }),
     // Overpaid orders (DEAR balance below zero) leave the customer in credit too.
     prisma.quote.groupBy({
       by: ['accountId'],
-      where: { ...LIVE, accountId: { in: accountIds }, amountDue: { lt: -0.005 } },
+      where: { ...LIVE, account: filter, amountDue: { lt: -0.005 } },
       _sum: { amountDue: true },
     }),
   ]);
+  sw.lap('unpaid orders and credit queries (together)');
+  const accounts = await accountsByIds([...new Set([...owing.map(q => q.accountId), ...creditRows.map(c => c.accountId), ...overpaid.map(o => o.accountId)])]);
+  sw.lap('their accounts');
+  const invoices = unpaidRows(owing, accounts, sw);
   const creditBy = new Map(creditRows.map(c => [c.accountId, c._sum.unappliedCredit ?? 0]));
   for (const o of overpaid) creditBy.set(o.accountId, (creditBy.get(o.accountId) ?? 0) - (o._sum.amountDue ?? 0));
-  sw.lap('unpaid invoices and credit queries (together)');
   type Bal = { accountId: string; customer: string; region: string; repName: string | null; terms: string; invoices: number; oldestDays: number; owing: number; credit: number; balance: number } & Record<BucketKey, number>;
   const byAccount = new Map<string, Bal>();
   const blank = (accountId: string): Bal => {

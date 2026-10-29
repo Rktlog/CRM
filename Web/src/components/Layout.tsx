@@ -79,7 +79,7 @@ export default function Layout() {
         <div className="topnav-user">
           {name && <span className="topnav-name">{name}</span>}
           {role && <span className="topnav-role">{role}</span>}
-          <button className="btn secondary" style={{ padding: '5px 12px', fontSize: 12 }} onClick={signOut}>
+          <button className="btn secondary" style={{ padding: '6px 14px', fontSize: 14 }} onClick={signOut}>
             Sign out
           </button>
         </div>

@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma';
 import { isHistory } from '../lib/orderSource';
 import { searchWords } from './products';
 import * as XLSX from 'xlsx';
-import { openQuotes, toShip, unpaidInvoices, balances, AGE_BUCKETS, followUpState, followUpAnchor, followUpReps, filterFollowUp, filterFollowUpBy, myFollowUps, melDay, paymentState } from '../lib/receivables';
+import { openQuotes, toShip, unpaidInvoices, balances, AGE_BUCKETS, followUpState, followUpAnchor, followUpReps, followUpSelection, myFollowUps, melDay, paymentState } from '../lib/receivables';
 import { orderNoteSummary } from '../lib/orderNotes';
 import { stopwatch } from '../lib/timing';
 
@@ -336,8 +336,8 @@ ordersRouter.get('/views/:view', async (req, res) => {
   // ?fu=fu1|fu2, ?overdue=1 and ?fuBy=<rep id>: open quotes only, by the next follow-up (the same filter as on screen)
   if (req.params.view === 'quotes' && (typeof req.query.fu === 'string' || req.query.overdue === '1' || typeof req.query.fuBy === 'string')) {
     const by = typeof req.query.fuBy === 'string' && req.query.fuBy ? req.query.fuBy : undefined;   // ?fuBy=<rep id>: the rep who follows it up
-    const keep = new Set(filterFollowUpBy(filterFollowUp(data.rows, typeof req.query.fu === 'string' ? req.query.fu : undefined, req.query.overdue === '1', melDay()), by));
-    const keptIdx = data.rows.map((r: any, i: number) => (keep.has(r) ? i : -1)).filter((i: number) => i >= 0);
+    // The 2nd comes oldest follow-up date first, the same order as on screen.
+    const keptIdx = followUpSelection(data.rows, { fu: typeof req.query.fu === 'string' ? req.query.fu : undefined, overdue: req.query.overdue === '1', by }, melDay());
     sheet = keptIdx.map((i: number) => sheet[i]);
     const rows = keptIdx.map((i: number) => data.rows[i]);
     const sum = (k: string) => Math.round(rows.reduce((s: number, r: any) => s + (r[k] ?? 0), 0) * 100) / 100;
