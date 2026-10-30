@@ -899,3 +899,6 @@ a.pd-list-card:hover { border-color: var(--teal); }
 [style*="font-size: 15px"] { font-size: 16.5px !important; }
 [style*="font-size: 16px"] { font-size: 17.5px !important; }
 [style*="font-size: 17px"] { font-size: 18.5px !important; }
+
+/* Shown only on the sandbox (VITE_APP_ENV=staging), so nobody mistakes it for the live Radar */
+.env-banner { background: #A8432A; color: #fff; text-align: center; font-weight: 600; font-size: 14px; line-height: 1.35; padding: 7px 14px; letter-spacing: .01em; }

@@ -43,6 +43,9 @@ export default function Layout() {
 
   return (
     <div id="app">
+      {import.meta.env.VITE_APP_ENV === 'staging' && (
+        <div className="env-banner" role="status">SANDBOX: a test copy with made-up data. Nothing here is real, and nothing you do here changes the live Radar.</div>
+      )}
       <header className={'topnav' + (menuOpen ? ' menu-open' : '')} ref={bar}>
         <div className="brand">Rhino <span>Radar</span></div>
 

@@ -38,7 +38,9 @@ import { speedRouter } from './routes/speed';
 import { prisma } from './lib/prisma';
 import { startKeepWarm } from './lib/keepWarm';
 import { startEmbeddedMcp, type EmbeddedMcp } from './mcp/embed';
+import { assertEnvironmentIsSafe } from './lib/environmentGuard';
 
+assertEnvironmentIsSafe();   // a sandbox (APP_ENV=staging) refuses to start if it is set up to touch the live system; on production this does nothing
 keepRunning();   // a mistake in one request is logged; it can no longer stop the whole API
 
 const app = express();
