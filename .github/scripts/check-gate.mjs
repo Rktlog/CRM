@@ -32,6 +32,7 @@ if (!info.ok) stop(`could not read ${repo}: ${info.err}`);
 const owner = info.data.owner.login, branch = info.data.default_branch;
 if (!info.data.permissions?.admin) stop(`you are signed in to GitHub, but not as an admin of ${repo}, so the settings cannot be read. Run: gh auth login   and sign in as the owner (${owner}).`);
 console.log(`THE APPROVAL GATE CHECK for ${repo} (branch ${branch}). Read-only: nothing is changed.`);
+if (!info.data.private) console.log('\nNOTE: this repository is PUBLIC. Everything in it, and its whole history, can be read by anyone. Never commit passwords, keys, customer data or internal notes you would not publish.');
 
 // ---- 1. the rules that apply to main right now
 head('1. The rules on ' + branch + ' (as GitHub applies them now)');
@@ -116,6 +117,11 @@ const sec = api(`repos/${repo}/actions/secrets`);
 if (sec.ok) sec.data.total_count === 0 ? PASS('No secrets are stored in GitHub, so no workflow can use a key') : WARN(`${sec.data.total_count} secret(s) are stored in GitHub: ${(sec.data.secrets ?? []).map(s => s.name).join(', ')}`, 'The plan was none. Delete them unless you know why they exist.');
 const keys = api(`repos/${repo}/keys`);
 if (keys.ok) { const w = keys.data.filter(k => k.read_only === false); w.length ? FAIL('A deploy key can write to the repository: ' + w.map(k => k.title).join(', '), 'Settings, Deploy keys: delete it, or make it read-only.') : PASS('No deploy key can write to the repository'); }
+if (!info.data.private) {
+  const fp = api(`repos/${repo}/actions/permissions/fork-pr-contributor-approval`);
+  if (!fp.ok) WARN('could not read the setting for pull requests from outsiders.', 'Check by hand: Settings, Actions, General, "Fork pull request workflows from outside collaborators" should be "Require approval for all outside collaborators".');
+  else fp.data.approval_policy === 'all_external_contributors' ? PASS('A pull request from an outsider never runs a workflow until you approve it') : WARN('A pull request from an outsider can run workflows without your approval once they have contributed before (setting: ' + fp.data.approval_policy + ').', 'Settings, Actions, General, "Fork pull request workflows from outside collaborators": choose "Require approval for all outside collaborators".');
+}
 info.data.allow_auto_merge ? WARN('Auto-merge is switched on. A pull request still needs your approval first, but you can switch it off.', 'Settings, General, Pull Requests: untick "Allow auto-merge".') : PASS('Auto-merge is off');
 
 console.log(`\nRESULT: ${pass} passed, ${fail} FAILED, ${warn} to look at.`);

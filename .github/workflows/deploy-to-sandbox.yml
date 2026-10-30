@@ -6,13 +6,18 @@
 #  - The rule is the same for everybody, the owner too. To take the sandbox over, take the label off the other pull request, then add it to yours. So it is safe
 #    for Claude to add the label, whoever's GitHub login it is working under.
 #
-# Safe by design: this uses pull_request_target, so it always runs the version of this file that is on main, which a pull request cannot change. It only copies a
-# branch onto "staging"; it never runs the pull request's own code here. Pushes made with the built-in token do not start other workflows. The sandbox holds only
-# made-up data and sandbox settings, and the API refuses to start if it is ever pointed at the live system.
+# Why "pull_request" and not "pull_request_target": GitHub blocks pull_request_target in public repositories from 2 December 2026, and this repository is public.
+# Safe by design for a public repository:
+#  - It only acts on pull requests from branches in THIS repository (the "if" below). A pull request from a fork never runs it, so outsiders cannot use it.
+#  - The script that does the work is always read from main (see the checkout), so a pull request cannot change what the script does.
+#  - It only copies a branch onto "staging". It never runs the pull request's own code here and it never writes to main (which is protected anyway).
+#  - Pushes made with the built-in token do not start other workflows. There are no secrets in GitHub for it to read.
+#  - The sandbox holds only made-up data and sandbox settings, and the API refuses to start if it is ever pointed at the live system.
+# One limit: GitHub does not run pull_request workflows on a pull request that has a merge conflict. Merge main into the branch, fix the conflicts, push, add the label again.
 name: Sandbox
 
 on:
-  pull_request_target:
+  pull_request:
     types: [labeled, synchronize, closed]
 
 permissions:
@@ -38,6 +43,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # always the script on main, never the pull request's copy of it
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
       - name: Claim, update or release the sandbox
         env:
