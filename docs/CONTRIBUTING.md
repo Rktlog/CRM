@@ -75,6 +75,8 @@ NOT tested here, and why: ...
 - Pushing more changes updates the sandbox by itself while your pull request has the label.
 - Closing or merging your pull request frees the sandbox, and it goes back to the live code.
 - Never type real customer details into the sandbox.
+- A pull request with a merge conflict cannot update the sandbox. Merge main into your branch, fix the conflicts, push, and add the label again.
+- This repository is public: everything you commit can be read by anyone.
 - The sandbox cannot test real Cin7 syncs, email, Google, the AI assistant, the Claude connector, or real data volume. Say so under "NOT proven".
 
 ## Part 4: Getting approved
@@ -89,7 +91,7 @@ Sushan checks your pull request and tries it in the sandbox himself, then approv
 | Prove the change: build output, sandbox test notes, screenshots. | Say it works if it was not run. Write "not proven" instead. |
 | One job per pull request. | Mix a fix with a tidy-up. |
 | Put changes to live data in a script file with a preview step, a backup and a row-count guard. Sushan runs it. | Run any script against the live database. |
-| Use plain words in anything a rep or manager reads. | Commit passwords, keys or .env files. The secrets check turns red. |
+| Use plain words in anything a rep or manager reads. | Commit passwords, keys or .env files, or anything you would not want strangers to read: this repository is public. The secrets check turns red for keys. |
 | Leave .github, CLAUDE.md and docs alone unless the job is about them, and say so at the top of the pull request. | Push to the staging branch by hand, or change the checks so something passes. |
 
 ## For the approver: checklist before you approve

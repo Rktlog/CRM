@@ -13,6 +13,16 @@
 7. **Live data changes need you.** A change to live data is a script file that only you run. Contributors have no access to Railway, Vercel or Supabase.
 8. **Claude cannot merge.** `.claude/settings.json` blocks `gh pr merge`, `gh pr review`, `gh api`, force pushes, pushes to `main` or `staging`, and reading `.env` files. Rule 5 in `CLAUDE.md` says the same in words. Claude Code in the browser can only push branches called `claude/...`.
 
+## Because the repository is public
+
+GitHub's free plan keeps protected branches and code owners for public repositories only, so this repository stays public. That has consequences:
+
+- **Everything in it, and its whole history, is readable by anyone.** Never commit passwords, keys, customer data or internal notes you would not publish. Taking a file out again does not unpublish it. If a key is ever committed, change the key at its provider straight away.
+- **Look at the Security tab now** for "secret scanning" alerts. GitHub scans public repositories for free. Our No secrets check only looks at new pull requests, so older commits were never checked.
+- **Strangers can open pull requests from forks.** They cannot merge (your approval is needed) and they cannot start the sandbox workflow (it ignores forks). Also set Settings, Actions, General, "Fork pull request workflows from outside collaborators" to "Require approval for all outside collaborators". The checker reports it.
+- **The sandbox workflow uses `pull_request`, not `pull_request_target`,** because GitHub blocks that one in public repositories from 2 December 2026.
+- **The live Supabase project ID and API address are in the code.** They are also visible in the live website's own code, and they are not passwords. The safety rests on passwords and keys never being in the repository.
+
 ## Check it (ten minutes, before you invite anyone, and again after any change to roles or rules)
 
 **1. Run the checker.** It only reads settings. It changes nothing.
