@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(gh pr merge:*)",
+      "Bash(gh pr review:*)",
+      "Bash(gh api:*)",
+      "Bash(gh repo edit:*)",
+      "Bash(gh repo delete:*)",
+      "Bash(gh ruleset:*)",
+      "Bash(gh secret:*)",
+      "Bash(gh variable:*)",
+      "Bash(gh workflow run:*)",
+      "Bash(gh release:*)",
+      "Bash(git push origin main:*)",
+      "Bash(git push origin HEAD:main:*)",
+      "Bash(git push origin HEAD:refs/heads/main:*)",
+      "Bash(git push origin staging:*)",
+      "Bash(git push origin HEAD:staging:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git push --delete:*)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./API/.env)",
+      "Read(./API/.env.*)",
+      "Read(./Web/.env)",
+      "Read(./Web/.env.*)"
+    ]
+  }
+}

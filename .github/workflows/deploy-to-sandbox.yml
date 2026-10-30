@@ -1,38 +1,48 @@
-# Sends a pull request to the SANDBOX when the owner adds the label "sandbox" to it.
+# The SANDBOX hands itself out. Anyone who can add labels (the team) adds the label "sandbox" to their pull request when it is ready to try.
 #
-# Why this exists: Claude can only push to branches called claude/..., so it cannot (and must not) update the "staging" branch that the sandbox deploys from.
-# The owner decides, after looking at the changed files, by adding the label. Anyone with write access can add a label, so the job also checks that the person who added it is the
-# owner of the repository: a label added by anyone else does nothing.
+#  - There is one sandbox and it holds one change at a time. If another pull request holds it, the label comes off again with a comment saying who has it.
+#  - While a pull request holds the sandbox, every new commit pushed to it updates the sandbox by itself.
+#  - When that pull request is closed or merged the sandbox is released and goes back to the live code (main).
+#  - The rule is the same for everybody, the owner too. To take the sandbox over, take the label off the other pull request, then add it to yours. So it is safe
+#    for Claude to add the label, whoever's GitHub login it is working under.
 #
-# Safe by design: this uses pull_request_target, so it always runs the version of this file on main, which a pull request cannot change. It only copies the branch
-# to "staging". It never runs the pull request's own code here.
-name: Deploy to sandbox
+# Safe by design: this uses pull_request_target, so it always runs the version of this file that is on main, which a pull request cannot change. It only copies a
+# branch onto "staging"; it never runs the pull request's own code here. Pushes made with the built-in token do not start other workflows. The sandbox holds only
+# made-up data and sandbox settings, and the API refuses to start if it is ever pointed at the live system.
+name: Sandbox
 
 on:
   pull_request_target:
-    types: [labeled]
+    types: [labeled, synchronize, closed]
 
 permissions:
   contents: write
+  pull-requests: write
+  issues: write
 
+# One at a time, in the order they arrive (never cancel one halfway through).
 concurrency:
   group: sandbox
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Send to sandbox
-    if: github.event.label.name == 'sandbox' && github.event.sender.login == github.repository_owner
+  sandbox:
+    name: Update the sandbox
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      ((github.event.action == 'labeled' && github.event.label.name == 'sandbox') ||
+       (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'sandbox')) ||
+       (github.event.action == 'closed' && contains(github.event.pull_request.labels.*.name, 'sandbox')))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Point the staging branch at this pull request
+      - name: Claim, update or release the sandbox
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          git fetch origin "pull/${PR_NUMBER}/head:pr-head"
-          git push --force origin pr-head:refs/heads/staging
-          echo "The sandbox will now deploy pull request #${PR_NUMBER}."
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          ACTION: ${{ github.event.action }}
+        run: bash .github/scripts/sandbox-deploy.sh

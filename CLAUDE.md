@@ -8,13 +8,14 @@ The owner is Sushan. Write in plain words. If you are not sure, ask before you a
 2. **Never touch the live system.** No production keys, no scripts run against the live database, no changes to Railway, Vercel or Supabase settings. If a change needs live data to change, put the script or SQL in the pull request as a file for Sushan to run. It must have a preview step, a backup table, and a guard on the number of rows it expects to change.
 3. **Prove every change.** A pull request is not ready until its **Proof** section shows real evidence: command output, the figures before and after on sandbox data, screenshots from the sandbox. If something could not be proven, write "not proven" and say why. Never write that something works unless it was run.
 4. **Do not change the rules.** Do not edit `.github/`, `CLAUDE.md` or `docs/` unless the task asks for it, and if you do, say so in the first line of the pull request.
+5. **Never merge, approve or change settings.** Not with `gh pr merge`, not with `gh api`, not by editing rulesets, secrets or workflows' permissions. Those commands are blocked in `.claude/settings.json`. Do not try to get round a block with another command. If you think you need one of them, stop and tell the person.
 
 ## How to test: the sandbox
 
 - The sandbox is a separate copy of Radar with its own database and **made-up data**. It has a red banner at the top of every page. See `docs/SANDBOX.md`.
 - You can only push branches called `claude/<topic>`. Never push to `staging` or `main`, and never turn on "Allow unrestricted branch pushes".
 - Prove the change yourself: run the build and tests, and for anything on screen run the app locally with made-up data and take screenshots. Put the output in the pull request.
-- Sushan then checks it in the sandbox: he adds the label `sandbox` to your pull request, and a workflow copies your branch to `staging`. Do not ask for the label until the Proof section is filled in.
+- **Put it in the sandbox yourself** once the three checks are green (`gh pr checks <number> --watch`) and the Proof section is filled in: first check no other pull request holds it (`gh pr list --state open --label sandbox`), then run `gh pr edit <number> --add-label sandbox`. A workflow copies your branch to `staging` and comments on the pull request within a minute. Tell the person to start testing in 3 to 5 minutes, with the exact steps to click. There is one sandbox and it holds one change at a time: if another pull request has it, say which one and stop. Do not keep retrying, and never take the label off someone else's pull request. If `gh` is not installed or you cannot add labels, tell the person to add the label from the pull request page. Pushing more commits updates the sandbox by itself while the label is on.
 - Never copy live customer data into the sandbox. Never point anything in the sandbox at a live address. The API refuses to start if you do (`API/src/lib/environmentGuard.ts`).
 
 ## What this repository is

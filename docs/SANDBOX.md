@@ -5,10 +5,21 @@ A sandbox is a second copy of Radar with its own database, its own API and its o
 ## How a change travels
 
 1. Claude writes the change on a branch called `claude/<topic>` and opens a pull request. It proves the change itself (tests, and screenshots from a local run with made-up data) and puts that in the pull request.
-2. You read the pull request and the list of changed files.
-3. You add the label `sandbox` to the pull request. (Only a label added by the repository owner does anything.) A workflow (`deploy-to-sandbox.yml`) copies the branch to `staging`, and Railway and Vercel deploy it to the sandbox.
-4. You open the sandbox and try it as a rep or manager would. Only label a pull request after reading its changed files. Never label one that changes `.github/` or `API/src/lib/environmentGuard.ts` until you have read that change line by line.
-5. You approve and merge. Merging to `main` deploys to the live Radar.
+2. Three automatic checks run on the pull request: API build, Web build and No secrets.
+3. When the three checks are green, the label `sandbox` is added to the pull request. Claude Code does it itself (`gh pr edit <number> --add-label sandbox`), or the person adds it from the pull request page. Nobody has to wait for you. A workflow (`deploy-to-sandbox.yml`, with its script `.github/scripts/sandbox-deploy.sh`) copies the branch to `staging`, comments on the pull request, and Railway and Vercel deploy it to the sandbox.
+4. They try it in the sandbox as a rep or manager would, and write down what they saw in a comment on the pull request.
+5. You read the pull request and the list of changed files, try it in the sandbox yourself, then approve and merge. Merging to `main` deploys to the live Radar.
+
+## Who holds the sandbox
+
+There is one sandbox and it holds one change at a time.
+
+- **Claiming:** the label `sandbox` on an open pull request means it holds the sandbox. If another pull request already has the label, the new label is taken off again with a comment saying which pull request has it.
+- **Updating:** while a pull request has the label, every new commit pushed to it updates the sandbox by itself.
+- **Releasing:** when a labelled pull request is closed or merged, the label comes off and `staging` goes back to the live code (`main`).
+- **Taking over:** the rule is the same for everybody, you included. A label added while another pull request holds the sandbox is taken off again. To take it over, take the label off the other pull request first (tell its owner), then add it to yours. That is why it is safe for Claude to add the label, whoever's GitHub login it is working under.
+- **Safe by design:** the workflow runs the version on `main`, which a pull request cannot change. It only copies a branch onto `staging` and never runs the branch's own code. Pushes made with the built-in token do not start other workflows. The sandbox has only made-up data and sandbox settings, and the API refuses to start if it is pointed at the live system. Anything under `.github/`, `CLAUDE.md`, `docs/`, `API/prisma`, `API/scripts`, `API/src/mcp` and `API/src/lib/environmentGuard.ts` still needs your line-by-line reading before you approve, because those matter for live.
+- **Stuck:** if someone leaves a label on for days, remove it from their pull request. The sandbox then keeps showing their change until the next claim, which is harmless.
 
 ## The one danger
 
