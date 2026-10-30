@@ -14,13 +14,11 @@ export type QueryResult = { columns: string[]; rows: Record<string, unknown>[]; 
 export async function runReadOnly(db: Db, sql: string, opts: { maxRows: number; timeoutMs: number }): Promise<QueryResult> {
   const t0 = Date.now();
   return db.withClient(async c => {
-    await c.query('BEGIN READ ONLY');
     try {
-      await c.query(`SET LOCAL statement_timeout = ${Math.max(1000, Math.floor(opts.timeoutMs))}`);
-      await c.query('SET LOCAL lock_timeout = 2000');
+      // Every message to the database costs a full round trip (about a quarter of a second from Railway to Supabase), so the set-up and the plan check go in ONE message:
+      // open the read-only transaction, set the time limits, and ask the database what the question would read (EXPLAIN runs nothing). Then one message to run it, one to roll back.
       const wrapped = `SELECT * FROM (\n${sql}\n) AS q LIMIT ${Math.floor(opts.maxRows) + 1}`;
-      // Ask the database what it will read BEFORE running anything (planGuard.ts). EXPLAIN without ANALYZE runs nothing.
-      const plan = await c.query(`EXPLAIN (FORMAT JSON, VERBOSE, COSTS OFF) ${wrapped}`);
+      const plan = await c.query(`BEGIN READ ONLY; SET LOCAL statement_timeout = ${Math.max(1000, Math.floor(opts.timeoutMs))}; SET LOCAL lock_timeout = 2000; EXPLAIN (FORMAT JSON, VERBOSE, COSTS OFF) ${wrapped}`);
       const why = planProblems(plan.rows[0]?.['QUERY PLAN']);
       if (why) throw new QueryRefused(why);
       const r = await c.query(wrapped);
@@ -43,7 +41,8 @@ export function pgDb(connectionString: string, opts: { ssl?: boolean } = {}): Db
   return {
     async withClient(fn) {
       const c = await pool.connect();
-      try { return await fn({ query: async t => { const r = await c.query(t); return { rows: r.rows, fields: (r.fields ?? []).map(f => f.name) }; } }); }
+      // several statements in one message come back as a list of results: the last one is the answer
+      try { return await fn({ query: async t => { const res = (await c.query(t)) as unknown; const r = (Array.isArray(res) ? res[res.length - 1] : res) as pg.QueryResult; return { rows: r.rows, fields: (r.fields ?? []).map(f => f.name) }; } }); }
       finally { c.release(); }
     },
     close: () => pool.end(),

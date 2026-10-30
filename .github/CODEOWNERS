@@ -1,0 +1,17 @@
+# Who must approve a change to each part of the repository.
+# Replace YOUR-GITHUB-USERNAME with the owner's GitHub name, once, in every line.
+# The ruleset (.github/rulesets/protect-main.json) turns this into a rule: a change to any file listed here cannot be merged without the owner's approval.
+
+# Everything
+*                       @Rktlog
+
+# The rules themselves. Claude must never be able to loosen its own rules, so these are named on their own as well.
+/.github/                @Rktlog
+/CLAUDE.md               @Rktlog
+/docs/                   @Rktlog
+
+# Things that can change live data, or who can see what
+/API/prisma/             @Rktlog
+/API/scripts/            @Rktlog
+/API/src/mcp/           @Rktlog
+/supabase/               @Rktlog
