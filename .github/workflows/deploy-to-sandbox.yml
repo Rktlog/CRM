@@ -1,0 +1,38 @@
+# Sends a pull request to the SANDBOX when the owner adds the label "sandbox" to it.
+#
+# Why this exists: Claude can only push to branches called claude/..., so it cannot (and must not) update the "staging" branch that the sandbox deploys from.
+# The owner decides, after looking at the changed files, by adding the label. Anyone with write access can add a label, so the job also checks that the person who added it is the
+# owner of the repository: a label added by anyone else does nothing.
+#
+# Safe by design: this uses pull_request_target, so it always runs the version of this file on main, which a pull request cannot change. It only copies the branch
+# to "staging". It never runs the pull request's own code here.
+name: Deploy to sandbox
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sandbox
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Send to sandbox
+    if: github.event.label.name == 'sandbox' && github.event.sender.login == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Point the staging branch at this pull request
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch origin "pull/${PR_NUMBER}/head:pr-head"
+          git push --force origin pr-head:refs/heads/staging
+          echo "The sandbox will now deploy pull request #${PR_NUMBER}."
