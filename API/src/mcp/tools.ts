@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { checkQuery } from './sqlGuard.js';
-import { runReadOnly, toCsv, type Db } from './db.js';
+import { runReadOnly, toCsv, QueryRefused, type Db } from './db.js';
 
 export type ToolContext = {
   person: string;
@@ -37,6 +37,7 @@ export function buildServer(ctx: ToolContext): McpServer {
   const reply = (text: string, isError = false) => ({ content: [{ type: 'text' as const, text }], ...(isError ? { isError: true } : {}) });
   const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
   const friendly = (e: unknown): string => {
+    if (e instanceof QueryRefused) return `Not run: ${e.message}`;
     const m = String((e as Error)?.message ?? e);
     if (/permission denied/i.test(m)) return `${m}. You can only read the tables and columns that list_tables shows.`;
     if (/statement timeout|canceling statement/i.test(m)) return `The query took longer than ${Math.round(ctx.limits.timeoutMs / 1000)} seconds and was stopped. Narrow it (a date range, a brand) or aggregate in SQL.`;

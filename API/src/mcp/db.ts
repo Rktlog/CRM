@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { planProblems } from './planGuard.js';
 
 // How a query is run. Every query goes inside a transaction that is READ ONLY, with a time limit, wrapped so that no more than maxRows + 1 rows ever come back
 // (the extra one tells us whether there were more). The transaction is always rolled back. The connection itself is the scoped read-only database user
@@ -6,6 +7,8 @@ import pg from 'pg';
 
 export type Queryable = { query(text: string): Promise<{ rows: Record<string, unknown>[]; fields: string[] }> };
 export type Db = { withClient<T>(fn: (c: Queryable) => Promise<T>): Promise<T>; close?(): Promise<void> };
+/** A question the database's own plan shows would read something it must not. Its message is written for Claude and the manager to read. */
+export class QueryRefused extends Error {}
 export type QueryResult = { columns: string[]; rows: Record<string, unknown>[]; truncated: boolean; ms: number };
 
 export async function runReadOnly(db: Db, sql: string, opts: { maxRows: number; timeoutMs: number }): Promise<QueryResult> {
@@ -15,7 +18,12 @@ export async function runReadOnly(db: Db, sql: string, opts: { maxRows: number; 
     try {
       await c.query(`SET LOCAL statement_timeout = ${Math.max(1000, Math.floor(opts.timeoutMs))}`);
       await c.query('SET LOCAL lock_timeout = 2000');
-      const r = await c.query(`SELECT * FROM (\n${sql}\n) AS q LIMIT ${Math.floor(opts.maxRows) + 1}`);
+      const wrapped = `SELECT * FROM (\n${sql}\n) AS q LIMIT ${Math.floor(opts.maxRows) + 1}`;
+      // Ask the database what it will read BEFORE running anything (planGuard.ts). EXPLAIN without ANALYZE runs nothing.
+      const plan = await c.query(`EXPLAIN (FORMAT JSON, VERBOSE, COSTS OFF) ${wrapped}`);
+      const why = planProblems(plan.rows[0]?.['QUERY PLAN']);
+      if (why) throw new QueryRefused(why);
+      const r = await c.query(wrapped);
       const truncated = r.rows.length > opts.maxRows;
       return { columns: r.fields, rows: truncated ? r.rows.slice(0, opts.maxRows) : r.rows, truncated, ms: Date.now() - t0 };
     } finally {
