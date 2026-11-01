@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { prisma } from '../lib/prisma';
+import { makeRepLookup } from '../lib/repLookup';
+import { msFromEnv } from '../lib/ttlCache';
 
 // Attaches req.rep so every route handler knows who's calling and
 // whether they're a manager, without re-checking Supabase each time.
@@ -29,6 +31,11 @@ const SUPABASE_URL = process.env.SUPABASE_URL ?? (() => {
 })();
 const JWKS = createRemoteJWKSet(new URL(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`));
 
+// Who the caller is (their role) is remembered for AUTH_CACHE_MS (default 60 s; 0 switches it off), so most requests skip a database trip. A role changed directly
+// in the database is picked up within that time.
+const repLookup = makeRepLookup(id => prisma.rep.findUnique({ where: { id }, select: { id: true, role: true } }), msFromEnv(process.env.AUTH_CACHE_MS, 60_000));
+export const clearRepCache = (id?: string) => repLookup.clear(id);
+
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   const token = header?.startsWith('Bearer ') ? header.slice(7) : null;
@@ -50,10 +57,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 
-  const rep = await prisma.rep.findUnique({
-    where: { id: userId },
-    select: { id: true, role: true },
-  });
+  const rep = await repLookup.find(userId);
 
   if (!rep) {
     // A valid Supabase login that has no matching crm.reps row yet —

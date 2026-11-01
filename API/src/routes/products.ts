@@ -171,8 +171,7 @@ async function statusCounts(): Promise<Map<string, number>> {
   return new Map(rows.map(r => [r.lifecycle, r.n]));
 }
 async function statusReply() {
-  const { list, fromDb } = await loadStatuses();
-  const counts = await statusCounts();
+  const [{ list, fromDb }, counts] = await Promise.all([loadStatuses(), statusCounts()]);   // independent: asked together
   return { tableReady: fromDb, statuses: list.map(s => ({ ...s, count: counts.get(s.key) ?? 0 })) };
 }
 
@@ -383,8 +382,7 @@ productsRouter.get('/catalogue', async (req, res) => {
       prisma.product.groupBy({ by: ['category'], where: { AND: [...common, ...byBrand, ...byStatus] }, _count: { _all: true } }),
       prisma.product.groupBy({ by: ['lifecycle'], where: { AND: [...common, ...byBrand, ...byCategory] }, _count: { _all: true } }),
     ]);
-    const incoming = await incomingFor(rows.map(r => r.sku));
-    const increments = await incrementsFor(rows.map(r => r.sku));
+    const [incoming, increments] = await Promise.all([incomingFor(rows.map(r => r.sku)), incrementsFor(rows.map(r => r.sku))]);   // independent: asked together
     const today = melDay();
 
     const facet = (rows: { _count: { _all: number } }[], key: 'brand' | 'category') =>
@@ -553,9 +551,7 @@ productsRouter.get('/search', async (req, res) => {
     adjustmentsBySku.set(r.sku, list);
   }
 
-  const descriptions = await descriptionsFor(skus);
-  const increments = await incrementsFor(skus);
-  const specs = await specsFor(skus);
+  const [descriptions, increments, specs] = await Promise.all([descriptionsFor(skus), incrementsFor(skus), specsFor(skus)]);   // independent: asked together
   const results = products.map((p, idx) => {
     const prices = (p.prices as Record<string, number>) ?? {};
     const totals = totalsBySku.get(p.sku);
