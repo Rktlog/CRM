@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { territoryWhere } from '../lib/territory';
 import { loadCarts } from './Abandonedcarts';
+import { msFromEnv, ttlCache } from '../lib/ttlCache';
 
 // Conversion: how much of the team's activity turns into business, in the Master Sales
 // Terminology (Prospect, New Lead, Inactive Stockist P1 and P2). Four starting points, each
@@ -249,10 +250,8 @@ export async function computeConversion(rep: { id: string; role: string }, opts:
   const daysBack = String(Math.ceil((Date.now() - from.getTime()) / DAY) + 1);
 
   // When each customer was linked to DEAR (crm.accounts.dear_linked_at, added by conversion-days.sql and filled by the sync).
-  const linked = new Map<string, Date>();
-  try { for (const r of await prisma.$queryRaw<{ id: string; at: Date }[]>`select id, dear_linked_at as at from crm.accounts where dear_linked_at is not null`) linked.set(r.id, new Date(r.at)); }
-  catch (e) { /* the column has not been added yet: the days to DEAR just are not known */ }
-  const [accountRows, quoteRows, carts] = await Promise.all([
+  // It is asked at the same time as the rest (it does not depend on them). If the column has not been added yet, the days to DEAR just are not known.
+  const [accountRows, quoteRows, carts, linkedRows] = await Promise.all([
     prisma.account.findMany({
       where: scope,
       select: { id: true, name: true, region: true, dearCustomerId: true, createdAt: true, rep: { select: { name: true } } },
@@ -262,7 +261,10 @@ export async function computeConversion(rep: { id: string; role: string }, opts:
       select: { id: true, accountId: true, number: true, sentAt: true, fulfillmentStatus: true, source: true },
     }),
     loadCarts(rep, daysBack),
+    prisma.$queryRaw<{ id: string; at: Date }[]>`select id, dear_linked_at as at from crm.accounts where dear_linked_at is not null`.then(r => r, () => [] as { id: string; at: Date }[]),
   ]);
+  const linked = new Map<string, Date>();
+  for (const r of linkedRows) linked.set(r.id, new Date(r.at));
 
   const funnels = buildFunnels({
     from, to, regions,
@@ -282,13 +284,18 @@ export async function computeConversion(rep: { id: string; role: string }, opts:
   return { from, to, funnels };
 }
 
+// The calculation reads every customer and order this person can see, which is slow (about 7 seconds). The answer is kept for CONVERSION_CACHE_MS (default 60 s;
+// 0 switches it off), so opening the page again straight away is instant. It is kept per person and per period, and only ever read.
+const conversionCache = ttlCache<Awaited<ReturnType<typeof computeConversion>>>({ ttlMs: msFromEnv(process.env.CONVERSION_CACHE_MS, 60_000), max: 20 });
+
 // GET /conversion?days=90            or  ?from=2026-07-01&to=2026-09-30     (a month, a fiscal quarter)
 //     &region=NSW,ACT                 only these states
 //     &funnel=prospect&detail=1       one funnel with every customer in it (to open them)
 conversionRouter.get('/', async (req, res) => {
   try {
     const { from, to, days } = parsePeriod(req.query);
-    const r = await computeConversion(req.rep!, { from, to, regions: regionsOf(req.query.region) });
+    const key = [req.rep!.id, req.rep!.role, req.query.days ?? '', req.query.from ?? '', req.query.to ?? '', req.query.region ?? ''].join('|');
+    const r = await conversionCache.get(key, () => computeConversion(req.rep!, { from, to, regions: regionsOf(req.query.region) }));
     const base = { days, from: r.from, to: r.to };
     if (req.query.detail === '1') {
       const key = funnelKeyFor(req.query.funnel);
