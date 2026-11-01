@@ -1,14 +1,16 @@
 import { prisma } from './prisma';
 import { melDay, openQuotes, PREPAYMENT } from './receivables';
-import { accessTokenFrom, canDraft, cleanAddress, createDraft, draftLink } from './gmail/google';
+import { accessTokenFrom, canDraft, cleanAddress, createDraft, draftLink, getThreadMeta, privateExclusion, searchThreadIds } from './gmail/google';
 import { decrypt } from './gmail/crypto';
+import { findReplyTarget, makeReminderDraft, type LookupDeps, type ReplyQuery, type ReplyTarget } from './gmail/threadReply';
 
 // A payment reminder DRAFT in the sales mailbox on a prepayment quote's first follow-up day.
 //
 // Which quotes: the ones on the Open quotes screen for prepay customers, still unpaid or part paid, whose 1st follow-up is due today (or in the last
 // 2 days, so a missed day is caught up, but a quote that has been overdue for weeks is never swept up when this is first switched on).
 // The 1st follow-up is the CRM's own rule: a week after the order for a customer who pays first.
-// What it does: makes a draft in Gmail, nothing else. It never sends anything, never marks the follow-up done (a person does that after
+// What it does: makes a draft in Gmail, nothing else. When the quote's own email conversation is in the sales mailbox, the reminder is drafted as a reply
+// inside it (so it sits under the quote that was sent, with the attachment); otherwise it is a new email (see lib/gmail/threadReply.ts). It never sends anything, never marks the follow-up done (a person does that after
 // chasing), and keeps no copy of the email: only that a draft was made, for which quote, and to whom.
 // Gmail needs the mailbox connected with "Allow drafts" (the gmail.compose permission).
 
@@ -60,13 +62,23 @@ export function eligibleFirstFollowUps<T extends Row>(rows: T[], today: string, 
 export type Preview = { quoteId: string; number: string; customer: string; to: string | null; name: string | null; dueOn: string; daysOver: number; remaining: number };
 export type RunResult = {
   enabled: boolean; dryRun: boolean; today: string; mailbox: string; stopped: string | null;
-  eligible: number; created: number; failed: number; alreadyDone: number; preview: Preview[];
+  eligible: number; created: number; threaded: number; failed: number; alreadyDone: number; preview: Preview[];
 };
 
 export type Deps = {
   openQuotes: typeof openQuotes; accessTokenFrom: typeof accessTokenFrom; createDraft: typeof createDraft; decrypt: typeof decrypt; today: () => string;
+  findReplyTarget: (token: string, q: ReplyQuery) => Promise<ReplyTarget | null>;
 };
-const realDeps: Deps = { openQuotes, accessTokenFrom, createDraft, decrypt, today: () => melDay() };
+// Where a quote's own conversation is looked for: the emails already saved for the shop that name the quote, then a Gmail search (never Private ones).
+const realLookup: LookupDeps = {
+  logThreads: async ({ repId, accountId, number }) => (await prisma.$queryRaw<{ thread_id: string }[]>`
+    select thread_id from (select thread_id, bool_or(direction = 'out') as sent, max(occurred_at) as last from crm.email_log
+      where rep_id = ${repId}::uuid and account_id = ${accountId}::uuid and ${number} = any(order_numbers) group by thread_id) t
+    order by sent desc, last desc limit 3`).map(r => r.thread_id),
+  searchThreads: async (token, number) => /^[A-Za-z0-9-]{3,20}$/.test(number) ? searchThreadIds(token, `"${number}" ${privateExclusion()}`.trim(), 10) : [],
+  getThread: getThreadMeta,
+};
+const realDeps: Deps = { openQuotes, accessTokenFrom, createDraft, decrypt, today: () => melDay(), findReplyTarget: (token, q) => findReplyTarget(realLookup, token, q) };
 
 export async function loadSettings(): Promise<{ enabled: boolean; mailbox: string }> {
   const [s] = await prisma.$queryRaw<{ enabled: boolean; mailbox_email: string }[]>`select enabled, mailbox_email from crm.followup_draft_settings where id = 1`;
@@ -86,7 +98,7 @@ export async function mailboxProblem(mailbox: string): Promise<{ problem: string
 export async function runFollowUpDrafts(opts: { dryRun?: boolean; deps?: Partial<Deps> } = {}): Promise<RunResult> {
   const d = { ...realDeps, ...opts.deps }, dryRun = !!opts.dryRun, today = d.today();
   const { enabled, mailbox } = await loadSettings();
-  const res: RunResult = { enabled, dryRun, today, mailbox, stopped: null, eligible: 0, created: 0, failed: 0, alreadyDone: 0, preview: [] };
+  const res: RunResult = { enabled, dryRun, today, mailbox, stopped: null, eligible: 0, created: 0, threaded: 0, failed: 0, alreadyDone: 0, preview: [] };
   if (!enabled && !dryRun) { res.stopped = 'Switched off'; return res; }
 
   const all = await d.openQuotes({ id: 'followup-drafts', role: 'manager' }, undefined, [PREPAYMENT]);
@@ -102,13 +114,14 @@ export async function runFollowUpDrafts(opts: { dryRun?: boolean; deps?: Partial
   res.eligible = due.length;
   if (!due.length) return res;
 
-  const contacts = await prisma.$queryRaw<{ id: string; order_email: string | null; order_contact: string | null; email: string | null; contact_name: string | null }[]>`
-    select q.id, q.order_email, q.order_contact, a.email, a.contact_name from crm.quotes q join crm.accounts a on a.id = q.account_id where q.id = any(${due.map(r => r.id)}::uuid[])`;
+  const contacts = await prisma.$queryRaw<{ id: string; account_id: string; order_email: string | null; order_contact: string | null; email: string | null; contact_name: string | null }[]>`
+    select q.id, q.account_id, q.order_email, q.order_contact, a.email, a.contact_name from crm.quotes q join crm.accounts a on a.id = q.account_id where q.id = any(${due.map(r => r.id)}::uuid[])`;
   const byId = new Map(contacts.map(c => [c.id, c]));
   const plan = due.slice(0, MAX_PER_RUN).map(r => {
     const c = byId.get(r.id);
     const to = cleanAddress(c?.order_email) ?? cleanAddress(c?.email);
-    return { r, to, name: firstNameOf(c?.order_contact) ?? firstNameOf(c?.contact_name) };
+    const addresses = [...new Set([cleanAddress(c?.order_email), cleanAddress(c?.email)].filter((x): x is string => !!x).map(x => x.toLowerCase()))];   // who counts as this customer in a conversation
+    return { r, to, accountId: c?.account_id ?? '', addresses, name: firstNameOf(c?.order_contact) ?? firstNameOf(c?.contact_name) };
   });
   res.preview = plan.map(p => ({ quoteId: p.r.id, number: p.r.number, customer: p.r.customer, to: p.to, name: p.name, dueOn: p.r.dueOn, daysOver: p.r.daysOver, remaining: p.r.remaining }));
   if (due.length > MAX_PER_RUN) res.stopped = `More than ${MAX_PER_RUN} are due: only the first ${MAX_PER_RUN} are drafted in one run`;
@@ -130,9 +143,9 @@ export async function runFollowUpDrafts(opts: { dryRun?: boolean; deps?: Partial
     if (!claim) { res.alreadyDone++; res.eligible--; continue; }
     try {
       const m = reminderMessage(p.name, p.r.number);
-      const made = await d.createDraft(token, { to: p.to ? [p.to] : [], subject: m.subject, body: m.body, allowEmptyTo: true });
+      const made = await makeReminderDraft({ createDraft: d.createDraft, findReplyTarget: d.findReplyTarget }, token, { to: p.to, subject: m.subject, body: m.body, repId: conn.rep_id, accountId: p.accountId, number: p.r.number, addresses: p.addresses });
       await prisma.$executeRaw`update crm.followup_drafts set status = 'created', gmail_draft_id = ${made.id}, gmail_message_id = ${made.messageId}, error = null, updated_at = now() where id = ${claim.id}::uuid`;
-      res.created++;
+      res.created++; if (made.threaded) res.threaded++;
     } catch (e) {
       // What went wrong is kept; what the email said never is.
       await prisma.$executeRaw`update crm.followup_drafts set status = 'failed', error = ${String((e as Error)?.message ?? e).slice(0, 300)}, updated_at = now() where id = ${claim.id}::uuid`;
