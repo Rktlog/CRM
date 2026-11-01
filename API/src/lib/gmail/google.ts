@@ -115,7 +115,10 @@ export async function getProfile(accessToken: string): Promise<{ emailAddress: s
   return parse(await fetchImpl(`${API}/profile`, auth(accessToken)));
 }
 // ---- Drafts: put an email in the rep's own Drafts folder. It is never sent from here. ----
-export type DraftInput = { to: string[]; cc?: string[]; subject: string; body: string; allowEmptyTo?: boolean };   // allowEmptyTo: only for drafts the CRM makes by itself, to be addressed by a person
+export type DraftInput = { to: string[]; cc?: string[]; subject: string; body: string; allowEmptyTo?: boolean;   // allowEmptyTo: only for drafts the CRM makes by itself, to be addressed by a person
+  threadId?: string; inReplyTo?: string; references?: string };   // a reply: the draft goes into this existing conversation (see lib/gmail/threadReply.ts)
+const MSG_ID = /^<[^<>\s]{1,200}>$/;          // a plain <id>: nothing that could add a header
+const THREAD_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const ADDRESS = /^[^\s<>@,;"()\[\]\\]+@[^\s<>@,;"()\[\]\\]+\.[^\s<>@,;"()\[\]\\]+$/;
 // One address, or null if it is not a plain address (no names, no line breaks, nothing that could add a header).
 export const cleanAddress = (s: unknown): string | null => { const t = typeof s === 'string' ? s.trim() : ''; return t.length <= 254 && ADDRESS.test(t) ? t : null; };
@@ -134,14 +137,19 @@ export function buildRawMessage(m: DraftInput): string {
   const to = m.to.map(cleanAddress), cc = (m.cc ?? []).map(cleanAddress);
   if ((!to.length && !m.allowEmptyTo) || to.some(a => !a) || cc.some(a => !a)) throw new Error('Check the email addresses');
   if (/[\r\n]/.test(m.subject)) throw new Error('The subject cannot have a line break');
+  const refs = (m.references ?? '').split(/\s+/).filter(Boolean);
+  if ((m.inReplyTo && !MSG_ID.test(m.inReplyTo)) || refs.some(r => !MSG_ID.test(r)) || refs.length > 30) throw new Error('Check the reply headers');
+  if (m.threadId && !THREAD_ID.test(m.threadId)) throw new Error('Check the conversation id');
+  // The two headers that make Gmail file a draft in the same conversation as the email it answers.
+  const reply = m.inReplyTo ? [`In-Reply-To: ${m.inReplyTo}`, ...(refs.length ? [`References: ${refs.join('\r\n ')}`] : [])] : [];
   const body = m.body.replace(/\r\n|\r|\n/g, '\r\n');
   const wrapped = (b64(Buffer.from(body, 'utf8')).match(/.{1,76}/g) ?? []).join('\r\n');
-  const head = [...(to.length ? [`To: ${to.join(', ')}`] : []), ...(cc.length ? [`Cc: ${cc.join(', ')}`] : []), `Subject: ${encodeSubject(m.subject)}`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64'];
+  const head = [...(to.length ? [`To: ${to.join(', ')}`] : []), ...(cc.length ? [`Cc: ${cc.join(', ')}`] : []), `Subject: ${encodeSubject(m.subject)}`, ...reply, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64'];
   return b64url(Buffer.from(head.join('\r\n') + '\r\n\r\n' + wrapped + '\r\n', 'utf8'));
 }
-// The ONLY call this app makes to write to Gmail: create a draft. There is no send anywhere in the CRM.
+// The ONLY call this app makes to write to Gmail: create a draft (new, or a reply inside an existing conversation). There is no send anywhere in the CRM.
 export async function createDraft(accessToken: string, m: DraftInput): Promise<{ id: string; messageId: string; threadId: string }> {
-  const b = await parse(await fetchImpl(`${API}/drafts`, { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ message: { raw: buildRawMessage(m) } }) }));
+  const b = await parse(await fetchImpl(`${API}/drafts`, { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ message: { raw: buildRawMessage(m), ...(m.threadId ? { threadId: m.threadId } : {}) } }) }));
   return { id: String(b.id ?? ''), messageId: String(b.message?.id ?? ''), threadId: String(b.message?.threadId ?? '') };
 }
 // Opens the draft in the mailbox it is in.
@@ -190,6 +198,31 @@ export async function getMessageMeta(accessToken: string, id: string): Promise<G
     for (const h of b.payload?.headers ?? []) { const k = String(h.name).toLowerCase(); if (!(k in headers)) headers[k] = String(h.value ?? ''); }
     return { id: b.id, threadId: b.threadId, labelIds: b.labelIds ?? [], snippet: b.snippet ?? '', internalDate: String(b.internalDate ?? '0'), headers };
   } catch (e) { if (e instanceof GoogleApiError && e.status === 404) return null; throw e; }
+}
+
+// ---- Replying inside an existing conversation. Only the HEADERS of its emails are read, never what they say. ----
+export type ThreadMessage = { id: string; labelIds: string[]; internalDate: string; headers: Record<string, string> };
+const THREAD_HEADERS = ['Message-ID', 'References', 'Subject', 'From', 'To', 'Cc', 'Reply-To'];
+// Every email in one conversation, headers only. null if the conversation has been deleted since.
+export async function getThreadMeta(accessToken: string, threadId: string): Promise<ThreadMessage[] | null> {
+  if (!THREAD_ID.test(threadId)) return null;
+  const p = new URLSearchParams({ format: 'metadata' }); for (const h of THREAD_HEADERS) p.append('metadataHeaders', h);
+  try {
+    const b = await parse(await fetchImpl(`${API}/threads/${encodeURIComponent(threadId)}?${p}`, auth(accessToken)));
+    return (b.messages ?? []).map((m: any) => {
+      const headers: Record<string, string> = {};
+      for (const h of m.payload?.headers ?? []) { const k = String(h.name).toLowerCase(); if (!(k in headers)) headers[k] = String(h.value ?? ''); }
+      return { id: String(m.id), labelIds: Array.isArray(m.labelIds) ? m.labelIds.map(String) : [], internalDate: String(m.internalDate ?? '0'), headers };
+    });
+  } catch (e) { if (e instanceof GoogleApiError && e.status === 404) return null; throw e; }
+}
+// The conversations (newest first) that hold an email matching a Gmail search. Ids only.
+export async function searchThreadIds(accessToken: string, q: string, max = 10): Promise<string[]> {
+  const p = new URLSearchParams({ q, maxResults: String(Math.min(Math.max(max, 1), 50)), includeSpamTrash: 'false' });
+  const b = await parse(await fetchImpl(`${API}/messages?${p}`, auth(accessToken)));
+  const ids: string[] = [];
+  for (const m of b.messages ?? []) if (m.threadId && !ids.includes(String(m.threadId))) ids.push(String(m.threadId));
+  return ids;
 }
 
 // ---- The words of an email, for summarising. Read, handed to Claude and thrown away: never saved. ----
