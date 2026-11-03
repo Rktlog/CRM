@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiDelete, apiGet, apiPatch, apiPost } from '../lib/api';
 import { setStatuses, type StatusInfo } from '../lib/productStatus';
 
@@ -21,6 +21,13 @@ export default function ProductStatusManager({ onClose, onChanged }: { onClose: 
   const [eLabel, setELabel] = useState('');
   const [eMeaning, setEMeaning] = useState('');
   const [eTone, setETone] = useState('neutral');
+  // The edit box, the question about removing, and the message all sit below the list. With a long list they are off the bottom of the pop-up,
+  // so each is scrolled into view when it appears (otherwise clicking Edit seems to do nothing). The Close bar at the bottom of the pop-up stays on
+  // top of whatever scrolls under it, so they ask the browser to leave room for it (scrollMarginBottom).
+  const editRef = useRef<HTMLDivElement>(null), confirmRef = useRef<HTMLDivElement>(null), msgRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (editing) editRef.current?.scrollIntoView({ block: 'nearest' }); }, [editing]);
+  useEffect(() => { if (confirm) confirmRef.current?.scrollIntoView({ block: 'nearest' }); }, [confirm]);
+  useEffect(() => { if (msg) msgRef.current?.scrollIntoView({ block: 'nearest' }); }, [msg]);
 
   useEffect(() => {
     apiGet('/products/statuses', { fresh: true })
@@ -84,7 +91,9 @@ export default function ProductStatusManager({ onClose, onChanged }: { onClose: 
         <p className="acct-region" style={{ marginTop: -4 }}>Add, edit or remove the statuses a product can have. EOL and Discontinued can be renamed but not removed: the automatic EOL rule uses them.</p>
         {!ready && <div className="empty-state" role="status">Statuses can't be added or removed yet. Run product-statuses.sql in the database first.</div>}
         {!list ? <div className="empty-state">Loading...</div> : (
-          <div className="manifest">
+          // flexShrink 0: the pop-up is a flex column capped at 90% of the screen height and the list has overflow hidden, so without this the browser
+          // SQUASHES the list to fit and the rows past the first few are cut off and cannot be reached. Now the pop-up scrolls instead.
+          <div className="manifest" style={{ flexShrink: 0 }}>
             {list.map(s => (
               <div className="m-row" key={s.key} style={{ gridTemplateColumns: '1.4fr 1.8fr 0.8fr 1.6fr', cursor: 'default' }}>
                 <div><span className={`pill ${s.tone}`}>{s.label}</span></div>
@@ -101,7 +110,7 @@ export default function ProductStatusManager({ onClose, onChanged }: { onClose: 
           </div>
         )}
         {editing && (
-          <div className="pd-box" role="group" aria-label={`Edit ${editing.label}`} style={{ marginTop: 10 }}>
+          <div ref={editRef} className="pd-box" role="group" aria-label={`Edit ${editing.label}`} style={{ marginTop: 10, scrollMarginBottom: 90 }}>
             <div className="pd-box-title">Edit "{editing.label}"</div>
             {editing.system && <div className="acct-region" style={{ marginBottom: 6 }}>The EOL rule goes by this status itself, not by its name, so renaming it is safe.</div>}
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
@@ -128,7 +137,7 @@ export default function ProductStatusManager({ onClose, onChanged }: { onClose: 
           </div>
         )}
         {confirm && (
-          <div className="empty-state" role="alert" style={{ marginTop: 10, textAlign: 'left' }}>
+          <div ref={confirmRef} className="empty-state" role="alert" style={{ marginTop: 10, textAlign: 'left', scrollMarginBottom: 90 }}>
             <b>{confirm.count} product{confirm.count === 1 ? ' has' : 's have'}</b> the status "{confirm.label}". What should happen to {confirm.count === 1 ? 'it' : 'them'}?
             <label className="pl-check" style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
               <input type="radio" name="what-to-do" checked={mode === 'clear'} onChange={() => setMode('clear')} />
@@ -170,7 +179,7 @@ export default function ProductStatusManager({ onClose, onChanged }: { onClose: 
             <button type="button" className="btn" disabled={!label.trim() || busy || !ready} onClick={() => void add()}>Add status</button>
           </div>
         </div>
-        {msg && <div className="empty-state" role="status" style={{ marginTop: 10, color: msg.ok ? undefined : 'var(--rust)' }}>{msg.text}</div>}
+        {msg && <div ref={msgRef} className="empty-state" role="status" style={{ marginTop: 10, scrollMarginBottom: 90, color: msg.ok ? undefined : 'var(--rust)' }}>{msg.text}</div>}
         <div className="modal-actions" style={{ display: 'flex', gap: 8, marginTop: 14 }}>
           <button type="button" className="btn secondary" onClick={onClose}>Close</button>
         </div>
