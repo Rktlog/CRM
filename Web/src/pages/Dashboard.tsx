@@ -13,6 +13,7 @@ import MyLogCard from '../components/MyLogCard';
 import ConversionCard from '../components/ConversionCard';
 import SummarySheet from '../components/SummarySheet';
 import RepSummaries from '../components/RepSummaries';
+import WeeklyActivitySummary from '../components/WeeklyActivitySummary';
 import MyOrderFollowUps from '../components/MyOrderFollowUps';
 
 export default function Dashboard() {
@@ -132,6 +133,7 @@ export default function Dashboard() {
 
       {/* Reps see their own monthly summary here (it used to be on Sales Data). Managers see Conversion, and every rep's summary folded away by state and rep. */}
       {role === 'rep' && <div className="section"><SummarySheet fy={fy} /></div>}
+      {role === 'rep' && <div className="section"><WeeklyActivitySummary /></div>}
       {role === 'manager' && (
         <>
           <ConversionCard />

@@ -27,6 +27,7 @@ import { orderingRouter } from './routes/ordering';
 import { followUpDraftsRouter } from './routes/followupDrafts';
 import { customReportsRouter } from './routes/customReports';
 import { summarySheetRouter } from './routes/summarySheet';
+import { repSummaryRouter } from './routes/repSummary';
 import { aiRouter } from './routes/ai';
 import { guardApp, errorHandler, keepRunning } from './lib/safeRouter';
 import { startGmailSchedule } from './sync/gmailJob';
@@ -74,6 +75,7 @@ app.use('/products', requireAuth, productsRouter);
 app.use('/sheet-feed', sheetFeedRouter);   // read-only feeds for Google Sheets: its own secret token (SHEET_FEED_TOKEN), not a login
 app.use('/custom-reports', requireAuth, customReportsRouter);
 app.use('/summary-sheet', requireAuth, summarySheetRouter);   // a rep's Summary sheet (Sales Data), and the managers' Excel download (Reports)
+app.use('/rep-summary', requireAuth, repSummaryRouter);   // the weekly activity under each rep's Summary sheet on the Dashboard
 app.use('/orders', requireAuth, ordersRouter);
 app.use('/abandoned-carts', requireAuth, abandonedCartsRouter);
 app.use('/credit', requireAuth, creditRouter);
