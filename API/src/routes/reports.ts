@@ -3,6 +3,7 @@ import { hiddenAccountIds } from '../lib/territory';
 import { prisma } from '../lib/prisma';
 import { isHistory, isOwing } from '../lib/orderSource';
 import { NOT_A_SALE, isChargeLine, isHistoryOrder, salesOf } from '../lib/salesRules';
+import { summariseMisc } from '../lib/miscSales';
 
 export const reportsRouter = Router();
 
@@ -164,7 +165,7 @@ reportsRouter.get('/sales', async (req, res) => {
   const accountIds = accounts.map(a => a.id);
 
   // Same definition as Sales Data: each tax invoice, on its own date, goods ex GST.
-  const quotes = salesOf(await prisma.quote.findMany({
+  const mainQuotes = salesOf(await prisma.quote.findMany({
     where: {
       accountId: { in: accountIds },
       miscType: null,
@@ -179,6 +180,24 @@ reportsRouter.get('/sales', async (req, res) => {
     select: { amount: true, sentAt: true, source: true, number: true, paid: true, invoiceDate: true,
               fulfillmentStatus: true, goodsTotal: true, taxTotal: true, invoices: true, creditNotes: true },
   })).filter(q => q.sentAt >= previousStart && q.sentAt < currentEnd);
+
+  // Marketing and warranty orders are billed to one miscellaneous account and sent all over, so they belong to no state. They are part of the figures
+  // only when the report covers every state (a manager with no state picked), and they are shown as their own lines too (see `misc` below).
+  const companyWide = !scope.regions;
+  const miscRows = companyWide
+    ? salesOf(await prisma.quote.findMany({
+        where: {
+          miscType: { not: null },
+          OR: [
+            { invoiceDate: { gte: new Date(previousStart.getTime() - 365 * 86400000), lt: currentEnd } },
+            { invoiceDate: null, sentAt: { gte: previousStart, lt: currentEnd } },
+          ],
+        },
+        select: { amount: true, sentAt: true, source: true, number: true, paid: true, invoiceDate: true,
+                  fulfillmentStatus: true, goodsTotal: true, taxTotal: true, invoices: true, creditNotes: true, miscType: true },
+      })).filter(q => q.sentAt >= previousStart && q.sentAt < currentEnd)
+    : [];
+  const quotes: { amount: number; sentAt: Date }[] = [...mainQuotes, ...miscRows];
 
   const currentQuotes = quotes.filter(q => q.sentAt >= currentStart && q.sentAt < currentEnd);
   const previousQuotes = quotes.filter(q => q.sentAt >= previousStart && q.sentAt < previousEnd);
@@ -222,6 +241,11 @@ reportsRouter.get('/sales', async (req, res) => {
     buckets,
     earliestDataAt: earliestQuote?.sentAt ?? null,
     comparisonReachesBeforeData: earliestQuote ? previousStart < earliestQuote.sentAt : false,
+    // Marketing and warranty, already included in the totals and the months above. null when the report is for some states only.
+    misc: companyWide
+      ? { current: summariseMisc(miscRows.filter(q => q.sentAt >= currentStart && q.sentAt < currentEnd)), previous: summariseMisc(miscRows.filter(q => q.sentAt >= previousStart && q.sentAt < previousEnd)) }
+      : null,
+    miscNote: !companyWide && req.rep!.role === 'manager' ? 'Marketing and warranty are included only when all states are shown.' : null,
   });
 });
 
