@@ -15,6 +15,10 @@ const RANGE_LABELS: Record<Range, string> = {
   last_fy_year: 'Last FY year',
 };
 
+// Marketing and warranty orders, already inside the totals: how many orders and how many dollars. Only sent when every state is shown.
+type MiscLine = { orders: number; value: number };
+type MiscTotals = { marketing: MiscLine; warranty: MiscLine };
+
 type ReportData = {
   currentLabel: string;
   previousLabel: string;
@@ -24,6 +28,8 @@ type ReportData = {
   buckets: { label: string; current: number; previous: number }[];
   earliestDataAt: string | null;
   comparisonReachesBeforeData: boolean;
+  misc?: { current: MiscTotals; previous: MiscTotals } | null;
+  miscNote?: string | null;
 };
 
 // region: comma-separated states picked on the Sales Data page, so this
@@ -74,6 +80,25 @@ export default function SalesComparisonCard({ region }: { region?: string }) {
               </div>
             )}
           </div>
+
+          {data.misc && (
+            <div style={{ fontSize: 12.5, marginBottom: 16 }} aria-label="Marketing and warranty">
+              <div style={{ color: 'var(--muted)', marginBottom: 4 }}>Marketing and warranty, included in the totals above</div>
+              <div style={{ display: 'flex', gap: 24, fontSize: 11.5, color: 'var(--muted)', marginBottom: 2 }}>
+                <span style={{ minWidth: 76 }} />
+                <span style={{ minWidth: 190 }}>{data.previousLabel}</span>
+                <span>{data.currentLabel}</span>
+              </div>
+              {(['marketing', 'warranty'] as const).map(k => (
+                <div key={k} style={{ display: 'flex', gap: 24 }}>
+                  <span style={{ minWidth: 76 }}>{k === 'marketing' ? 'Marketing' : 'Warranty'}</span>
+                  <span className="num" style={{ color: 'var(--muted)', minWidth: 190 }}>{data.misc!.previous[k].orders} orders, {fmtMoney(data.misc!.previous[k].value)}</span>
+                  <span className="num">{data.misc!.current[k].orders} orders, {fmtMoney(data.misc!.current[k].value)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {!data.misc && data.miscNote && <div style={{ fontSize: 11.5, color: 'var(--muted)', marginBottom: 12 }}>{data.miscNote}</div>}
 
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={data.buckets} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>

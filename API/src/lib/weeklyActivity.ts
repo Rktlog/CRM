@@ -5,9 +5,11 @@ import { prisma } from './prisma';
 // the orders and the accounts. Shown to reps on Sales Data, and downloadable by managers from Reports (dataset "Weekly activity").
 //
 //  - Visits, calls and emails are the rep's own Activity Log entries (F2F visit, Phone, Email), by the day they say they happened.
-//  - Sales quotes are the live orders (SQ...) placed that week on accounts in the rep's states, by order date, real orders only.
-//  - New customer: an account's first order ever (history included). Returning: an order after no order for the 12 months before.
-//    The value is what those accounts ordered that day. New in DEAR: accounts created in DEAR that week.
+//  - Sales quotes are every live sales quote or order (SQ...) raised that week on accounts in the rep's states, by order date: quotes, drafts and
+//    pre-season and B2B portal orders included, voided ones not. Marketing and warranty orders are not sales quotes. The value is ex GST and ex freight.
+//  - New customer: an account's first sales quote ever (history included), counted when the quote is raised, not when it is paid or invoiced.
+//    Returning: a sales quote after no order for the 12 months before. The value is what those accounts quoted that day (ex GST, ex freight).
+//    Marketing and warranty orders, and miscellaneous accounts, never make a customer new or returning. New in DEAR: accounts created in DEAR that week.
 //  - Sales figures follow the rep's states, as the rest of Sales Data does. Weeks run Monday to Sunday (Melbourne time).
 
 // The team's targets (their Targets and Processes sheet). One place, sent to the screen and the Excel file so they always agree.
@@ -22,7 +24,7 @@ export type SummaryRow = {
   newInDear: number;
 };
 
-const NOT_A_SALE = ['DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING', 'VOIDED', 'CREDITED'];
+const NOT_A_QUOTE = ['VOIDED'];   // a voided quote was cancelled; every other stage (draft, estimating, ordering...) is quote activity
 const DAY = 86_400_000;
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -55,7 +57,7 @@ export async function repNames(): Promise<Map<string, string>> {
 export async function activitySummary(opts: { repId: string; regions: string[]; from: string; to: string; grain: Grain }): Promise<SummaryRow[]> {
   const { repId, regions, from, to, grain } = opts;
   const mel = Prisma.sql`at time zone 'UTC' at time zone 'Australia/Melbourne'`;   // dates are kept as UTC moments; the team works in Melbourne
-  const notASale = Prisma.join(NOT_A_SALE);
+  const notAQuote = Prisma.join(NOT_A_QUOTE);
 
   type ActRow = { period: string; f2f: number; phone: number; email: number };
   const act = await prisma.$queryRaw<ActRow[]>(Prisma.sql`
@@ -73,19 +75,20 @@ export async function activitySummary(opts: { repId: string; regions: string[]; 
   let dear: DearRow[] = [];
   if (regions.length) {
     quotes = await prisma.$queryRaw<QuoteRow[]>(Prisma.sql`
-      select to_char(date_trunc(${grain}, q.sent_at ${mel}), 'YYYY-MM-DD') as period, count(*)::int as quotes, coalesce(sum(q.amount), 0)::float8 as value
+      select to_char(date_trunc(${grain}, q.sent_at ${mel}), 'YYYY-MM-DD') as period, count(*)::int as quotes,
+             coalesce(sum(coalesce(q.goods_total, q.amount - coalesce(q.tax_total, 0))), 0)::float8 as value
       from crm.quotes q join crm.accounts a on a.id = q.account_id
-      where a.region = any(${regions}::text[]) and q.source <> 'rhino-history' and q.number not like 'Q%'
-        and upper(coalesce(q.fulfillment_status, '')) not in (${notASale})
+      where a.region = any(${regions}::text[]) and q.source <> 'rhino-history' and q.number not like 'Q%' and q.misc_type is null
+        and upper(coalesce(q.fulfillment_status, '')) not in (${notAQuote})
         and (q.sent_at ${mel})::date between ${from}::date and ${to}::date
       group by 1`);
-    // new = the account's first order day ever; returning = an order day after nothing for the 12 months before it
+    // new = the account's first quote day ever; returning = a quote day after nothing for the 12 months before it
     starts = await prisma.$queryRaw<StartRow[]>(Prisma.sql`
       with raw as (
-        select q.account_id, (q.sent_at ${mel})::date as day, q.amount
+        select q.account_id, (q.sent_at ${mel})::date as day, coalesce(q.goods_total, q.amount - coalesce(q.tax_total, 0)) as amount
         from crm.quotes q join crm.accounts a on a.id = q.account_id
-        where a.region = any(${regions}::text[])
-          and ((q.source = 'rhino-history' or q.number like 'Q%') or upper(coalesce(q.fulfillment_status, '')) not in (${notASale}))
+        where a.region = any(${regions}::text[]) and not a.misc and q.misc_type is null
+          and ((q.source = 'rhino-history' or q.number like 'Q%') or upper(coalesce(q.fulfillment_status, '')) not in (${notAQuote}))
       ), daily as (
         select account_id, day, sum(amount) as amount from raw group by account_id, day
       ), flagged as (
