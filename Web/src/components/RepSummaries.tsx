@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiGet } from '../lib/api';
 import SummarySheet from './SummarySheet';
+import WeeklyActivitySummary from './WeeklyActivitySummary';
 
 // Managers: every rep's Summary, folded away on the Dashboard. The reps are grouped by their states (NSW / ACT, VIC, ...). Click a state group to fold
 // or open it, and click a rep to open their summary. A rep's sheet is only fetched when it is first opened (working one out goes through every order
@@ -54,7 +55,7 @@ export default function RepSummaries({ fy }: { fy: number }) {
                 <summary style={{ cursor: 'pointer', padding: '8px 0' }}>
                   <b>{r.name}</b> <span className="acct-region">{r.regions.join(', ')}</span>
                 </summary>
-                {opened.has(r.id) && <div style={{ paddingBottom: 12 }}><SummarySheet fy={fy} repId={r.id} heading={false} /></div>}
+                {opened.has(r.id) && <div style={{ paddingBottom: 12 }}><SummarySheet fy={fy} repId={r.id} heading={false} /><WeeklyActivitySummary repId={r.id} /></div>}
               </details>
             ))}
           </div>
