@@ -12,6 +12,7 @@ import TeamLogCard from '../components/TeamLogCard';
 import MyLogCard from '../components/MyLogCard';
 import ConversionCard from '../components/ConversionCard';
 import SummarySheet from '../components/SummarySheet';
+import Collapsible from '../components/Collapsible';
 import RepSummaries from '../components/RepSummaries';
 import WeeklyActivitySummary from '../components/WeeklyActivitySummary';
 import MyOrderFollowUps from '../components/MyOrderFollowUps';
@@ -132,8 +133,8 @@ export default function Dashboard() {
       })()}
 
       {/* Reps see their own monthly summary here (it used to be on Sales Data). Managers see Conversion, and every rep's summary folded away by state and rep. */}
-      {role === 'rep' && <div className="section"><SummarySheet fy={fy} /></div>}
-      {role === 'rep' && <div className="section"><WeeklyActivitySummary /></div>}
+      {role === 'rep' && <div className="section"><Collapsible id="my-summary" title="My summary" note={`FY ${fy}/${String(fy + 1).slice(2)}`}><SummarySheet fy={fy} heading={false} /></Collapsible></div>}
+      {role === 'rep' && <div className="section"><Collapsible id="my-weekly-activity" title="My weekly activity"><WeeklyActivitySummary heading={false} /></Collapsible></div>}
       {role === 'manager' && (
         <>
           <ConversionCard />
