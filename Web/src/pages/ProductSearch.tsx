@@ -11,6 +11,7 @@ import { PRODUCT_PAGE } from '../lib/productPage';
 import ProductImportModal from '../components/ProductImportModal';
 import { useProductStatuses } from '../lib/productStatus';
 import ProductStatusManager from '../components/ProductStatusManager';
+import { ReportHiddenBadge, ReportHiddenPanel, ReportToggle } from '../components/ReportHidden';
 
 type Location = { location: string; onHand: number; allocated: number; available: number; onOrder: number };
 type OrderRef = {
@@ -125,6 +126,7 @@ export default function ProductSearch() {
         {isManager && <button className="btn secondary" onClick={() => setShowImport(true)}>⬆ Import products</button>}
       </div>
 
+      <ReportHiddenPanel />
       <form className="product-search-form" onSubmit={search}>
         <input
           type="text"
@@ -178,7 +180,7 @@ export default function ProductSearch() {
                   <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                     <ProductPhoto url={p.imageUrl} name={p.name} sku={p.sku} size={44} />
                     <div>
-                      <div className="acct-name">{p.name} <ProductStatusPill status={p.lifecycle} /></div>
+                      <div className="acct-name">{p.name} <ProductStatusPill status={p.lifecycle} /> <ReportHiddenBadge sku={p.sku} /></div>
                       {p.brand && <div className="acct-region show-sm">{p.brand}</div>}   {/* the Brand column is hidden on small screens, so the brand goes under the name there */}
                       {p.orderIncrement ? <div className="acct-region" style={{ fontWeight: 600 }}>Order increment: {p.orderIncrement}</div> : null}
                     </div>
@@ -190,6 +192,7 @@ export default function ProductSearch() {
                   <div className="num hide-sm">{qty(p.onOrder)}<EtaText eta={p.eta} block /></div>
                 </div>
 
+                {open && <ReportToggle sku={p.sku} />}
                 {open && <ProductDetail product={p} canEdit={isManager} onSaved={saved} />}
               </div>
             );

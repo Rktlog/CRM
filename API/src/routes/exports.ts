@@ -5,6 +5,7 @@ import { territoryWhere, canSeeAccount } from '../lib/territory';
 import { LIVE_ORDER, isHistory, isOwing } from '../lib/orderSource';
 import { wholesalePrice, retailPrice } from '../lib/pricing';
 import { buildPriceList, priceListWorkbook, PriceListAvailability, PriceListStatus } from '../lib/priceList';
+import { hiddenFromReports } from '../lib/reportHidden';
 import { computeConversion, conversionSheets, parsePeriod, regionsOf } from './conversion';
 import { buildEolReport, makeSnapshot, allocateInvoices, EOL_BRANDS, DEFAULT_START, DEFAULT_CHECKPOINTS, EolOrder, Snapshot, Sheet as EolSheet } from '../lib/eolReport';
 import { melDay } from '../lib/receivables';
@@ -521,7 +522,7 @@ exportsRouter.get('/:type', async (req, res) => {
         }
 
         // Same-brand products they don't stock yet, available or on order.
-        const candidates = brands.size
+        const allCandidates = brands.size
           ? await prisma.product.findMany({
               where: {
                 brand: { in: [...brands] },
@@ -532,6 +533,10 @@ exportsRouter.get('/:type', async (req, res) => {
             })
           : [];
 
+        // Products a manager has left out of customer reports are not on the stocklist, in either sheet.
+        const leftOut = await hiddenFromReports();
+        for (const sku of leftOut) bought.delete(sku);
+        const candidates = allCandidates.filter(c => !leftOut.has(c.sku));
         const allSkus = [...bought.keys(), ...candidates.map(c => c.sku)];
 
         // "New" = first stock received in the last 90 days, and no sales

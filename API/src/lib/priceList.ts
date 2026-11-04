@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import { prisma } from './prisma';
+import { hiddenCountsByBrand, hiddenFromReports } from './reportHidden';
 import { wholesalePrice, retailPrice } from './pricing';
 
 // The customer price list Rhino sends to stores: every product in the
@@ -77,10 +78,11 @@ export async function priceListOptions(accountId: string) {
     where: { brand: { not: null }, OR: [{ status: null }, { status: { not: 'Deprecated' } }] },
     _count: true,
   });
+  const hiddenByBrand = await hiddenCountsByBrand();   // products left out of customer reports are not counted
   return {
     brands: brands
       .filter(b => b.brand)
-      .map(b => ({ brand: b.brand!, products: b._count, bought: boughtSet.has(b.brand!) }))
+      .map(b => ({ brand: b.brand!, products: Math.max(0, b._count - (hiddenByBrand.get(b.brand!) ?? 0)), bought: boughtSet.has(b.brand!) }))
       .sort((a, b) => Number(b.bought) - Number(a.bought) || a.brand.localeCompare(b.brand)),
   };
 }
@@ -103,12 +105,13 @@ export async function buildPriceList(accountId: string, filters: PriceListFilter
 
   // Every product in those brands. Discontinued ones only if the store has
   // bought them (so they know a line they stock is ending).
-  const products = await prisma.product.findMany({
+  const hidden = await hiddenFromReports();   // products a manager has left out of customer reports are never listed, even if this store has bought them
+  const products = (await prisma.product.findMany({
     where: {
       brand: { in: brands },
       OR: [{ status: null }, { status: { not: 'Deprecated' } }, { sku: { in: [...boughtSkus] } }],
     },
-  });
+  })).filter(p => !hidden.has(p.sku));
   const skus = products.map(p => p.sku);
 
   // "New" = first stock received in the last 90 days, and nobody bought it
