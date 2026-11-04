@@ -2,9 +2,9 @@ import { useState, type ReactNode } from 'react';
 
 // A section of the Dashboard that folds away with a click, like the managers' rep summaries do.
 // - The heading is the click target, with an arrow that shows whether it is open.
-// - Whether it is open is remembered in this browser (like the Ordering and Planner settings), so a rep who folds it finds it folded next time.
-// - What is inside is only loaded once it is open: a section that was left folded does not fetch its figures at all until it is opened.
-export default function Collapsible({ id, title, note, defaultOpen = true, children }: { id: string; title: string; note?: string; defaultOpen?: boolean; children: ReactNode }) {
+// - It starts FOLDED. Whether it has been opened is remembered in this browser (like the Ordering and Planner settings): a rep who opens it finds it open next time, and one who folds it again finds it folded.
+// - What is inside is only loaded once it is open: a section that is still folded does not fetch its figures at all, so the Dashboard is lighter until someone opens it.
+export default function Collapsible({ id, title, note, defaultOpen = false, children }: { id: string; title: string; note?: string; defaultOpen?: boolean; children: ReactNode }) {
   const key = `radar-fold-${id}`;
   const [open, setOpen] = useState<boolean>(() => {
     try { const v = localStorage.getItem(key); return v === null ? defaultOpen : v === '1'; } catch { return defaultOpen; }
