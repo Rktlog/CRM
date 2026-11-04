@@ -155,8 +155,12 @@ async function recomputeFigures(db: Db, accountId: string) {
     [accountId, f.spend30, f.spend90, f.spend365, f.autoGap, gap, f.last]);
 }
 
-const isDuplicate = (e: any) => /duplicate key|unique constraint/i.test(String(e?.message ?? e));
-const isForeignKey = (e: any) => /foreign key constraint/i.test(String(e?.message ?? e));
+// The database says "duplicate key value violates unique constraint", but what reaches here from Prisma is "Raw query failed. Code: `23505`. Message: `Key (...) already exists.`".
+// So an error is recognised by its CODE (23505 a unique clash, 23503 a foreign key one; Prisma's own P2002 and P2003 too) as well as by the words.
+const errText = (e: any) => String(e?.message ?? e);
+const errCode = (e: any) => String(e?.meta?.code ?? e?.code ?? errText(e).match(/Code: `?([0-9A-Z]{5})`?/)?.[1] ?? '');
+const isDuplicate = (e: any) => ['23505', 'P2002'].includes(errCode(e)) || /duplicate key|unique constraint|Key \(.+\) already exists/i.test(errText(e));
+const isForeignKey = (e: any) => ['23503', 'P2003'].includes(errCode(e)) || /foreign key constraint|is still referenced from table/i.test(errText(e));
 
 /** Move every row of one table that points at the duplicate. A row the kept account already has an equal of (a unique clash, such as the same rep
  *  excluded from both) is dropped instead, one row at a time, so no other row is lost. Needs to run inside a transaction. */

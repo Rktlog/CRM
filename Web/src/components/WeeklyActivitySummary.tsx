@@ -19,7 +19,7 @@ const monthLabel = (iso: string) => `${MONTHS[Number(iso.slice(5, 7)) - 1]} ${is
 const addDays = (iso: string, n: number) => new Date(Date.parse(iso) + n * 86_400_000).toISOString().slice(0, 10);
 const MET = 'var(--teal)', MISSED = 'var(--rust)';
 
-export default function WeeklyActivitySummary({ repId }: { repId?: string }) {
+export default function WeeklyActivitySummary({ repId, heading = true }: { repId?: string; heading?: boolean }) {
   const [weeks, setWeeks] = useState(12);
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +44,7 @@ export default function WeeklyActivitySummary({ repId }: { repId?: string }) {
   return (
     <>
       <div className="ledger-section-head">
-        <Heading>{mine ? 'My weekly activity' : 'Weekly activity'}</Heading>
+        {heading ? <Heading>{mine ? 'My weekly activity' : 'Weekly activity'}</Heading> : <span />}
         <span className="ledger-note">
           <select value={weeks} onChange={e => setWeeks(Number(e.target.value))} aria-label="How many weeks to show">
             {[8, 12, 26].map(n => <option key={n} value={n}>Last {n} weeks</option>)}
