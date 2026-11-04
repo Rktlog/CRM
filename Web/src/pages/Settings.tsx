@@ -7,6 +7,7 @@ import RepHiddenAccounts from '../components/RepHiddenAccounts';
 import GmailCard from '../components/GmailCard';
 import CalendarSyncCard from '../components/CalendarSyncCard'
 import FollowUpDraftsCard from '../components/FollowUpDraftsCard';
+import ChangePasswordCard from '../components/ChangePasswordCard';
 import SyncStatus from '../components/SyncStatus';
 
 type Rep = { id: string; name: string; role: string };
@@ -146,6 +147,7 @@ export default function Settings() {
        <CalendarSyncCard />
        <GmailCard />
        <FollowUpDraftsCard />
+       <ChangePasswordCard />
 
       {isManager && (
         <div className="section">
