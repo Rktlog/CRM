@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiGet, apiDownload } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
+import { brandsFromMemory, forgetChoice, readChoice, saveChoice } from '../lib/priceListMemory';
 
 // Choose what goes in a store's price list before downloading it: which
 // brands, which products (current range / new / the rest), and which
@@ -30,16 +32,24 @@ export default function PriceListModal({ accountId, accountName, onClose }: {
   const [brandSearch, setBrandSearch] = useState('');
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { session } = useAuth();
+  const userId = session?.user?.id ?? '';   // what is remembered is kept per person, in this browser
+  const [remembered, setRemembered] = useState<'store' | 'habit' | null>(null);   // set when the window opened with an earlier choice
 
   useEffect(() => {
     apiGet(`/accounts/${accountId}/pricelist-options`)
       .then((o: { brands: BrandOption[] }) => {
         setBrands(o.brands);
-        setSelected(new Set(o.brands.filter(b => b.bought).map(b => b.brand)));
+        const saved = readChoice(userId, accountId, { statuses: STATUSES.map(s => s.key), availability: AVAILABILITY.map(a => a.key) });
+        const fromMemory = saved.brands ? brandsFromMemory(o.brands, saved.brands) : null;   // brands that are new since then follow the normal rule
+        setSelected(fromMemory ?? new Set(o.brands.filter(b => b.bought).map(b => b.brand)));
+        if (saved.statuses) setStatuses(new Set(saved.statuses));
+        if (saved.availability) setAvailability(new Set(saved.availability));
+        setRemembered(fromMemory ? 'store' : saved.statuses || saved.availability ? 'habit' : null);
         if (!o.brands.some(b => b.bought)) setShowAllBrands(true); // nothing bought yet: show the full list
       })
       .catch(e => setError(e.message));
-  }, [accountId]);
+  }, [accountId, userId]);
 
   const toggle = (set: Set<string>, setter: (s: Set<string>) => void, key: string) => {
     const next = new Set(set);
@@ -57,6 +67,15 @@ export default function PriceListModal({ accountId, accountName, onClose }: {
   const productCount = (brands ?? []).filter(b => selected.has(b.brand)).reduce((s, b) => s + b.products, 0);
   const canDownload = selected.size > 0 && statuses.size > 0 && availability.size > 0;
 
+  // Forgets the remembered choice and goes back to how the window first opens.
+  function resetToUsual() {
+    forgetChoice(userId, accountId);
+    setSelected(new Set((brands ?? []).filter(b => b.bought).map(b => b.brand)));
+    setStatuses(new Set(STATUSES.map(s => s.key)));
+    setAvailability(new Set(AVAILABILITY.map(a => a.key)));
+    setRemembered(null);
+  }
+
   async function download() {
     setDownloading(true);
     setError(null);
@@ -69,6 +88,7 @@ export default function PriceListModal({ accountId, accountName, onClose }: {
       });
       const file = `${accountName.replace(/[^a-z0-9]+/gi, ' ').trim()}.xlsx`;
       await apiDownload(`/exports/account-pricelist?${params.toString()}`, file);
+      saveChoice(userId, accountId, { selected: [...selected], seen: (brands ?? []).map(b => b.brand), statuses: [...statuses], availability: [...availability] });
       onClose();
     } catch (e: any) {
       setError(e.message);
@@ -84,6 +104,12 @@ export default function PriceListModal({ accountId, accountName, onClose }: {
         <div className="acct-region" style={{ marginBottom: 14 }}>
           Choose what to include, then download. Prices, stock and dates are as of the latest sync.
         </div>
+        {remembered && (
+          <div className="acct-region" style={{ marginBottom: 10 }}>
+            {remembered === 'store' ? 'These are the choices you made last time for this store.' : 'Products and availability are as you chose last time.'}{' '}
+            <button type="button" className="link-btn" onClick={resetToUsual}>Back to the usual choice</button>
+          </div>
+        )}
 
         <div className="pl-section">
           <div className="pl-title">
