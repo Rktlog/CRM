@@ -33,6 +33,7 @@ import MarketingAutomations from './pages/MarketingAutomations';
 import MarketingSettings from './pages/MarketingSettings';
 import Assistant from './pages/Assistant';
 import Ordering from './pages/Ordering';
+import ProductRequests from './pages/ProductRequests';
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { session, loading } = useAuth();
@@ -66,6 +67,7 @@ function Routed() {
         <Route path="misc" element={<Misc />} />
         <Route path="products" element={<ProductSearch />} />
         <Route path="catalogue" element={<Catalogue />} />
+        <Route path="product-requests" element={<ProductRequests />} />
         <Route path="conversion" element={<Conversion />} />
         <Route path="marketing" element={<Marketing />} />
         <Route path="marketing/campaigns" element={<MarketingCampaigns />} />

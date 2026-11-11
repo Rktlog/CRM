@@ -4,6 +4,7 @@ import OrderingExport from '../components/OrderingExport';
 import { useMe } from '../lib/useMe';
 import { fmtDate } from '../lib/types';
 import { distinct, filterRows, NO_FILTERS, STATUS_LABEL, STATUS_TONE, TABS, toCsv, type Filters, type OrderingData, type OrderRow, type Settings, type Tab } from '../lib/ordering';
+import { RequestPill, RequestsForSku, RequestsPanel } from '../components/RequestsPanel';
 
 // Ordering: what to order, how much, and how urgent, worked out from the CRM database (DEAR is synced into it), so nothing is exported or pasted.
 // Stock, customers waiting on a backorder, purchase orders still to arrive, and what customers have ordered each month all come from the database.
@@ -116,6 +117,7 @@ export default function Ordering() {
         </div>
       </div>
 
+      <RequestsPanel />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12, marginBottom: 14 }}>
         {card('now', 'Order now', n0(s.now), 'will run out before an order could arrive', 'rust')}
         {card('soon', 'Order soon', n0(s.soon), 'within about a month of the lead time', 'amber')}
@@ -176,6 +178,7 @@ function Row({ r, stage, open, toggle, lead }: { r: OrderRow; stage: string; ope
         <div>
           <div className="acct-name">{r.product}</div>
           <div className="acct-region">{r.sku}{r.brand ? ` · ${r.brand}` : ''}</div>
+          <RequestPill sku={r.sku} />
         </div>
         <div>{stage ? <span className="pill neutral">{stage}</span> : <span className="acct-region">—</span>}</div>
         <div className="num" style={r.out ? { color: 'var(--rust)', fontWeight: 600 } : undefined}>{n0(r.available)}</div>
@@ -206,6 +209,7 @@ function Row({ r, stage, open, toggle, lead }: { r: OrderRow; stage: string; ope
               <div>{r.method}. {r.confidence} confidence{r.accuracyPct != null ? `, ${r.accuracyPct}% accurate on recent months` : ''}. {r.monthsOfHistory} month{r.monthsOfHistory === 1 ? '' : 's'} of history.</div>
               {r.notes && <div style={{ color: 'var(--ink-soft)', marginTop: 4 }}>{r.notes}</div>}
             </div>
+            <RequestsForSku sku={r.sku} />
           </div>
         </div>
       )}

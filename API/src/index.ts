@@ -24,6 +24,9 @@ import { marketingPublicRouter } from './routes/marketingPublic';
 import { gmailRouter, gmailCallbackRouter, gmailCronRouter } from './routes/gmail';
 import { calendarRouter, calendarCronRouter, calendarCallbackRouter } from './routes/calendar';
 import { orderingRouter } from './routes/ordering';
+import { supplierEnquiriesRouter } from './routes/supplierEnquiries';
+import { alertSettingsRouter } from './routes/alertSettings';
+import { productRequestsRouter } from './routes/productRequests';
 import { followUpDraftsRouter } from './routes/followupDrafts';
 import { customReportsRouter } from './routes/customReports';
 import { summarySheetRouter } from './routes/summarySheet';
@@ -92,6 +95,9 @@ app.use('/calendar', requireAuth, calendarRouter);       // was missing: without
 app.use('/sync-cron', syncCronRouter);          // started by Supabase's scheduler, secret header, no login
 app.use('/ai', requireAuth, aiRouter);
 app.use('/ordering', requireAuth, orderingRouter);   // the Ordering page (managers): what to order, from the database
+app.use('/supplier-enquiries', requireAuth, supplierEnquiriesRouter);   // supplier emails for special product requests (managers)
+app.use('/alert-settings', requireAuth, alertSettingsRouter);   // who gets the email alerts and the supplier contacts (managers)
+app.use('/product-requests', requireAuth, productRequestsRouter);   // special product requests from the sales team to the ordering team
 app.use('/sync-status', requireAuth, syncStatusRouter);
 app.use('/followup-drafts', requireAuth, followUpDraftsRouter);   // payment reminder drafts (managers)
 

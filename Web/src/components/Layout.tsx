@@ -3,6 +3,8 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useCloseDropdowns } from '../lib/useCloseDropdowns';
 import { HOME, visibleGroups, groupKeyForPath } from '../lib/navMenu';
+import { RequestBadge } from './RequestsPanel';
+import { useNewRequestCount } from '../lib/productRequests';
 
 // The top bar: the brand and the person's name on the first row, and on the second the Dashboard and the six dropdown tabs (lib/navMenu.ts).
 // Pressing a tab opens its list; pressing another one (or moving onto it, while one is open) switches; pressing anywhere else, Escape, tabbing away or
@@ -12,6 +14,7 @@ export default function Layout() {
   useCloseDropdowns();   // tick-box dropdowns close when you click anywhere outside them
   const { pathname } = useLocation();
   const groups = visibleGroups(role);
+  const newRequests = useNewRequestCount(role);   // for managers: how many special product requests are new
   const here = groupKeyForPath(pathname);
   const [open, setOpen] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -67,11 +70,11 @@ export default function Layout() {
                   onClick={() => setOpen(isOpen ? null : g.key)}
                   onMouseEnter={() => { if (open && open !== g.key) setOpen(g.key); }}
                 >
-                  {g.label}<span className="topnav-caret" aria-hidden="true">▾</span>
+                  <span style={{ position: 'relative' }}>{g.label}{g.key === 'products' && newRequests > 0 && <RequestBadge n={newRequests} corner />}</span><span className="topnav-caret" aria-hidden="true">▾</span>
                 </button>
                 <div className="topnav-panel">
                   {g.items.map(item => (
-                    <NavLink key={item.to} to={item.to} className={({ isActive }) => 'topnav-link' + (isActive ? ' active' : '')}>{item.label}</NavLink>
+                    <NavLink key={item.to} to={item.to} className={({ isActive }) => 'topnav-link' + (isActive ? ' active' : '')}>{item.label}{item.to === '/ordering' && newRequests > 0 && <RequestBadge n={newRequests} />}</NavLink>
                   ))}
                 </div>
               </div>
