@@ -17,6 +17,8 @@ import AccountGmail from '../components/AccountGmail';
 import EmailButton from '../components/EmailComposer';
 import DictationTextarea from '../components/DictationTextarea';
 import DeleteLogLink from '../components/DeleteLogLink';
+import MediaGallery, { ActivityMedia, AttachmentPicker } from '../components/MediaGallery';
+import { linkMedia, useAttachments } from '../lib/media';
 import type { Account } from '../lib/types';
 
 // The council worked out from the postcode in the address (the API sends it with the account).
@@ -56,6 +58,7 @@ export default function AccountDetail() {
   const [editType, setEditType] = useState<ActivityKind>('call');
   const [editSaving, setEditSaving] = useState(false);
   const [logDay, setLogDay] = useState(todayLocal());   // the date of a new log: today unless changed
+  const attach = useAttachments();   // photos and videos chosen on the log form
   const [editDay, setEditDay] = useState('');
 
   function load() {
@@ -70,7 +73,11 @@ export default function AccountDetail() {
     if (!note.trim() || !id) return;
     setSaving(true);
     try {
-      await apiPost('/activity', { accountId: id, type, note, ...(orderId ? { orderId } : {}), ...(logDay && logDay !== todayLocal() ? { occurredAt: isoForDay(logDay) } : {}) });
+      const mediaIds = await attach.uploadAll(id);   // the files go up first: if one fails, nothing is logged
+      if (!mediaIds) return;   // the reason is shown with the files, so the page stays as it is
+      const created = await apiPost('/activity', { accountId: id, type, note, ...(orderId ? { orderId } : {}), ...(logDay && logDay !== todayLocal() ? { occurredAt: isoForDay(logDay) } : {}) });
+      await linkMedia(mediaIds, created?.id);
+      attach.clear();
       setNote('');
       setOrderId('');
       setLogDay(todayLocal());
@@ -282,6 +289,7 @@ export default function AccountDetail() {
           <AccountEmails accountId={account.id} />
               <EmailButton target={{ kind: 'account', accountId: account.id }} name={account.name} defaultTo={account.email} onSent={load} />
               <AccountGmail accountId={account.id} />
+              <MediaGallery accountId={account.id} legacy={account.activity.filter(a => a.photoUrl).map(a => ({ id: a.id, url: a.photoUrl as string, at: a.occurredAt, by: a.repName }))} />
  
           <div className="card">
             <h3>Log a phone call, email, F2F visit or remark</h3>
@@ -313,6 +321,7 @@ export default function AccountDetail() {
                 rows={3}
                 style={{ marginBottom: 8 }}
               />
+              <AttachmentPicker attach={attach} />
               <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
                 <button className="btn" type="submit" disabled={saving || logDay > todayLocal()}>
                   {saving ? 'Saving…' : type === 'remark' ? 'Log remark' : 'Log activity'}
@@ -388,6 +397,7 @@ export default function AccountDetail() {
                       {t.repName && <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>Logged by {t.repName}</div>}
                       {t.orderNumber && t.orderId && <div style={{ fontSize: 11.5 }}>About order <Link to={`/orders/${t.orderId}`} className="order-link">{t.orderNumber}</Link></div>}
                       <div className="ti-note">{t.note}</div>
+                      <ActivityMedia accountId={account.id} activityId={t.id} />
                       {t.photoUrl && (
                         <a href={t.photoUrl} target="_blank" rel="noreferrer" className="ti-photo" title="Open the full-size photo">
                           <img src={t.photoUrl} alt="Visit photo" loading="lazy" />

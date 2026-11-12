@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, FormEvent } from 'react';
 import { apiGet, apiPost } from '../lib/api';
 import { supabase } from '../lib/supabase';
+import { linkMedia, previewUrl, sendIfDropbox } from '../lib/media';
 import { Account } from '../lib/types';
 import { useMe } from '../lib/useMe';
 import AccountPicker, { AccountSelection, resolveSelection } from './AccountPicker';
@@ -111,7 +112,7 @@ export default function LogVisitModal({ onCreated, onClose, defaultType }: Props
     const file = e.target.files?.[0] ?? null;
     if (photoPreview) URL.revokeObjectURL(photoPreview);
     setPhotoFile(file);
-    setPhotoPreview(file ? URL.createObjectURL(file) : null);
+    setPhotoPreview(file ? previewUrl(file) : null);
   }
 
   function clearPhoto() {
@@ -131,8 +132,11 @@ export default function LogVisitModal({ onCreated, onClose, defaultType }: Props
       const account = (selection.kind === 'new' && savedStore.current) || await resolveSelection(selection, me.id);
       if (selection.kind === 'new') savedStore.current = account;
       let photoUrl: string | undefined;
+      const mediaIds: string[] = [];   // files saved in Dropbox, tied to the log entry once it is made
 
-      if (photoFile && type === 'visit') {
+      if (photoFile && type === 'visit' && await sendIfDropbox(photoFile, account.id, mediaIds)) {
+        // saved in Dropbox (a video can only go there); the older way below is used for a photo when Dropbox is not connected
+      } else if (photoFile && type === 'visit') {
         const compressed = await compressImage(photoFile);
         const path = `${account.id}/${Date.now()}.jpg`;
         const { error: uploadError } = await supabase.storage
@@ -144,13 +148,14 @@ export default function LogVisitModal({ onCreated, onClose, defaultType }: Props
         photoUrl = data.publicUrl;
       }
 
-      await apiPost('/activity', {
+      const created = await apiPost('/activity', {
         accountId: account.id,
         type,
         note: note.trim(),
         ...(day && day !== todayLocal() ? { occurredAt: isoForDay(day) } : {}),   // today is left to the server's clock
         ...(photoUrl ? { photoUrl } : {}),
       });
+      await linkMedia(mediaIds, created?.id);
       setSavedName(account.name);
       setSuccess(true);
     } catch (err: any) {
@@ -167,7 +172,7 @@ export default function LogVisitModal({ onCreated, onClose, defaultType }: Props
           <div style={{ fontSize: 28, marginBottom: 8 }}>✓</div>
           <div style={{ fontSize: 15, fontWeight: 600 }}>{SAVED[type]}</div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
-            {savedName}{photoFile && type === 'visit' ? ', photo attached' : ''}
+            {savedName}{photoFile && type === 'visit' ? ', file attached' : ''}
           </div>
         </div>
       </div>
@@ -214,7 +219,7 @@ export default function LogVisitModal({ onCreated, onClose, defaultType }: Props
 
         {type === 'visit' && (
         <label className="modal-field">
-          Photo (optional)
+          Photo or video (optional)
           {photoPreview ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <img
@@ -231,7 +236,7 @@ export default function LogVisitModal({ onCreated, onClose, defaultType }: Props
               </button>
             </div>
           ) : (
-            <input type="file" accept="image/*" onChange={handlePhotoChange} />
+            <input type="file" accept="image/*,video/*" onChange={handlePhotoChange} />
           )}
         </label>
         )}
