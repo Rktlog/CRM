@@ -183,14 +183,16 @@ export async function deleteContact(id: string): Promise<void> {
   catch (e) { if (tableMissing(e)) throw new AlertError(NOT_SET_UP, 503); throw e; }
 }
 
-/** "Send me a test": the test email goes to the manager who pressed it, never to the list. */
-export async function sendTest(kind: Kind, managerEmail: string | null): Promise<{ sent: boolean; reason: string; to: string | null }> {
+/** "Send me a test": the test email goes to the manager who pressed it, never to the list. `sample` is a real example (shipment alerts); otherwise a plain test message is sent. */
+export async function sendTest(kind: Kind, managerEmail: string | null, sample?: { subject: string; body: string }): Promise<{ sent: boolean; reason: string; to: string | null }> {
   const mine = cleanAddress(managerEmail);
   if (!mine && !isSandbox()) throw new AlertError('Radar does not have an email address for you, so it cannot send you a test.');
   const info = KIND_INFO[kind];
-  const r = await sendAlert(kind, {
-    subject: `[Radar] Test: ${info.label} alerts`,
-    body: `This is a test of the "${info.label}" alert from Radar.\n\nIf you can read this, alerts from this mailbox are working. Real alerts go to the addresses in the list in Settings, once that list is turned on.`,
-  }, { test: true, to: mine ? [mine] : [] });
+  const r = await sendAlert(kind, sample
+    ? { subject: sample.subject.replace(/^\[Radar\] /, '[Radar] TEST: '), body: `THIS IS A TEST made from a real purchase order. Nothing was sent to the list.\n\n${sample.body}` }
+    : {
+      subject: `[Radar] Test: ${info.label} alerts`,
+      body: `This is a test of the "${info.label}" alert from Radar.\n\nIf you can read this, alerts from this mailbox are working. Real alerts go to the addresses in the list in Settings, once that list is turned on.`,
+    }, { test: true, to: mine ? [mine] : [] });
   return { ...r, to: isSandbox() ? sandboxTestAddress() : mine };
 }

@@ -19,10 +19,18 @@ function ListEditor({ list, onChange }: { list: ListInfo; onChange: (s: State) =
   const [text, setText] = useState(list.addresses.join('\n'));
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [examples, setExamples] = useState<{ subject: string; body: string; about: string }[] | null>(null);
+  const shipment = list.kind === 'shipment_booked' || list.kind === 'shipment_landed';
   const changed = enabled !== list.enabled || text.split(/[\s,;]+/).filter(Boolean).join('\n') !== list.addresses.join('\n');
   async function save() {
     setBusy('save'); setMsg(null);
     try { onChange(await apiPut(`/alert-settings/lists/${list.kind}`, { enabled, addresses: text })); setMsg({ ok: true, text: 'Saved.' }); }
+    catch (e) { setMsg({ ok: false, text: (e as Error).message }); }
+    finally { setBusy(null); }
+  }
+  async function showExamples() {
+    setBusy('example'); setMsg(null);
+    try { setExamples((await apiGet(`/alert-settings/preview/${list.kind}`, { fresh: true })).samples); }
     catch (e) { setMsg({ ok: false, text: (e as Error).message }); }
     finally { setBusy(null); }
   }
@@ -47,8 +55,20 @@ function ListEditor({ list, onChange }: { list: ListInfo; onChange: (s: State) =
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button type="button" className="btn" style={small} disabled={busy !== null || !changed} onClick={save}>{busy === 'save' ? 'Saving…' : 'Save'}</button>
         <button type="button" className="btn secondary" style={small} disabled={busy !== null || changed} title={changed ? 'Save first' : undefined} onClick={test}>{busy === 'test' ? 'Sending…' : 'Send me a test'}</button>
+        {shipment && <button type="button" className="btn secondary" style={small} disabled={busy !== null} onClick={showExamples}>{busy === 'example' ? 'Loading…' : 'See an example'}</button>}
       </div>
       {msg && <div className={msg.ok ? 'save-msg ok' : 'save-msg err'} role={msg.ok ? 'status' : 'alert'}>{msg.text}</div>}
+      {examples && (
+        <div style={{ display: 'grid', gap: 8 }}>
+          <div className="acct-region">Examples made from your newest real {list.kind === 'shipment_booked' ? 'purchase orders' : 'deliveries'}. Nothing was sent.{examples.length === 0 ? ' There is nothing to show yet.' : ''} <button type="button" className="link-btn" onClick={() => setExamples(null)}>Hide</button></div>
+          {examples.map((x, i) => (
+            <details key={i} open={i === 0} style={{ border: '1px solid var(--line)', borderRadius: 6, padding: '6px 10px', background: 'var(--bg)' }}>
+              <summary style={{ cursor: 'pointer', fontSize: 13 }}><b>{x.subject}</b> <span className="acct-region">{x.about}</span></summary>
+              <pre style={{ whiteSpace: 'pre-wrap', margin: '8px 0 0', maxHeight: 360, overflow: 'auto', font: 'inherit', fontSize: 12 }}>{x.body}</pre>
+            </details>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -81,6 +101,30 @@ function ContactEditor({ contact, onChange, onDone }: { contact: Contact | null;
   );
 }
 
+type RunResult = { stopped: string | null; baseline: number; booked: { sent: number; waiting: number; skipped: number }; landed: { sent: number; waiting: number; skipped: number } };
+function ShipmentCheck() {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  async function run() {
+    setBusy(true); setMsg(null);
+    try {
+      const r: RunResult = await apiPost('/alert-settings/shipments/run', {});
+      if (r.stopped) setMsg({ ok: false, text: `Stopped: ${r.stopped}` });
+      else if (r.baseline > 0) setMsg({ ok: true, text: `First look: Radar noted the ${r.baseline} shipment${r.baseline === 1 ? '' : 's'} that already exist, so only NEW ones are emailed from now on.` });
+      else setMsg({ ok: true, text: `Looked. Booked: ${r.booked.sent} emailed, ${r.booked.waiting} waiting (for a due date or a retry), ${r.booked.skipped} skipped. Landed: ${r.landed.sent} emailed, ${r.landed.waiting} waiting, ${r.landed.skipped} skipped.` });
+    } catch (e) { setMsg({ ok: false, text: (e as Error).message }); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div style={box}>
+      <b>Shipments</b>
+      <div className="acct-region">When the schedule is set up, Radar looks every 30 minutes for newly booked purchase orders and newly received stock, and emails the Shipment booked and Shipment landed lists if they are on. It only ever emails NEW shipments: it first notes the ones that exist now. You can also look now.</div>
+      <div><button type="button" className="btn secondary" style={small} disabled={busy} onClick={run}>{busy ? 'Looking…' : 'Look for new shipments now'}</button></div>
+      {msg && <div className={msg.ok ? 'save-msg ok' : 'save-msg err'} role={msg.ok ? 'status' : 'alert'}>{msg.text}</div>}
+    </div>
+  );
+}
+
 export default function AlertSettingsCard() {
   const { role } = useAuth();
   const [s, setS] = useState<State | null>(null);
@@ -109,6 +153,7 @@ export default function AlertSettingsCard() {
             {s.mailbox.ready ? `Sending from ${s.mailbox.email}: connected and able to send.` : s.mailbox.problem}
           </div>
           {s.lists.map(l => <ListEditor key={l.kind + l.enabled + l.addresses.join()} list={l} onChange={setS} />)}
+          <ShipmentCheck />
 
           <div className="stat-label" style={{ marginTop: 6 }}>Supplier contacts</div>
           <div className="acct-region">Used for the draft email asking a supplier about availability and lead time.</div>

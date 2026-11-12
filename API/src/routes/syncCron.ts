@@ -4,6 +4,7 @@ import { syncPurchaseDates } from '../sync/syncPurchaseDates';
 import { syncProductDetails } from '../sync/syncProductDetails';
 import { syncCustomerDates } from '../sync/syncCustomers';
 import { runFollowUpDrafts } from '../lib/followupDrafts';
+import { runShipmentAlerts } from '../lib/shipmentAlerts';
 import { checkAllReplies } from '../lib/supplierEnquiry';
 
 // Jobs for Supabase's scheduler (pg_cron) to start by calling this API, so nothing extra has to be kept running anywhere:
@@ -30,6 +31,7 @@ export const JOBS: Record<string, Job> = {
   'product-details': { what: 'product descriptions, order increments and EOL from the description', run: () => syncProductDetails() },
   'customer-dates': { what: "DEAR's creation date for each customer", run: () => syncCustomerDates() },
   'followup-drafts': { what: 'payment reminder drafts on the first follow-up day', run: () => runFollowUpDrafts() },
+  'shipment-alerts': { what: 'emails when a shipment is booked or lands', run: () => runShipmentAlerts() },
   'supplier-replies': { what: 'replies to the supplier availability emails', run: () => checkAllReplies() },
 };
 
