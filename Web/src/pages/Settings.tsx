@@ -7,6 +7,7 @@ import RepHiddenAccounts from '../components/RepHiddenAccounts';
 import GmailCard from '../components/GmailCard';
 import CalendarSyncCard from '../components/CalendarSyncCard'
 import FollowUpDraftsCard from '../components/FollowUpDraftsCard';
+import DropboxCard from '../components/DropboxCard';
 import AlertSettingsCard from '../components/AlertSettingsCard';
 import ChangePasswordCard from '../components/ChangePasswordCard';
 import SyncStatus from '../components/SyncStatus';
@@ -148,6 +149,7 @@ export default function Settings() {
        <CalendarSyncCard />
        <GmailCard />
        <FollowUpDraftsCard />
+       <DropboxCard />
        <AlertSettingsCard />
        <ChangePasswordCard />
 
