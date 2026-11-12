@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { AlertError, deleteContact, getState, isKind, saveContact, saveList, sendTest } from '../lib/alerts';
+import { runShipmentAlerts, sampleMessages } from '../lib/shipmentAlerts';
 
 // Settings for the email alerts and the supplier contacts. Managers only, for every route.
 //   GET    /alert-settings                 the lists (on or off, and who they go to), the supplier contacts, whether the sales mailbox can send, and what was sent lately
@@ -8,6 +9,8 @@ import { AlertError, deleteContact, getState, isKind, saveContact, saveList, sen
 //   POST   /alert-settings/test/:kind      send a test email to the manager who pressed it (never to the list)
 //   PUT    /alert-settings/contacts        { id?, supplier, emails, cc, notes }   add or change a supplier's addresses
 //   DELETE /alert-settings/contacts/:id
+//   GET    /alert-settings/preview/:kind   (shipment_booked or shipment_landed) example emails built from the newest real purchase orders: nothing is sent or recorded
+//   POST   /alert-settings/shipments/run   look for new shipments now (the same as the scheduled job): emails the lists that are on
 export const alertSettingsRouter = Router();
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -37,7 +40,8 @@ alertSettingsRouter.post('/test/:kind', async (req, res) => {
     const kind = String(req.params.kind);
     if (!isKind(kind)) return res.status(404).json({ error: 'That kind of alert does not exist.' });
     const [me] = await prisma.$queryRaw<{ email: string | null }[]>`select email from crm.reps where id = ${req.rep!.id}::uuid`;
-    res.json(await sendTest(kind, me?.email ?? null));
+    const sample = kind === 'shipment_booked' || kind === 'shipment_landed' ? (await sampleMessages(kind, 1))[0] : undefined;   // a shipment test is a real example, when there is one
+    res.json(await sendTest(kind, me?.email ?? null, sample));
   } catch (e) { fail(res, e, 'test'); }
 });
 
@@ -58,4 +62,24 @@ alertSettingsRouter.delete('/contacts/:id', async (req, res) => {
     await deleteContact(String(req.params.id));
     res.json(await getState());
   } catch (e) { fail(res, e, 'delete contact'); }
+});
+
+alertSettingsRouter.get('/preview/:kind', async (req, res) => {
+  try {
+    if (!managersOnly(req, res)) return;
+    const kind = String(req.params.kind);
+    if (kind !== 'shipment_booked' && kind !== 'shipment_landed') return res.status(400).json({ error: 'Only the shipment alerts have an example.' });
+    res.json({ samples: await sampleMessages(kind, 3) });
+  } catch (e) { fail(res, e, 'preview'); }
+});
+
+const lastRun = new Map<string, number>();
+alertSettingsRouter.post('/shipments/run', async (req, res) => {
+  try {
+    if (!managersOnly(req, res)) return;
+    const now = Date.now(), prev = lastRun.get(req.rep!.id) ?? 0;
+    if (now - prev < 30_000) return res.status(429).json({ error: 'It was only just run. Wait half a minute.' });
+    lastRun.set(req.rep!.id, now);
+    res.json(await runShipmentAlerts());
+  } catch (e) { fail(res, e, 'shipments run'); }
 });
