@@ -14,7 +14,7 @@ import { productBreakdownFor } from '../lib/productBreakdown';
 import OrderLines from '../components/OrderLines';
 import { todayLocal, dateInputValue, isoForDay } from '../lib/logDate';
 import AccountGmail from '../components/AccountGmail';
-import DraftEmailButton from '../components/DraftEmailButton';
+import EmailButton from '../components/EmailComposer';
 import DictationTextarea from '../components/DictationTextarea';
 import DeleteLogLink from '../components/DeleteLogLink';
 import type { Account } from '../lib/types';
@@ -280,11 +280,12 @@ export default function AccountDetail() {
           {/* Credit and reservations: what the team has set aside, on both accounts */}
           <CreditReservations accountId={account.id} accountName={account.name} />
           <AccountEmails accountId={account.id} />
-              <DraftEmailButton accountId={account.id} accountName={account.name} defaultTo={account.email} />
+              <EmailButton target={{ kind: 'account', accountId: account.id }} name={account.name} defaultTo={account.email} onSent={load} />
               <AccountGmail accountId={account.id} />
  
           <div className="card">
             <h3>Log a phone call, email, F2F visit or remark</h3>
+            <div className="acct-region" style={{ margin: '0 0 8px' }}>Emailing {account.name}? Write it here and Radar sends it from your Gmail and logs it for you: <EmailButton variant="link" label="Write and send an email" target={{ kind: 'account', accountId: account.id }} name={account.name} defaultTo={account.email} onSent={load} /></div>
             <form onSubmit={handleLog}>
               <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                 {ACTIVITY_KINDS.map(t => (

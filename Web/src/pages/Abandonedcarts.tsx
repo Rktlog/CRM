@@ -1,6 +1,7 @@
 import { ChangeEvent, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet, apiPost, apiDelete, apiPostText } from '../lib/api';
+import EmailButton, { cartDefaults } from '../components/EmailComposer';
 import { fmtDateWithYear } from '../lib/types';
 import DictationTextarea from '../components/DictationTextarea';
 import { useAuth } from '../context/AuthContext';
@@ -252,6 +253,7 @@ function CartLog({ cart: c, available, onLogs }: { cart: Cart; available: boolea
   return (
     <div className="pd-section">
       <div className="pd-section-title">Log ({c.logs.length})</div>
+      {available && <div style={{ margin: '0 0 8px' }}><EmailButton variant="link" label="Write and send an email to this customer" target={{ kind: 'cart', cartKey: c.id }} name={c.account?.name ?? c.contact} defaultTo={c.email} {...cartDefaults(c.contact, c.items)} onSent={r => { if (r.cartLog) onLogs([r.cartLog, ...c.logs]); }} /></div>}
       {!available && <div className="pd-sub">Logging is not set up yet. Ask for abandoned-cart-logs.sql to be run in the database.</div>}
       {available && (
         <div style={{ marginBottom: 10, maxWidth: 640 }}>
