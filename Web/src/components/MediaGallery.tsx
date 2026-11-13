@@ -55,7 +55,7 @@ function Lightbox({ s, onClose }: { s: Shown; onClose: () => void }) {
 export function ActivityMedia({ accountId, activityId }: { accountId: string; activityId: string }) {
   const { items } = useAccountMedia(accountId);
   const [open, setOpen] = useState<Shown | null>(null);
-  const mine = items.filter(i => i.activityId === activityId);
+  const mine = items.filter(i => i.activityId === activityId && !i.fromOld);   // a moved old photo is still shown by the log entry itself, so it is not shown twice
   if (!mine.length) return null;
   return (
     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
@@ -69,7 +69,8 @@ export function ActivityMedia({ accountId, activityId }: { accountId: string; ac
 export default function MediaGallery({ accountId, legacy = [] }: { accountId: string; legacy?: { id: string; url: string; at: string; by: string | null }[] }) {
   const { items, linksAvailable } = useAccountMedia(accountId);
   const [open, setOpen] = useState<Shown | null>(null);
-  const all: Shown[] = [...items.map(toShown), ...legacy.map(l => ({ key: `old-${l.id}`, kind: 'photo' as const, url: l.url, name: 'Visit photo', at: l.at, by: l.by, missing: false }))].sort((a, b) => b.at.localeCompare(a.at));
+  const moved = new Set(items.filter(i => i.fromOld && i.url && i.activityId).map(i => i.activityId));   // an old photo that now has a Dropbox copy is shown once, from Dropbox
+  const all: Shown[] = [...items.map(toShown), ...legacy.filter(l => !moved.has(l.id)).map(l => ({ key: `old-${l.id}`, kind: 'photo' as const, url: l.url, name: 'Visit photo', at: l.at, by: l.by, missing: false }))].sort((a, b) => b.at.localeCompare(a.at));
   if (!all.length) return null;
   return (
     <div className="card">
