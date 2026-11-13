@@ -19,7 +19,7 @@ async function get(path: string, retries = 1): Promise<any> {
   const res = await ft(`${base()}${path}`, { method: 'GET', headers: { Authorization: `Basic ${Buffer.from(`radar:${key()}`).toString('base64')}`, Accept: 'application/json' } });
   if (res.status === 429 && retries > 0) { await new Promise(r => setTimeout(r, Math.min(Number(res.headers.get('retry-after') ?? 2), 5) * 1000)); return get(path, retries - 1); }
   if (res.status === 401 || res.status === 403) throw new MailchimpError('Mailchimp did not accept the API key.', res.status);
-  if (!res.ok) { let t = ''; try { t = String((await res.json())?.detail ?? '').slice(0, 120); } catch { /* not JSON */ } throw new MailchimpError(t || `Mailchimp answered ${res.status}`, res.status); }
+    if (!res.ok) { let t = ''; try { t = String(((await res.json()) as { detail?: unknown } | null)?.detail ?? '').slice(0, 120); } catch { /* not JSON */ } throw new MailchimpError(t || `Mailchimp answered ${res.status}`, res.status); }
   return res.json();
 }
 export type Campaign = { id: string; title: string; subject: string | null; status: 'sent' | 'scheduled'; at: string | null; listName: string | null; segment: string | null; emailsSent: number; opens: number; clicks: number };
