@@ -6,7 +6,7 @@ import { apiGet, apiPost } from './api';
 // - A file goes up FIRST, and only then is the log entry made, so a failed upload can never leave a half-saved log. The file is tied to the log entry afterwards.
 // - A big photo is made smaller before it is sent (2000 pixels on the long side), so a phone photo is hundreds of KB, not several MB. A video is sent as it is.
 const API_URL = import.meta.env.VITE_API_URL;
-export type MediaItem = { id: string; accountId: string; activityId: string | null; kind: 'photo' | 'video'; name: string; mime: string; size: number; createdAt: string; by: string | null; mine: boolean; canDelete: boolean; url: string | null; missing: boolean };
+export type MediaItem = { id: string; accountId: string; activityId: string | null; kind: 'photo' | 'video'; name: string; mime: string; size: number; createdAt: string; by: string | null; mine: boolean; canDelete: boolean; url: string | null; missing: boolean; fromOld?: boolean };
 export type Capabilities = { enabled: boolean; reason: string | null; maxPhotoMb: number; maxVideoMb: number };
 const UNAVAILABLE: Capabilities = { enabled: false, reason: 'Photos and videos are not available yet.', maxPhotoMb: 30, maxVideoMb: 250 };
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));

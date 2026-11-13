@@ -10,6 +10,8 @@ import CouncilStores from './pages/CouncilStores';
 import SalesData from './pages/SalesData';
 import Settings from './pages/Settings';
 import ActivityLog from './pages/ActivityLog';
+import MarketingDashboard from './pages/MarketingDashboard';
+import MarketingFocus from './pages/MarketingFocus';
 import Planner from './pages/Planner';
 import Reports from './pages/Reports';
 import ReportBuilder from './pages/ReportBuilder';
@@ -77,6 +79,8 @@ function Routed() {
         <Route path="marketing/templates" element={<MarketingTemplates />} />
         <Route path="marketing/automations" element={<MarketingAutomations />} />
         <Route path="marketing/settings" element={<MarketingSettings />} />
+        <Route path="marketing-dashboard" element={<MarketingDashboard />} />
+        <Route path="marketing-dashboard/:focus" element={<MarketingFocus />} />
         <Route path="orders" element={<Orders />} />
         <Route path="orders/:id" element={<OrderDetail />} />
         <Route path="abandoned-carts" element={<AbandonedCarts />} />

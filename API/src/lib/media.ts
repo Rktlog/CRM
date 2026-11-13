@@ -147,11 +147,11 @@ export async function runFolderJob(limit = 40): Promise<FolderRun> {
 }
 
 // ---------- the files ----------
-export type MediaItem = { id: string; accountId: string; activityId: string | null; kind: 'photo' | 'video'; name: string; mime: string; size: number; createdAt: string; by: string | null; mine: boolean; canDelete: boolean; url: string | null; missing: boolean };
-type Row = { id: string; account_id: string; activity_id: string | null; uploaded_by: string | null; kind: 'photo' | 'video'; name: string; mime: string; size: string | number; dropbox_path: string; created_at: Date; by_name?: string | null };
+export type MediaItem = { id: string; accountId: string; activityId: string | null; kind: 'photo' | 'video'; name: string; mime: string; size: number; createdAt: string; by: string | null; mine: boolean; canDelete: boolean; url: string | null; missing: boolean; fromOld: boolean };   // fromOld: a copy of an old Supabase photo that was moved to Dropbox
+type Row = { id: string; account_id: string; activity_id: string | null; uploaded_by: string | null; kind: 'photo' | 'video'; name: string; mime: string; size: string | number; dropbox_path: string; created_at: Date; by_name?: string | null; source_url?: string | null };
 const toItem = (r: Row, rep: Rep, url: string | null, missing = false): MediaItem => ({
   id: r.id, accountId: r.account_id, activityId: r.activity_id, kind: r.kind, name: r.name, mime: r.mime, size: Number(r.size), createdAt: new Date(r.created_at).toISOString(),
-  by: r.by_name ?? null, mine: r.uploaded_by === rep.id, canDelete: r.uploaded_by === rep.id || rep.role === 'manager', url, missing,
+  by: r.by_name ?? null, mine: r.uploaded_by === rep.id, canDelete: r.uploaded_by === rep.id || rep.role === 'manager', url, missing, fromOld: !!r.source_url,
 });
 const links = new Map<string, { url: string; until: number }>();
 async function linkFor(token: string, path: string): Promise<{ url: string | null; missing: boolean }> {

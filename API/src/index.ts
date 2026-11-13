@@ -24,6 +24,7 @@ import { marketingPublicRouter } from './routes/marketingPublic';
 import { gmailRouter, gmailCallbackRouter, gmailCronRouter } from './routes/gmail';
 import { calendarRouter, calendarCronRouter, calendarCallbackRouter } from './routes/calendar';
 import { orderingRouter } from './routes/ordering';
+import { marketingDashboardRouter } from './routes/marketingDashboard';
 import { dropboxRouter, dropboxCallbackRouter } from './routes/dropbox';
 import { mediaRouter } from './routes/media';
 import { emailSendRouter } from './routes/emailSend';
@@ -98,6 +99,7 @@ app.use('/calendar', requireAuth, calendarRouter);       // was missing: without
 app.use('/sync-cron', syncCronRouter);          // started by Supabase's scheduler, secret header, no login
 app.use('/ai', requireAuth, aiRouter);
 app.use('/ordering', requireAuth, orderingRouter);   // the Ordering page (managers): what to order, from the database
+app.use('/mkt', requireAuth, marketingDashboardRouter);   // the marketing dashboard (managers only)
 app.use('/dropbox/callback', dropboxCallbackRouter);   // Dropbox sends the manager back here: no login, so it must come before /dropbox
 app.use('/dropbox', requireAuth, dropboxRouter);   // the Dropbox connection and customer folders (managers)
 app.use('/media', requireAuth, mediaRouter);   // photos and videos on accounts, kept in the company Dropbox
