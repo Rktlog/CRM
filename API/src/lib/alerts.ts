@@ -117,6 +117,25 @@ export async function sendAlert(kind: Kind, msg: { subject: string; body: string
   }
 }
 
+/** Several products asked for the same store at once: one email listing them all, instead of one email each. */
+export function newRequestsMessage(items: RequestItem[]): { subject: string; body: string } {
+  const f = items[0]!;
+  const lines = [
+    `${items.length} product requests were made together in Radar, for the same store.`, '',
+    `For: ${f.customer ?? 'no store given'}`,
+    `Asked by: ${f.requestedBy.name ?? 'someone who has left'}`,
+    `Needed by: ${f.neededBy ?? 'no date given'}`, '',
+    ...items.map(i => `- ${i.sku ?? ''} ${oneLine(i.itemName, 80)}: ${i.qty ? `${i.qty.toLocaleString('en-AU')} units` : 'quantity not given'}${i.notes ? ` (${oneLine(i.notes, 120)})` : ''}`),
+    '', 'To answer them, open Order Forecast & Procurement in Radar and find them in the Special requests section.',
+  ];
+  return { subject: `[Radar] ${items.length} product requests for ${oneLine(f.customer ?? 'a store', 60)}`, body: lines.join('\n') };
+}
+/** One email for requests made together (just the usual one if there is only one). It never delays or breaks the requests. */
+export async function notifyNewRequests(items: RequestItem[]): Promise<void> {
+  if (!items.length) return;
+  if (items.length === 1) return notifyNewRequest(items[0]!);
+  try { await sendAlert('new_request', newRequestsMessage(items), { relatedId: items[0]!.id }); } catch { /* sendAlert does not throw; this is only a last guard */ }
+}
 /** A new product request: email the ordering team if a manager has switched that list on. It never delays or breaks the request. */
 export async function notifyNewRequest(item: RequestItem): Promise<void> {
   try { await sendAlert('new_request', newRequestMessage(item), { relatedId: item.id }); } catch { /* sendAlert does not throw; this is only a last guard */ }

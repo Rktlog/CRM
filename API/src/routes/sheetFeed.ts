@@ -5,6 +5,8 @@ import { pickPrice, WHOLESALE, RETAIL } from '../lib/pricing';
 import { chooseEta, incomingFor } from '../lib/eta';
 import { melDay } from '../lib/receivables';
 import { decodeEntities } from '../lib/htmlText';
+import { statusOf } from '../lib/productCartons';
+import { loadStatuses } from '../lib/productStatuses';
 
 // Read-only feeds for Google Sheets. A script in the sheet (google-sheet/crm-feed.gs) asks for a feed on a timer and writes it
 // to a tab. This is NOT behind a login: it has its own secret, SHEET_FEED_TOKEN (at least 24 characters, set on the server),
@@ -39,12 +41,13 @@ type Col = { name: string; type: 'text' | 'number' | 'money' | 'date' };
 // The columns of the team's own product sheet, in its order (the headers are spelled exactly as in that sheet), then the dimensions
 // and weight. `type` tells the script how to format each one.
 export const PRODUCT_COLUMNS: Col[] = [
-  { name: 'Discontinued', type: 'text' }, { name: 'SKU', type: 'text' }, { name: 'Product Name', type: 'text' }, { name: 'Brand', type: 'text' }, { name: 'Barcode', type: 'text' },
+  { name: 'Status', type: 'text' }, { name: 'SKU', type: 'text' }, { name: 'Product Name', type: 'text' }, { name: 'Brand', type: 'text' }, { name: 'Barcode', type: 'text' },
   { name: 'Retail (ex GST)', type: 'money' }, { name: 'Wholesale (ex GST)', type: 'money' }, { name: 'Trade (ex GST)', type: 'money' },
   { name: 'Increments', type: 'number' }, { name: 'Available', type: 'number' }, { name: 'Incoming', type: 'number' },
   { name: 'Available/PreOrder', type: 'text' }, { name: 'Next Availabillity', type: 'date' },
   { name: 'Description', type: 'text' }, { name: 'Image Links', type: 'text' }, { name: 'TAGS', type: 'text' },
   { name: 'Length (cm)', type: 'number' }, { name: 'Width (cm)', type: 'number' }, { name: 'Height (cm)', type: 'number' }, { name: 'Weight (kg)', type: 'number' },
+  { name: 'Inner carton', type: 'number' }, { name: 'Outer carton', type: 'number' }, { name: 'Supplier cost', type: 'number' }, { name: 'Cost currency', type: 'text' },   // the cost is in the supplier's currency, named in the next column
 ];
 const TRADE = /^trade\b/i;   // the price tier called Trade (or "Trade Price"), not "Trader ..."
 
@@ -89,7 +92,14 @@ async function extras() {
   try {
     for (const r of await prisma.$queryRaw<{ sku: string; tags: string[] | null }[]>`select sku, tags from crm.products where tags is not null`) if (r.tags?.length) tags.set(r.sku, r.tags.join(', '));
   } catch { /* not there yet */ }
-  return { description, increment, specs, tags };
+  const cartons = new Map<string, { inner: number | null; outer: number | null; cost: number | null; cur: string | null }>();
+  try {
+    for (const r of await prisma.$queryRaw<{ sku: string; inner_carton_qty: number | null; outer_carton_qty: number | null; supplier_cost: string | number | null; supplier_cost_currency: string | null }[]>`select sku, inner_carton_qty, outer_carton_qty, supplier_cost, supplier_cost_currency from crm.products where inner_carton_qty is not null or outer_carton_qty is not null or supplier_cost is not null`)
+      cartons.set(r.sku, { inner: num(r.inner_carton_qty), outer: num(r.outer_carton_qty), cost: num(r.supplier_cost), cur: text(r.supplier_cost_currency) });
+  } catch { /* not there yet */ }
+  let labels = new Map<string, string>();
+  try { labels = new Map((await loadStatuses()).list.map(s => [s.key, s.label])); } catch { /* the usual words are used */ }
+  return { description, increment, specs, tags, cartons, labels };
 }
 
 async function productsBody(activeOnly: boolean) {
@@ -104,12 +114,13 @@ async function productsBody(activeOnly: boolean) {
     const prices = p.prices ?? {}, sp = x.specs.get(p.sku);
     const eta = chooseEta(p.eta, Number(p.on_order ?? 0), incoming.get(p.sku) ?? [], today);
     return [
-      isDiscontinued(p.status, p.lifecycle) ? 'Yes' : null, p.sku, text(p.name), text(p.brand), text(p.barcode),
+      statusOf(p.status, p.lifecycle, x.labels), p.sku, text(p.name), text(p.brand), text(p.barcode),
       pickPrice(prices, RETAIL)?.price ?? null, pickPrice(prices, WHOLESALE)?.price ?? null, pickPrice(prices, TRADE)?.price ?? null,
       x.increment.get(p.sku) ?? null, num(p.available), num(p.on_order),
       availabilityOf(p.lifecycle, num(p.available), num(p.on_order)) || null, eta?.date ?? null,
       x.description.get(p.sku) ?? null, text(p.image_url), x.tags.get(p.sku) ?? null,
       sp?.l ?? null, sp?.wd ?? null, sp?.h ?? null, sp?.w ?? null,
+      x.cartons.get(p.sku)?.inner ?? null, x.cartons.get(p.sku)?.outer ?? null, x.cartons.get(p.sku)?.cost ?? null, x.cartons.get(p.sku)?.cur ?? null,
     ];
   });
   return { updatedAt: new Date().toISOString(), count: rows.length, columns: PRODUCT_COLUMNS.map(c => c.name), types: PRODUCT_COLUMNS.map(c => c.type), rows };
@@ -119,7 +130,7 @@ async function productsBody(activeOnly: boolean) {
 const cache = new Map<string, { at: number; body: unknown }>();
 const CACHE_MS = 60_000;
 
-// GET /sheet-feed/products             every product, the discontinued ones marked in the Discontinued column
+// GET /sheet-feed/products             every product, with its Status (Active, a stage such as EOL, or Discontinued)
 // GET /sheet-feed/products?active=1    only the products DEAR does not have as Deprecated
 sheetFeedRouter.get('/products', async (req, res) => {
   if (!allowed(req, res)) return;

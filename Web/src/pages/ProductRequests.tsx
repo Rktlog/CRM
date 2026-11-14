@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { apiGet, apiPost } from '../lib/api';
 import { ago, requestsChanged, shortDate, STATUS_LABEL, STATUS_TONE, type RequestItem } from '../lib/productRequests';
+import BulkRequests from '../components/BulkRequests';
 
 // Product Requests: the sales team asks for a product, either one we already sell (to be ordered or topped up) or a new one. The ordering team sees every request
 // in the Special requests section of Order Forecast & Procurement, with the stock and what is already on order, and answers here with a status and a note.
@@ -10,7 +11,7 @@ const label: CSSProperties = { display: 'grid', gap: 4, fontSize: 13 };
 const todayLocal = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
 export default function ProductRequests() {
-  const [kind, setKind] = useState<'existing' | 'new'>('existing');
+  const [kind, setKind] = useState<'existing' | 'new' | 'several'>('existing');
   const [q, setQ] = useState('');
   const [found, setFound] = useState<Found[]>([]);
   const [chosen, setChosen] = useState<Found | null>(null);
@@ -79,11 +80,13 @@ export default function ProductRequests() {
 
       <div className="section">
         <div className="panel-title">Make a request</div>
+        <div role="radiogroup" aria-label="What are you asking for" style={{ display: 'flex', gap: 18, fontSize: 14, flexWrap: 'wrap', marginBottom: 12 }}>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="radio" name="kind" checked={kind === 'existing'} onChange={() => setKind('existing')} /> A product we already sell</label>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="radio" name="kind" checked={kind === 'new'} onChange={() => setKind('new')} /> A new product</label>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="radio" name="kind" checked={kind === 'several'} onChange={() => setKind('several')} /> Several products for one store</label>
+        </div>
+        {kind === 'several' ? <BulkRequests onMade={() => { requestsChanged(); loadMine(); }} /> : (
         <form onSubmit={submit} noValidate style={{ display: 'grid', gap: 12, maxWidth: 440 }}>
-          <div role="radiogroup" aria-label="What are you asking for" style={{ display: 'flex', gap: 18, fontSize: 14 }}>
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="radio" name="kind" checked={kind === 'existing'} onChange={() => setKind('existing')} /> A product we already sell</label>
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="radio" name="kind" checked={kind === 'new'} onChange={() => setKind('new')} /> A new product</label>
-          </div>
 
           {kind === 'existing' ? (
             chosen ? (
@@ -125,6 +128,7 @@ export default function ProductRequests() {
           <div><button className="btn" type="submit" disabled={busy}>{busy ? 'Sending…' : 'Send request'}</button></div>
           {msg && <div className={msg.ok ? 'save-msg ok' : 'save-msg err'} role={msg.ok ? 'status' : 'alert'}>{msg.text}</div>}
         </form>
+        )}
       </div>
 
       <div className="section">

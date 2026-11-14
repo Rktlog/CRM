@@ -11,6 +11,7 @@ import DropboxCard from '../components/DropboxCard';
 import AlertSettingsCard from '../components/AlertSettingsCard';
 import ChangePasswordCard from '../components/ChangePasswordCard';
 import SyncStatus from '../components/SyncStatus';
+import SettingsGroup from '../components/SettingsGroup';
 
 type Rep = { id: string; name: string; role: string };
 type Target = { id: string; repId: string; repName: string; year: number; quarter: number; amount: number };
@@ -144,15 +145,18 @@ export default function Settings() {
       <h1>Settings</h1>
 
 
-      <SyncStatus />
+      <SettingsGroup id="sync" title="Data sync" summary="When DEAR and the other systems last updated Radar"><SyncStatus /></SettingsGroup>
 
+       <SettingsGroup id="google" title="My Google account" summary="Calendar, Gmail and follow-up drafts" defaultOpen={role === 'rep'}>
        <CalendarSyncCard />
        <GmailCard />
        <FollowUpDraftsCard />
-       <DropboxCard />
-       <AlertSettingsCard />
+       </SettingsGroup>
+       {isManager && <SettingsGroup id="dropbox" title="Photos and videos (Dropbox)" summary="Connect the company Dropbox"><DropboxCard /></SettingsGroup>}
+       {isManager && <SettingsGroup id="alerts" title="Email alerts and supplier contacts" summary="Who is emailed, and when"><AlertSettingsCard /></SettingsGroup>}
        <ChangePasswordCard />
 
+      <SettingsGroup id="teams" title="Teams and targets" summary={isManager ? 'Which states each rep covers, and budget targets' : 'Budget targets'}>
       {isManager && (
         <div className="section">
           <div className="panel-title">Assign reps to states</div>
@@ -263,6 +267,7 @@ export default function Settings() {
           </div>
         )}
       </div>
+    </SettingsGroup>
     </>
   );
 }

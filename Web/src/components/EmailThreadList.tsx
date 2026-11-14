@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { fmtDate } from '../lib/types';
+import EmailButton, { type Target } from './EmailComposer';
 
 // Emails between the team and a customer, as conversations. Used on the customer's account (all their emails) and on an order
 // (only the emails about that order). Under each conversation: the latest message in one line (Claude's summary when there is one,
@@ -17,7 +18,7 @@ const OrderChip = ({ o }: { o: EmailOrder }) => o.id
   ? <Link to={`/orders/${o.id}`} className="pill neutral" style={{ textDecoration: 'none' }} title="Open this order">{o.number}</Link>
   : <span className="pill neutral">{o.number}</span>;
 
-export default function EmailThreadList({ threads, hideOrder, limit = 5 }: { threads: EmailThread[]; hideOrder?: string; limit?: number }) {
+export default function EmailThreadList({ threads, hideOrder, limit = 5, replyTarget, replyName }: { threads: EmailThread[]; hideOrder?: string; limit?: number; replyTarget?: Target; replyName?: string }) {
   const [open, setOpen] = useState<string | null>(null);
   const [all, setAll] = useState(false);
   const shown = all ? threads : threads.slice(0, limit);
@@ -42,6 +43,7 @@ export default function EmailThreadList({ threads, hideOrder, limit = 5 }: { thr
                 {orders.map(o => <OrderChip key={o.number} o={o} />)}
               </div>
             )}
+            {replyTarget && <div style={{ margin: '2px 0 0 22px' }}><EmailButton variant="link" label="Reply" target={replyTarget} name={replyName ?? 'them'} replyThreadId={t.threadId} defaultSubject={/^re:/i.test(t.subject) ? t.subject : `Re: ${t.subject}`} /></div>}
             {open === t.threadId && (
               <div style={{ margin: '6px 0 2px 22px' }}>
                 {t.messages.map(m => (
