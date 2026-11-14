@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { apiGet } from '../lib/api';
 import EmailThreadList, { type EmailThread } from './EmailThreadList';
+import EmailButton from './EmailComposer';
 
 // On an order: only the emails about THIS order (so nobody has to open the customer's account and search). An email is linked when it
 // names the order number, or, for reps who switched on summaries, when Claude matched it to the order. Hidden if there are none.
@@ -17,8 +18,11 @@ export default function OrderEmails({ orderId }: { orderId: string }) {
   if (!threads.length) return null;
   return (
     <div className="card">
-      <h3>Emails about this order</h3>
-      <EmailThreadList threads={threads} hideOrder={number} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }}>
+        <h3>Emails about this order</h3>
+        <EmailButton variant="link" label="New email" target={{ kind: 'order', orderId }} name="this customer" />
+      </div>
+      <EmailThreadList threads={threads} hideOrder={number} replyTarget={{ kind: 'order', orderId }} replyName="this customer" />
     </div>
   );
 }

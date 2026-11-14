@@ -8,6 +8,7 @@ import { activityQuery, Range, RANGE_LABEL, rangeDates } from '../lib/activityRa
 import LogVisitModal from '../components/LogVisitModal';
 import EditActivityModal from '../components/EditActivityModal';
 import DeleteLogLink from '../components/DeleteLogLink';
+import EmailButton from '../components/EmailComposer';
 
 // Activity log: every phone call, email and F2F visit logged against any store the person can
 // see, newest first, and a place to log a new one. (This was the F2F visit log.)
@@ -114,6 +115,7 @@ export default function ActivityLog() {
               <div>{fmtDate(v.occurredAt)}</div>
               <div style={{ color: 'var(--ink-soft)' }}>
                 {v.orderNumber && v.orderId && <div><Link to={`/orders/${v.orderId}`} className="order-link" onClick={e => e.stopPropagation()}>On order {v.orderNumber}</Link></div>}
+                {v.type === 'email' && <div onClick={e => e.stopPropagation()}><EmailButton variant="link" label={v.orderId ? 'Email about this order' : 'Email them'} target={v.orderId ? { kind: 'order', orderId: v.orderId } : { kind: 'account', accountId: v.accountId }} name={v.accountName} /></div>}
                 {v.note}
               </div>
               <div>

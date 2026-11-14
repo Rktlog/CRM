@@ -5,6 +5,7 @@ import { fmtMoney, fmtDateWithYear, fmtPayDate } from '../lib/types';
 import { orderStatusPills, paymentTag, stageTag } from '../lib/orderStatus';
 import OrderLog from '../components/OrderLog';
 import OrderEmails from '../components/OrderEmails';
+import EmailButton from '../components/EmailComposer';
 
 type Line = {
   sku: string; productName: string; brand: string | null;
@@ -108,6 +109,7 @@ export default function OrderDetail() {
           </div>
         </div>
         <div className="order-pills">{orderStatusPills(order)}</div>
+        <EmailButton variant="inline" label="Email about this order" target={{ kind: 'order', orderId: order.id }} name={order.account.name} defaultSubject={`Order ${order.number}`} />
       </div>
 
       <div className="detail-grid">

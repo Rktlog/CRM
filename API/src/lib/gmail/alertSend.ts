@@ -7,7 +7,7 @@ import { googleFetch, parseGoogle } from './google';
 // switched on "Let Radar send emails I write here"). It is not used by the Gmail routes, the drafts, or anything else.
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
-export async function sendRawMessage(accessToken: string, raw: string): Promise<{ id: string; threadId: string }> {
-  const b = await parseGoogle(await googleFetch(`${API}/messages/send`, { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw }) }));
+export async function sendRawMessage(accessToken: string, raw: string, threadId?: string | null): Promise<{ id: string; threadId: string }> {   // threadId: a reply goes into the conversation it answers
+  const b = await parseGoogle(await googleFetch(`${API}/messages/send`, { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw, ...(threadId ? { threadId } : {}) }) }));
   return { id: String(b.id ?? ''), threadId: String(b.threadId ?? '') };
 }

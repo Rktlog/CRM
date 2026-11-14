@@ -4,6 +4,7 @@ import { apiPatch, apiPost } from '../lib/api';
 import { fmtMoney, fmtDate, fmtDateWithYear, fmtDuration } from '../lib/types';
 import { todayLocal } from '../lib/logDate';
 import OrderLog from './OrderLog';
+import EmailButton from './EmailComposer';
 
 // Orders > Open quotes. One row per quote or unpaid order: order no, customer, state, order date, age, total, what is
 // still to pay, and the next follow-up. An order stays here until it is both paid and confirmed. Click a row to expand
@@ -177,6 +178,7 @@ export default function OpenQuotesTable({ rows, showRep, repOptions = [] }: { ro
                         </div>
                         <div>
                           <div className="stat-label" style={{ marginBottom: 6 }}>Notes on this order</div>
+                          <div onClick={e => e.stopPropagation()} style={{ margin: '0 0 6px' }}><EmailButton variant="link" label="Email about this order" target={{ kind: 'order', orderId: r.id }} name={r.customer} defaultSubject={`Order ${r.number}`} /></div>
                           <OrderLog orderId={r.id} accountId={r.accountId} accountName={r.customer} />
                         </div>
                       </div>

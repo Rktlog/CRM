@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { cancelOwn, createRequest, listClosed, listMine, listOpen, parseNewRequest, parseUpdate, RequestError, summary, updateRequest } from '../lib/productRequests';
-import { notifyNewRequest } from '../lib/alerts';
+import { notifyNewRequest, notifyNewRequests } from '../lib/alerts';
+import { checkBulk, createBulk, parseBulkList } from '../lib/productRequestsBulk';
 
 // Special product requests.
 //   POST  /product-requests            anyone: ask for a product (one we sell, or a new one)
@@ -29,6 +30,22 @@ productRequestsRouter.post('/', async (req, res) => {
     if (!duplicate) void notifyNewRequest(item);   // an email to the ordering team, if a manager has switched that list on in Settings. It never delays or breaks the request.
     res.status(duplicate ? 200 : 201).json({ request: item, duplicate });
   } catch (e) { fail(res, e, 'create'); }
+});
+
+// Several products for the same store at once. /bulk/check reads a pasted or uploaded list (or the picked products) and says what Radar knows about each, making nothing.
+productRequestsRouter.post('/bulk/check', async (req, res) => {
+  try {
+    const parsed = typeof req.body?.text === 'string' ? parseBulkList(req.body.text) : { rows: Array.isArray(req.body?.rows) ? req.body.rows.slice(0, 100).map((r: any, i: number) => ({ line: i + 1, sku: String(r?.sku ?? '').trim(), qty: r?.qty == null || r.qty === '' ? null : Number(r.qty), note: r?.note ? String(r.note).slice(0, 300) : null })) : [], problems: [] };
+    const customer = typeof req.body?.customer === 'string' && req.body.customer.trim() ? req.body.customer.trim() : null;
+    res.json({ rows: parsed.rows.length ? await checkBulk(parsed.rows, customer) : [], problems: parsed.problems });
+  } catch (e) { fail(res, e, 'bulk check'); }
+});
+productRequestsRouter.post('/bulk', async (req, res) => {
+  try {
+    const r = await createBulk(req.rep!.id, req.body ?? {}, melbourneToday());
+    void notifyNewRequests(r.created);   // ONE email for the lot, if a manager has switched that list on
+    res.status(r.created.length ? 201 : 200).json(r);
+  } catch (e) { fail(res, e, 'bulk create'); }
 });
 
 productRequestsRouter.get('/mine', async (req, res) => { try { res.json({ items: await listMine(req.rep!.id) }); } catch (e) { fail(res, e, 'mine'); } });

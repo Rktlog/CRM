@@ -4,6 +4,7 @@ import { syncPurchaseDates } from '../sync/syncPurchaseDates';
 import { syncProductDetails } from '../sync/syncProductDetails';
 import { syncCustomerDates } from '../sync/syncCustomers';
 import { runFollowUpDrafts } from '../lib/followupDrafts';
+import { syncProductCartons } from '../lib/productCartons';
 import { movePhotos } from '../lib/movePhotos';
 import { syncMailchimp } from '../lib/mailchimp';
 import { runFolderJob } from '../lib/media';
@@ -34,6 +35,7 @@ export const JOBS: Record<string, Job> = {
   'product-details': { what: 'product descriptions, order increments and EOL from the description', run: () => syncProductDetails() },
   'customer-dates': { what: "DEAR's creation date for each customer", run: () => syncCustomerDates() },
   'followup-drafts': { what: 'payment reminder drafts on the first follow-up day', run: () => runFollowUpDrafts() },
+  'product-cartons': { what: 'reads inner and outer carton and supplier cost from DEAR (read only)', run: () => syncProductCartons() },
   'move-photos': { what: 'copies old visit photos from Supabase to Dropbox (run it by hand until none are left)', run: () => movePhotos() },
   'mkt-mailchimp': { what: 'reads Mailchimp campaigns and clicks (read only)', run: () => syncMailchimp() },
   'dropbox-folders': { what: 'customer folders in Dropbox', run: () => runFolderJob() },

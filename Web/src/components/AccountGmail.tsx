@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { apiGet } from '../lib/api';
 import EmailThreadList, { type EmailThread } from './EmailThreadList';
+import EmailButton from './EmailComposer';
 
 // On an account: the emails between the team and this customer, as conversations, each with a one-line summary and the orders it is
 // about. Hidden if there are none. If they cannot be loaded it says so and why, rather than quietly showing nothing.
@@ -15,8 +16,11 @@ export default function AccountGmail({ accountId }: { accountId: string }) {
   if (!threads.length) return null;
   return (
     <div className="card">
-      <h3>Emails with them</h3>
-      <EmailThreadList threads={threads} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }}>
+        <h3>Emails with them</h3>
+        <EmailButton variant="link" label="New email" target={{ kind: 'account', accountId }} name="this customer" />
+      </div>
+      <EmailThreadList threads={threads} replyTarget={{ kind: 'account', accountId }} replyName="this customer" />
     </div>
   );
 }
