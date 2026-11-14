@@ -79,17 +79,34 @@ export function explainProduct(p: any): string[] {
 }
 
 // ---------- the job: read DEAR, save onto crm.products ----------
-export type CartonResult = { checked: number; updated: number; withInner: number; withOuter: number; withCost: number; skipped: string | null; examples: { sku: string; inner: number | null; outer: number | null; cost: number | null; currency: string | null; supplier: string | null }[] };
+export type Diagnostics = { withSuppliersList: number; supplierFields: string[]; innerField: string | null; outerField: string | null };
+export type CartonResult = { checked: number; updated: number; withInner: number; withOuter: number; withCost: number; skipped: string | null; diagnostics: Diagnostics; examples: { sku: string; inner: number | null; outer: number | null; cost: number | null; currency: string | null; supplier: string | null }[] };
 const missingColumns = (e: unknown) => (e as any)?.code === '42703' || (/inner_carton_qty|outer_carton_qty|supplier_cost|supplier_name/.test(String((e as any)?.message ?? e)) && /does not exist|column/i.test(String((e as any)?.message ?? e)));
+/** Every product from DEAR WITH its Suppliers list (DEAR leaves the suppliers out unless it is asked for them), 100 at a time, as Radar's other product reads do. */
+export async function fetchProductsWithSuppliers(): Promise<any[]> {
+  const { dearGet } = await import('../sync/dearClient');
+  const all: any[] = [];
+  for (let page = 1; page <= 500; page++) {
+    const data = await dearGet('/product', { Page: page, Limit: 100, IncludeSuppliers: 'true' });
+    const batch: any[] = data?.Products ?? [];
+    all.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return all;
+}
 export async function syncProductCartons(products?: any[], o: { dryRun?: boolean } = {}): Promise<CartonResult> {
-  const list = products ?? await (await import('../sync/dearClient')).fetchAllProducts();
+  const list = products ?? await fetchProductsWithSuppliers();
   const rows = list.filter(p => p && p.SKU != null && String(p.SKU).trim() !== '').map(p => ({ sku: String(p.SKU).trim(), ...cartonsOf(p), cost: supplierCostOf(p) }));
-  const out: CartonResult = { checked: rows.length, updated: 0, withInner: rows.filter(r => r.inner).length, withOuter: rows.filter(r => r.outer).length, withCost: rows.filter(r => r.cost).length, skipped: null,
+  const withList = list.filter(p => p && Array.isArray(p.Suppliers)), firstSupplier = withList.flatMap(p => p.Suppliers).find((x: any) => x && typeof x === 'object');
+  const sample = list.find(p => p && (cartonKey(p, 'inner') || cartonKey(p, 'outer')));
+  const diagnostics: Diagnostics = { withSuppliersList: withList.length, supplierFields: firstSupplier ? Object.keys(firstSupplier).slice(0, 30) : [], innerField: sample ? cartonKey(sample, 'inner') : null, outerField: sample ? cartonKey(sample, 'outer') : null };
+  const out: CartonResult = { checked: rows.length, updated: 0, withInner: rows.filter(r => r.inner).length, withOuter: rows.filter(r => r.outer).length, withCost: rows.filter(r => r.cost).length, skipped: null, diagnostics,
     examples: rows.filter(r => r.inner || r.outer || r.cost).slice(0, 5).map(r => ({ sku: r.sku, inner: r.inner, outer: r.outer, cost: r.cost?.cost ?? null, currency: r.cost?.currency ?? null, supplier: r.cost?.supplier ?? null })) };
   // If DEAR's answer carries none of these fields at all, something is different about it: leave what we have, never wipe it.
   const cartonsPresent = list.some(p => p && (cartonKey(p, 'inner') || cartonKey(p, 'outer'))), suppliersPresent = list.some(p => p && Array.isArray(p.Suppliers));
   if (!cartonsPresent) console.warn('Product cartons: DEAR\'s product list has no inner or outer carton field, so cartons were left as they are (set DEAR_INNER_CARTON_FIELD and DEAR_OUTER_CARTON_FIELD if they are named differently).');
   if (!suppliersPresent) console.warn('Product cartons: DEAR\'s product list has no Suppliers list, so supplier costs were left as they are.');
+  console.log(`Product cartons: read ${list.length} products from DEAR; ${diagnostics.withSuppliersList} came with a Suppliers list (fields on a supplier line: ${diagnostics.supplierFields.join(', ') || 'none'}); inner carton field ${diagnostics.innerField ?? 'not found'}, outer ${diagnostics.outerField ?? 'not found'}; ${out.withInner} inner, ${out.withOuter} outer and ${out.withCost} supplier costs found.`);
   if (!cartonsPresent && !suppliersPresent) return { ...out, skipped: 'DEAR\'s product list carries neither carton fields nor suppliers' };
   if (o.dryRun) return out;
   try {

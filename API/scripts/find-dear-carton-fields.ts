@@ -5,7 +5,7 @@ import { dearGet } from '../src/sync/dearClient';
 
 const sku = process.argv[2];
 if (!sku) { console.log('Give a SKU, for example:  npx tsx scripts/find-dear-carton-fields.ts 24182601'); process.exit(1); }
-const data = await dearGet('/product', { Sku: sku, Limit: 1 });
+const data = await dearGet('/product', { Sku: sku, Limit: 1, IncludeSuppliers: 'true' });   // DEAR leaves the suppliers out unless asked
 const p = (data.Products ?? []).find((x: any) => String(x.SKU).toLowerCase() === sku.toLowerCase());
 if (!p) { console.log(`DEAR has no product with the SKU ${sku}.`); process.exit(1); }
 console.log(explainProduct(p).join('\n'));
