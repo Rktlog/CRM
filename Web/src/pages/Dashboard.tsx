@@ -11,7 +11,6 @@ import TeamActivityCard from '../components/TeamActivityCard';
 import TeamLogCard from '../components/TeamLogCard';
 import MyLogCard from '../components/MyLogCard';
 import ConversionCard from '../components/ConversionCard';
-import DashboardSummaries from '../components/DashboardSummaries';
 import SummarySheet from '../components/SummarySheet';
 import Collapsible from '../components/Collapsible';
 import RepSummaries from '../components/RepSummaries';
@@ -138,7 +137,6 @@ export default function Dashboard() {
       {role === 'rep' && <div className="section"><Collapsible id="my-weekly-activity" title="My weekly activity"><WeeklyActivitySummary heading={false} /></Collapsible></div>}
       {role === 'manager' && (
         <>
-          <DashboardSummaries />
           
           <ConversionCard />
           <div className="section">
