@@ -20,11 +20,22 @@ async function realReadPdf(pdf: Buffer): Promise<PdfTotals | null> {
   if (!process.env.ANTHROPIC_API_KEY) return null;
   const { default: Anthropic } = await import('@anthropic-ai/sdk');
   const client = new Anthropic({ timeout: 60_000, maxRetries: 1 });
-  const msg = await client.messages.create({ model: process.env.CLAUDE_FAST_MODEL || 'claude-haiku-5-5', max_tokens: 200, messages: [{ role: 'user', content: [
-    { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdf.toString('base64') } } as any,
-    { type: 'text', text: 'This is a Liewood order confirmation. Reply with JSON only, no other words: {"orderNo": the order number like SO493681, "totalUnits": the total quantity, "totalAmount": the order total as a plain number (the PDF writes 16.313,04 for 16313.04), "currency": the 3-letter currency}. Use null for anything not on it.' },
-  ] }] });
-  return parsePdfReply(msg.content.map((c: any) => (c.type === 'text' ? c.text : '')).join(''));
+  // Claude fills in a form (a tool with set fields) rather than writing JSON as text, so a Danish number like 16.313,04 can never break the reply.
+  const field = (description: string) => ({ type: ['string', 'null'], description });
+  const msg = await client.messages.create({ model: process.env.CLAUDE_FAST_MODEL || 'claude-haiku-5-5', max_tokens: 400,
+    tools: [{ name: 'record_totals', description: 'Records the order number and totals printed on a Liewood order confirmation.', input_schema: { type: 'object', properties: {
+      orderNo: field('The order number, like SO493681.'), totalUnits: field('The total quantity of units, as printed.'), totalAmount: field('The order total, exactly as printed, like 16.313,04.'), currency: field('The 3-letter currency, like EUR.'),
+    }, required: ['orderNo', 'totalUnits', 'totalAmount', 'currency'] } }],
+    tool_choice: { type: 'tool', name: 'record_totals' },
+    messages: [{ role: 'user', content: [
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdf.toString('base64') } },
+      { type: 'text', text: 'This is a Liewood order confirmation. Record its order number, total units, order total and currency with record_totals. Use null for anything not printed on it.' },
+    ] }] } as any);
+  const used = msg.content.find((c: any) => c.type === 'tool_use') as any;
+  const reply = used ? JSON.stringify(used.input ?? {}) : msg.content.map((c: any) => (c.type === 'text' ? c.text : '')).join('');
+  const out = parsePdfReply(reply);
+  if (out.orderNo === null && out.totalUnits === null && out.totalAmount === null) console.error('liewood pdf: nothing readable in the reply:', reply.slice(0, 300));
+  return out;
 }
 export const realDeps: Deps = { dearGet: async (p, q) => (await import('../sync/dearClient')).dearGet(p, q), readPdf: realReadPdf, alert: sendAlert };
 

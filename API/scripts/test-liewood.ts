@@ -30,6 +30,11 @@ ok('a file with two orders in it is refused', !!throws(() => parseSalesOrder([he
 console.log('--- the PDF check');
 const pdf = parsePdfReply('Here: {"orderNo":"SO493681","totalUnits":780,"totalAmount":"16.313,04","currency":"EUR"}');
 ok('Claude\'s reply is read, even with words around it', pdf.orderNo === 'SO493681' && pdf.totalUnits === 780 && pdf.totalAmount === 16313.04);
+const bare = parsePdfReply('{"orderNo": "SO493681", "totalUnits": 780, "totalAmount": 16.313,04, "currency": "EUR"}');
+ok('a reply that is not valid JSON (a bare Danish number) is still read', bare.orderNo === 'SO493681' && bare.totalUnits === 780 && bare.totalAmount === 16313.04 && bare.currency === 'EUR', JSON.stringify(bare));
+const form = parsePdfReply(JSON.stringify({ orderNo: 'SO 493681', totalUnits: '780', totalAmount: '16.313,04', currency: 'EUR' }));
+ok('the form Claude fills in (text fields) is read, and SO 493681 counts as SO493681', form.orderNo === 'SO493681' && form.totalUnits === 780 && form.totalAmount === 16313.04, JSON.stringify(form));
+ok('null fields stay empty', parsePdfReply('{"orderNo": null, "totalUnits": null, "totalAmount": null, "currency": null}').totalAmount === null && parsePdfReply('no idea').orderNo === null);
 const s = { orderNo: 'SO493681', totalUnits: 780, totalAmount: 16313.04, currency: 'EUR' };
 ok('same totals: match', compareConfirmation(s, pdf).status === 'match');
 ok('different units or order number: mismatch', compareConfirmation({ ...s, totalUnits: 760 }, pdf).status === 'mismatch' && compareConfirmation({ ...s, orderNo: 'SO1' }, pdf).status === 'mismatch');
