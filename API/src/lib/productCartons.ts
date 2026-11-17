@@ -65,6 +65,55 @@ export function supplierCostOf(p: any): SupplierCost | null {
   return { cost: best.cost, currency: best.currency, supplier: best.supplier };
 }
 
+// ---------- ETA: DEAR's own "ETA" field, exactly as the team types it ("Nov-26") ----------
+// DEAR keeps its extra product fields in numbered slots (AdditionalAttribute1 to 10). Which slot is "ETA" is set in DEAR's attribute set settings,
+// so it is looked up by its NAME there (per attribute set), never assumed. DEAR_ETA_FIELD on the API can name the slot instead.
+export const etaOverride = () => process.env.DEAR_ETA_FIELD?.trim() || '';
+const isEtaName = (v: unknown) => typeof v === 'string' && /^\s*eta\s*$/i.test(v);
+/** From DEAR's attribute set settings: for each attribute set (by name, lower case), the product field that holds "ETA". "*" is the first one found. */
+export function etaFieldsFrom(raw: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  const sets: any[] = Array.isArray(raw) ? raw : raw && typeof raw === 'object' ? (Object.values(raw).find(v => Array.isArray(v)) as any[] | undefined) ?? [raw] : [];
+  for (const set of sets) {
+    if (!set || typeof set !== 'object') continue;
+    let field: string | null = null;
+    for (const [k, v] of Object.entries(set)) {
+      const n = /(\d{1,2})/.exec(k)?.[1];
+      if (isEtaName(v) && n && /attribute/i.test(k)) { field = `AdditionalAttribute${Number(n)}`; break; }
+      if (Array.isArray(v)) for (const [i, a] of v.entries()) {   // a list of attributes, each with its name
+        if (a && typeof a === 'object' && isEtaName((a as any).Name ?? (a as any).Label)) {
+          const pos = Number((a as any).Number ?? (a as any).Position ?? (a as any).Index ?? (a as any).Order ?? i + 1);
+          if (Number.isInteger(pos) && pos >= 1 && pos <= 10) { field = `AdditionalAttribute${pos}`; break; }
+        }
+      }
+      if (field) break;
+    }
+    if (!field) continue;
+    const name = String(set.Name ?? set.AttributeSetName ?? '').trim().toLowerCase();
+    if (!out.has(name)) out.set(name, field);
+    if (!out.has('*')) out.set('*', field);
+  }
+  return out;
+}
+/** The field that holds this product's ETA: the one named in the settings, else the one its attribute set uses, else the first one found. */
+export function etaFieldFor(p: any, fields: Map<string, string>): string | null {
+  const o = etaOverride(); if (o) return o;
+  return fields.get(String(p?.AttributeSet ?? '').trim().toLowerCase()) ?? fields.get('*') ?? null;
+}
+/** The ETA as typed (spaces tidied, at most 40 characters); blank stays blank. Never turned into a date. */
+export function etaOf(p: any, field: string | null): string | null {
+  if (!field || !p || typeof p !== 'object') return null;
+  const v = p[field];
+  if (typeof v !== 'string' && typeof v !== 'number') return null;
+  const t = String(v).replace(/\s+/g, ' ').trim().slice(0, 40);
+  return t || null;
+}
+/** DEAR's attribute set settings, read once per run. Nothing is found if DEAR will not say (the job then leaves ETAs as they are). */
+export async function fetchEtaFields(): Promise<Map<string, string>> {
+  try { const { dearGet } = await import('../sync/dearClient'); return etaFieldsFrom(await dearGet('/ref/attributeset', { Page: 1, Limit: 100 })); }
+  catch (e) { console.warn('Product cartons: could not read DEAR\'s attribute set settings, so ETAs were left as they are:', String((e as Error)?.message ?? e).slice(0, 120)); return new Map(); }
+}
+
 /** The whole story for one DEAR product, in plain words: used by the read-only check script, and by the example sheet for the sales team. */
 export function explainProduct(p: any): string[] {
   const out: string[] = [], i = cartonKey(p, 'inner'), o = cartonKey(p, 'outer'), c = cartonsOf(p), s = supplierCostOf(p);
@@ -79,8 +128,8 @@ export function explainProduct(p: any): string[] {
 }
 
 // ---------- the job: read DEAR, save onto crm.products ----------
-export type Diagnostics = { withSuppliersList: number; supplierFields: string[]; innerField: string | null; outerField: string | null };
-export type CartonResult = { checked: number; updated: number; withInner: number; withOuter: number; withCost: number; skipped: string | null; diagnostics: Diagnostics; examples: { sku: string; inner: number | null; outer: number | null; cost: number | null; currency: string | null; supplier: string | null }[] };
+export type Diagnostics = { withSuppliersList: number; supplierFields: string[]; innerField: string | null; outerField: string | null; etaField: string | null };
+export type CartonResult = { checked: number; updated: number; withInner: number; withOuter: number; withCost: number; withEta: number; etaUpdated: number; etaSkipped: string | null; skipped: string | null; diagnostics: Diagnostics; examples: { sku: string; inner: number | null; outer: number | null; cost: number | null; currency: string | null; supplier: string | null }[] };
 const missingColumns = (e: unknown) => (e as any)?.code === '42703' || (/inner_carton_qty|outer_carton_qty|supplier_cost|supplier_name/.test(String((e as any)?.message ?? e)) && /does not exist|column/i.test(String((e as any)?.message ?? e)));
 /** Every product from DEAR WITH its Suppliers list (DEAR leaves the suppliers out unless it is asked for them), 100 at a time, as Radar's other product reads do. */
 export async function fetchProductsWithSuppliers(): Promise<any[]> {
@@ -94,20 +143,24 @@ export async function fetchProductsWithSuppliers(): Promise<any[]> {
   }
   return all;
 }
-export async function syncProductCartons(products?: any[], o: { dryRun?: boolean } = {}): Promise<CartonResult> {
+export async function syncProductCartons(products?: any[], o: { dryRun?: boolean; etaFields?: Map<string, string> } = {}): Promise<CartonResult> {
   const list = products ?? await fetchProductsWithSuppliers();
-  const rows = list.filter(p => p && p.SKU != null && String(p.SKU).trim() !== '').map(p => ({ sku: String(p.SKU).trim(), ...cartonsOf(p), cost: supplierCostOf(p) }));
+  const etaFields = o.etaFields ?? (products ? new Map<string, string>() : await fetchEtaFields());
+  const rows = list.filter(p => p && p.SKU != null && String(p.SKU).trim() !== '').map(p => { const ef = etaFieldFor(p, etaFields); return { sku: String(p.SKU).trim(), ...cartonsOf(p), cost: supplierCostOf(p), eta: etaOf(p, ef), etaKnown: !!ef && Object.prototype.hasOwnProperty.call(p, ef) }; });
   const withList = list.filter(p => p && Array.isArray(p.Suppliers)), firstSupplier = withList.flatMap(p => p.Suppliers).find((x: any) => x && typeof x === 'object');
   const sample = list.find(p => p && (cartonKey(p, 'inner') || cartonKey(p, 'outer')));
-  const diagnostics: Diagnostics = { withSuppliersList: withList.length, supplierFields: firstSupplier ? Object.keys(firstSupplier).slice(0, 30) : [], innerField: sample ? cartonKey(sample, 'inner') : null, outerField: sample ? cartonKey(sample, 'outer') : null };
-  const out: CartonResult = { checked: rows.length, updated: 0, withInner: rows.filter(r => r.inner).length, withOuter: rows.filter(r => r.outer).length, withCost: rows.filter(r => r.cost).length, skipped: null, diagnostics,
+  const diagnostics: Diagnostics = { withSuppliersList: withList.length, supplierFields: firstSupplier ? Object.keys(firstSupplier).slice(0, 30) : [], innerField: sample ? cartonKey(sample, 'inner') : null, outerField: sample ? cartonKey(sample, 'outer') : null, etaField: etaOverride() || etaFields.get('*') || null };
+  const out: CartonResult = { checked: rows.length, updated: 0, withInner: rows.filter(r => r.inner).length, withOuter: rows.filter(r => r.outer).length, withCost: rows.filter(r => r.cost).length, withEta: rows.filter(r => r.eta).length, etaUpdated: 0, etaSkipped: null, skipped: null, diagnostics,
     examples: rows.filter(r => r.inner || r.outer || r.cost).slice(0, 5).map(r => ({ sku: r.sku, inner: r.inner, outer: r.outer, cost: r.cost?.cost ?? null, currency: r.cost?.currency ?? null, supplier: r.cost?.supplier ?? null })) };
   // If DEAR's answer carries none of these fields at all, something is different about it: leave what we have, never wipe it.
   const cartonsPresent = list.some(p => p && (cartonKey(p, 'inner') || cartonKey(p, 'outer'))), suppliersPresent = list.some(p => p && Array.isArray(p.Suppliers));
   if (!cartonsPresent) console.warn('Product cartons: DEAR\'s product list has no inner or outer carton field, so cartons were left as they are (set DEAR_INNER_CARTON_FIELD and DEAR_OUTER_CARTON_FIELD if they are named differently).');
   if (!suppliersPresent) console.warn('Product cartons: DEAR\'s product list has no Suppliers list, so supplier costs were left as they are.');
-  console.log(`Product cartons: read ${list.length} products from DEAR; ${diagnostics.withSuppliersList} came with a Suppliers list (fields on a supplier line: ${diagnostics.supplierFields.join(', ') || 'none'}); inner carton field ${diagnostics.innerField ?? 'not found'}, outer ${diagnostics.outerField ?? 'not found'}; ${out.withInner} inner, ${out.withOuter} outer and ${out.withCost} supplier costs found.`);
-  if (!cartonsPresent && !suppliersPresent) return { ...out, skipped: 'DEAR\'s product list carries neither carton fields nor suppliers' };
+  // ETA: only for products whose answer actually carries the ETA field (so a field DEAR did not send never wipes what Radar has)
+  const etaRows = rows.filter(r => r.etaKnown), etaPresent = etaRows.length > 0;
+  if (!etaPresent) { out.etaSkipped = diagnostics.etaField ? `DEAR's products do not carry ${diagnostics.etaField}` : 'no attribute called ETA was found in DEAR\'s attribute set settings (set DEAR_ETA_FIELD to name it)'; }
+  console.log(`Product cartons: read ${list.length} products from DEAR; ${diagnostics.withSuppliersList} came with a Suppliers list (fields on a supplier line: ${diagnostics.supplierFields.join(', ') || 'none'}); inner carton field ${diagnostics.innerField ?? 'not found'}, outer ${diagnostics.outerField ?? 'not found'}; ${out.withInner} inner, ${out.withOuter} outer and ${out.withCost} supplier costs found; ETA field ${diagnostics.etaField ?? 'not found'}, ${out.withEta} ETAs found.`);
+  if (!cartonsPresent && !suppliersPresent && !etaPresent) return { ...out, skipped: 'DEAR\'s product list carries neither carton fields nor suppliers' };
   if (o.dryRun) return out;
   try {
     for (let i = 0; i < rows.length; i += 1000) {
@@ -127,5 +180,17 @@ export async function syncProductCartons(products?: any[], o: { dryRun?: boolean
       out.updated += r.length;
     }
   } catch (e) { if (missingColumns(e)) return { ...out, skipped: 'not set up in the database yet (run product-cartons.sql)' }; throw e; }
+  // ETA on its own, so the cartons and costs are saved even before product-eta.sql has been run
+  if (etaPresent) {
+    try {
+      for (let i = 0; i < etaRows.length; i += 1000) {
+        const b = etaRows.slice(i, i + 1000);
+        const r = await prisma.$queryRaw<{ n: number }[]>`
+          update crm.products p set dear_eta = v.eta from unnest(${b.map(x => x.sku)}::text[], ${b.map(x => x.eta)}::text[]) as v(sku, eta)
+          where p.sku = v.sku and p.dear_eta is distinct from v.eta returning 1 as n`;
+        out.etaUpdated += r.length;
+      }
+    } catch (e) { if ((e as any)?.code === '42703' || /dear_eta/.test(String((e as any)?.message ?? e))) out.etaSkipped = 'not set up in the database yet (run product-eta.sql)'; else throw e; }
+  }
   return out;
 }
