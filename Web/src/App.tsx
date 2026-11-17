@@ -38,6 +38,10 @@ import Ordering from './pages/Ordering';
 import ProductRequests from './pages/ProductRequests';
 import Liewood from './pages/Liewood';
 import LiewoodOrder from './pages/LiewoodOrder';
+import TradeShows from './pages/TradeShows';
+import TradeShow from './pages/TradeShow';
+import TradeShowOrder from './pages/TradeShowOrder';
+import TradeShowLead from './pages/TradeShowLead';
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { session, loading } = useAuth();
@@ -74,6 +78,10 @@ function Routed() {
         <Route path="product-requests" element={<ProductRequests />} />
         <Route path="liewood" element={<Liewood />} />
         <Route path="liewood/:id" element={<LiewoodOrder />} />
+        <Route path="trade-shows" element={<TradeShows />} />
+        <Route path="trade-shows/:id" element={<TradeShow />} />
+        <Route path="trade-shows/orders/:id" element={<TradeShowOrder />} />
+        <Route path="trade-shows/leads/:id" element={<TradeShowLead />} />
         <Route path="conversion" element={<Conversion />} />
         <Route path="marketing" element={<Marketing />} />
         <Route path="marketing/campaigns" element={<MarketingCampaigns />} />

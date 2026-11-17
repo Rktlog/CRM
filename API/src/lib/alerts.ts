@@ -8,9 +8,10 @@ import { prisma } from './prisma';
 import { accessTokenFrom, buildRawMessage, canDraft, cleanAddress } from './gmail/google';
 import { decrypt } from './gmail/crypto';
 import { sendRawMessage } from './gmail/alertSend';
+import { buildMime, escapeHtml, type Attachment } from './emailHtml';
 import type { RequestItem } from './productRequests';
 
-export const KINDS = ['new_request', 'shipment_booked', 'shipment_landed', 'sales_pack', 'liewood'] as const;
+export const KINDS = ['new_request', 'shipment_booked', 'shipment_landed', 'sales_pack', 'liewood', 'tradeshow_order'] as const;
 export type Kind = typeof KINDS[number];
 export const KIND_INFO: Record<Kind, { label: string; about: string }> = {
   new_request: { label: 'New product requests', about: 'When the sales team asks for a product on the Product Requests page.' },
@@ -18,6 +19,7 @@ export const KIND_INFO: Record<Kind, { label: string; about: string }> = {
   shipment_landed: { label: 'Shipment landed', about: 'When a shipment has arrived and is ready to sell.' },
   sales_pack: { label: 'Sales pack', about: 'The sales pack Radar prepares when a brand lands.' },
   liewood: { label: 'Liewood orders', about: 'When a Liewood delivery comes in short against its invoice, or an order is not invoiced by its ETA.' },
+  tradeshow_order: { label: 'Trade show orders', about: 'Each order or quote written at a trade show, with the file DEAR imports. Put sales@ here.' },
 };
 export const MAX_ADDRESSES = 20;
 export const HOURLY_LIMIT = 30;
@@ -86,7 +88,7 @@ async function logAlert(kind: string, relatedId: string | undefined, to: string[
 }
 
 /** Send one alert. Never throws: it says whether it was sent, and why not. `test` sends to the given address only and ignores the list's on/off switch. */
-export async function sendAlert(kind: Kind, msg: { subject: string; body: string }, o: { relatedId?: string; to?: string[]; test?: boolean } = {}): Promise<{ sent: boolean; reason: string }> {
+export async function sendAlert(kind: Kind, msg: { subject: string; body: string }, o: { relatedId?: string; to?: string[]; test?: boolean; attachments?: Attachment[] } = {}): Promise<{ sent: boolean; reason: string }> {
   const logKind = o.test ? 'test' : kind;
   let to = o.to ?? [], subject = msg.subject;
   try {
@@ -107,7 +109,9 @@ export async function sendAlert(kind: Kind, msg: { subject: string; body: string
     const mb = await mailbox();
     if (mb.problem || !mb.conn) { await logAlert(logKind, o.relatedId, to, subject, false, mb.problem); return { sent: false, reason: mb.problem ?? 'no mailbox' }; }
     const token = await accessTokenFrom(decrypt(mb.conn.refresh_token_enc));
-    const sent = await sendRawMessage(token, buildRawMessage({ to, subject: oneLine(subject, 200), body: msg.body }));
+    const sent = await sendRawMessage(token, o.attachments?.length
+      ? buildMime({ to, subject: oneLine(subject, 200), text: msg.body, html: `<pre style="font-family:Arial,Helvetica,sans-serif;font-size:13px;white-space:pre-wrap">${escapeHtml(msg.body)}</pre>`, attachments: o.attachments })
+      : buildRawMessage({ to, subject: oneLine(subject, 200), body: msg.body }));
     await logAlert(logKind, o.relatedId, to, subject, true, null, sent.id);
     return { sent: true, reason: 'sent' };
   } catch (e) {
