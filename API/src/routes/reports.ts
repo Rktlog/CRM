@@ -364,11 +364,22 @@ reportsRouter.get('/ledger', async (req, res) => {
   });
   // Sales by the team's definition: each tax invoice, on its own date, goods ex GST.
   const paidQuotes = salesOf(allQuotes);
+  // Marketing and warranty (orders with a misc type, and accounts marked misc) are part of the OVERALL sales figures: Total invoiced, the months and
+  // the quarters, when the page covers the whole company (every state, no rep, no category picked). They never count as new business, new customers,
+  // active accounts or orders, so they are kept apart from paidQuotes, which all of those use.
+  const overall = !scope.regions && !effectiveRepId && !picked.length;
+  const miscSales = overall
+    ? salesOf(await prisma.quote.findMany({
+        where: { OR: [{ miscType: { not: null } }, { account: { misc: true } }], ...(scope.hidden.length ? { accountId: { notIn: scope.hidden } } : {}) },
+        orderBy: { sentAt: 'desc' },
+      }))
+    : [];
+  const moneyQuotes = [...paidQuotes, ...miscSales];
 
   // ---- Monthly trend — bounded to the selected year/period window,
   // not all-time, so the chart actually changes when you change year. ----
   const byMonth = new Map<string, number>();
-  for (const q of paidQuotes.filter(q => q.sentAt >= window.start && q.sentAt < window.end)) {
+  for (const q of moneyQuotes.filter(q => q.sentAt >= window.start && q.sentAt < window.end)) {
     const key = `${q.sentAt.getFullYear()}-${String(q.sentAt.getMonth() + 1).padStart(2, '0')}`;
     byMonth.set(key, (byMonth.get(key) ?? 0) + q.amount);
   }
@@ -406,8 +417,8 @@ reportsRouter.get('/ledger', async (req, res) => {
     const priorEnd = new Date(year - 1, 6 + qn * 3, 1);
 
     const inQuarter = paidQuotes.filter(q => q.sentAt >= qStart && q.sentAt < qEnd);
-    const inPriorQuarter = paidQuotes.filter(q => q.sentAt >= priorStart && q.sentAt < priorEnd);
-    const invoicedCurrent = inQuarter.reduce((s, q) => s + q.amount, 0);
+    const inPriorQuarter = moneyQuotes.filter(q => q.sentAt >= priorStart && q.sentAt < priorEnd);
+    const invoicedCurrent = moneyQuotes.filter(q => q.sentAt >= qStart && q.sentAt < qEnd).reduce((s, q) => s + q.amount, 0);   // new business below stays without marketing and warranty
     const invoicedPrior = inPriorQuarter.reduce((s, q) => s + q.amount, 0);
     const budget = budgetByQuarter(year, qn);
 
@@ -549,7 +560,12 @@ reportsRouter.get('/ledger', async (req, res) => {
   const accountsWithActivity = new Set(windowedQuotes.filter(q => !q.isCredit).map(q => q.accountId)).size;
 
   res.json({
-    totalValue: Math.round(windowedQuotes.reduce((s, q) => s + q.amount, 0) * 100) / 100,
+    totalValue: Math.round(moneyQuotes.filter(q => q.sentAt >= window.start && q.sentAt < window.end).reduce((s, q) => s + q.amount, 0) * 100) / 100,
+    // What Total invoiced includes for marketing and warranty (null when the page is not the whole company).
+    misc: overall ? (['warranty', 'marketing', 'account'] as const).map(kind => {
+      const rows = miscSales.filter(q => { const t = (q as { miscType?: string | null }).miscType; return q.sentAt >= window.start && q.sentAt < window.end && (t === 'warranty' || t === 'marketing' ? t : 'account') === kind; });
+      return { kind, value: Math.round(rows.reduce((s, q) => s + q.amount, 0) * 100) / 100, orders: new Set(rows.filter(q => !q.isCredit).map(q => q.number)).size };
+    }) : null,
     totalOrders: new Set(windowedQuotes.filter(q => !q.isCredit).map(q => q.number)).size,
     accountsWithActivity,
     newCustomerCount: newCount,

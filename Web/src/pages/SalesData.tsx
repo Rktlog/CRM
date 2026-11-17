@@ -20,6 +20,7 @@ type RecentInvoice = { id: string; accountId: string; invoice: string; date: str
 type LedgerData = {
   totalValue: number; totalOrders: number; accountsTracked: number; accountsWithActivity: number;
   newCustomerCount: number; newCustomerValue: number;
+  misc?: { kind: 'warranty' | 'marketing' | 'account'; value: number; orders: number }[] | null;   // included in Total invoiced, the months and quarters (whole company only)
   period: 'calendar' | 'fiscal'; periodLabel: string; priorPeriodLabel: string;
   monthlyTrend: { label: string; total: number }[];
   quarters: Quarter[]; unpaidQuotes: UnpaidQuote[]; topAccounts: TopAccount[];
@@ -175,6 +176,7 @@ export default function SalesData() {
             <div className="ledger-stat accent">
               <div className="label">Total invoiced — {data.periodLabel}</div>
               <div className="val">{fmtMoney(data.totalValue)}</div>
+              {data.misc && <div className="ledger-misc" style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 6 }}>Includes {data.misc.map(m => `${m.kind === 'account' ? 'marketing & warranty accounts' : m.kind} ${fmtMoney(m.value)}${m.kind === 'marketing' ? ` (${m.orders} orders)` : ''}`).join(', ')}. Not counted as new business.</div>}
             </div>
             <div className="ledger-stat">
               <div className="label">Orders — {data.periodLabel}</div>
