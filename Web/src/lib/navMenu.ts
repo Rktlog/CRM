@@ -41,6 +41,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: '/catalogue', label: 'Catalogue' },
       { to: '/product-requests', label: 'Product Requests' },
       { to: '/liewood', label: 'Liewood' },
+      { to: '/trade-shows', label: 'Trade Shows' },
       { to: '/ordering', label: 'Order Forecast & Procurement', managerOnly: true },   // the page that was called Ordering
     ],
   },
