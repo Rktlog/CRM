@@ -94,8 +94,12 @@ export type ConfirmationCheck = { status: 'match' | 'mismatch' | 'not_checked'; 
 export function parsePdfReply(reply: string): PdfTotals {
   const m = reply.match(/\{[\s\S]*\}/);
   let o: any = {};
-  try { o = m ? JSON.parse(m[0]) : {}; } catch { o = {}; }
-  const order = typeof o.orderNo === 'string' ? o.orderNo.trim().toUpperCase() : null;
+  try { o = m ? JSON.parse(m[0]) : {}; } catch {
+    // not valid JSON (for example a Danish number written bare, 16.313,04): take each field on its own
+    const pick = (k: string) => { const x = new RegExp(`"?${k}"?\\s*:\\s*"?([^",}\\n]*(?:,\\d{1,2}(?!\\d))?)`).exec(reply); const v = x?.[1]?.trim(); return v && v !== 'null' ? v : null; };
+    o = { orderNo: pick('orderNo'), totalUnits: pick('totalUnits'), totalAmount: pick('totalAmount'), currency: pick('currency') };
+  }
+  const order = typeof o.orderNo === 'string' ? o.orderNo.toUpperCase().replace(/[^A-Z0-9]/g, '') : null;
   return { orderNo: order && /^SO\d{4,}$/.test(order) ? order : null, totalUnits: num(o.totalUnits), totalAmount: num(o.totalAmount), currency: typeof o.currency === 'string' ? o.currency.trim().toUpperCase().slice(0, 3) || null : null };
 }
 export function compareConfirmation(so: Pick<SalesOrder, 'orderNo' | 'totalUnits' | 'totalAmount' | 'currency'>, pdf: PdfTotals, at = new Date()): ConfirmationCheck {
