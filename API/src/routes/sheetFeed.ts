@@ -47,7 +47,7 @@ export const PRODUCT_COLUMNS: Col[] = [
   { name: 'Available/PreOrder', type: 'text' }, { name: 'Next Availabillity', type: 'date' },
   { name: 'Description', type: 'text' }, { name: 'Image Links', type: 'text' }, { name: 'TAGS', type: 'text' },
   { name: 'Length (cm)', type: 'number' }, { name: 'Width (cm)', type: 'number' }, { name: 'Height (cm)', type: 'number' }, { name: 'Weight (kg)', type: 'number' },
-  { name: 'Inner carton', type: 'number' }, { name: 'Outer carton', type: 'number' }, { name: 'Supplier cost', type: 'number' }, { name: 'Cost currency', type: 'text' },   // the cost is in the supplier's currency, named in the next column
+  { name: 'Inner carton', type: 'number' }, { name: 'Outer carton', type: 'number' }, { name: 'Supplier cost', type: 'number' }, { name: 'Cost currency', type: 'text' }, { name: 'ETA', type: 'text' },   // ETA: DEAR's own ETA field as typed (Next Availabillity is worked out from purchase orders)   // the cost is in the supplier's currency, named in the next column
 ];
 const TRADE = /^trade\b/i;   // the price tier called Trade (or "Trade Price"), not "Trader ..."
 
@@ -97,9 +97,11 @@ async function extras() {
     for (const r of await prisma.$queryRaw<{ sku: string; inner_carton_qty: number | null; outer_carton_qty: number | null; supplier_cost: string | number | null; supplier_cost_currency: string | null }[]>`select sku, inner_carton_qty, outer_carton_qty, supplier_cost, supplier_cost_currency from crm.products where inner_carton_qty is not null or outer_carton_qty is not null or supplier_cost is not null`)
       cartons.set(r.sku, { inner: num(r.inner_carton_qty), outer: num(r.outer_carton_qty), cost: num(r.supplier_cost), cur: text(r.supplier_cost_currency) });
   } catch { /* not there yet */ }
+  const etas = new Map<string, string>();   // DEAR's ETA field, as typed ("Nov-26")
+  try { for (const r of await prisma.$queryRaw<{ sku: string; dear_eta: string }[]>`select sku, dear_eta from crm.products where dear_eta is not null`) etas.set(r.sku, r.dear_eta); } catch { /* not there yet: the column is blank */ }
   let labels = new Map<string, string>();
   try { labels = new Map((await loadStatuses()).list.map(s => [s.key, s.label])); } catch { /* the usual words are used */ }
-  return { description, increment, specs, tags, cartons, labels };
+  return { description, increment, specs, tags, cartons, labels, etas };
 }
 
 async function productsBody(activeOnly: boolean) {
@@ -120,7 +122,7 @@ async function productsBody(activeOnly: boolean) {
       availabilityOf(p.lifecycle, num(p.available), num(p.on_order)) || null, eta?.date ?? null,
       x.description.get(p.sku) ?? null, text(p.image_url), x.tags.get(p.sku) ?? null,
       sp?.l ?? null, sp?.wd ?? null, sp?.h ?? null, sp?.w ?? null,
-      x.cartons.get(p.sku)?.inner ?? null, x.cartons.get(p.sku)?.outer ?? null, x.cartons.get(p.sku)?.cost ?? null, x.cartons.get(p.sku)?.cur ?? null,
+      x.cartons.get(p.sku)?.inner ?? null, x.cartons.get(p.sku)?.outer ?? null, x.cartons.get(p.sku)?.cost ?? null, x.cartons.get(p.sku)?.cur ?? null, x.etas.get(p.sku) ?? null,
     ];
   });
   return { updatedAt: new Date().toISOString(), count: rows.length, columns: PRODUCT_COLUMNS.map(c => c.name), types: PRODUCT_COLUMNS.map(c => c.type), rows };
