@@ -10,13 +10,14 @@ import { decrypt } from './gmail/crypto';
 import { sendRawMessage } from './gmail/alertSend';
 import type { RequestItem } from './productRequests';
 
-export const KINDS = ['new_request', 'shipment_booked', 'shipment_landed', 'sales_pack'] as const;
+export const KINDS = ['new_request', 'shipment_booked', 'shipment_landed', 'sales_pack', 'liewood'] as const;
 export type Kind = typeof KINDS[number];
 export const KIND_INFO: Record<Kind, { label: string; about: string }> = {
   new_request: { label: 'New product requests', about: 'When the sales team asks for a product on the Product Requests page.' },
   shipment_booked: { label: 'Shipment booked', about: 'When a new incoming shipment is booked: the items, the due date and the sales information.' },
   shipment_landed: { label: 'Shipment landed', about: 'When a shipment has arrived and is ready to sell.' },
   sales_pack: { label: 'Sales pack', about: 'The sales pack Radar prepares when a brand lands.' },
+  liewood: { label: 'Liewood orders', about: 'When a Liewood delivery comes in short against its invoice, or an order is not invoiced by its ETA.' },
 };
 export const MAX_ADDRESSES = 20;
 export const HOURLY_LIMIT = 30;

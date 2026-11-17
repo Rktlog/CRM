@@ -36,6 +36,8 @@ import MarketingSettings from './pages/MarketingSettings';
 import Assistant from './pages/Assistant';
 import Ordering from './pages/Ordering';
 import ProductRequests from './pages/ProductRequests';
+import Liewood from './pages/Liewood';
+import LiewoodOrder from './pages/LiewoodOrder';
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { session, loading } = useAuth();
@@ -70,6 +72,8 @@ function Routed() {
         <Route path="products" element={<ProductSearch />} />
         <Route path="catalogue" element={<Catalogue />} />
         <Route path="product-requests" element={<ProductRequests />} />
+        <Route path="liewood" element={<Liewood />} />
+        <Route path="liewood/:id" element={<LiewoodOrder />} />
         <Route path="conversion" element={<Conversion />} />
         <Route path="marketing" element={<Marketing />} />
         <Route path="marketing/campaigns" element={<MarketingCampaigns />} />

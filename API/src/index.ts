@@ -25,6 +25,7 @@ import { gmailRouter, gmailCallbackRouter, gmailCronRouter } from './routes/gmai
 import { calendarRouter, calendarCronRouter, calendarCallbackRouter } from './routes/calendar';
 import { orderingRouter } from './routes/ordering';
 import { marketingDashboardRouter } from './routes/marketingDashboard';
+import { liewoodRouter } from './routes/liewood';
 import { dropboxRouter, dropboxCallbackRouter } from './routes/dropbox';
 import { mediaRouter } from './routes/media';
 import { emailSendRouter } from './routes/emailSend';
@@ -100,6 +101,7 @@ app.use('/sync-cron', syncCronRouter);          // started by Supabase's schedul
 app.use('/ai', requireAuth, aiRouter);
 app.use('/ordering', requireAuth, orderingRouter);   // the Ordering page (managers): what to order, from the database
 app.use('/mkt', requireAuth, marketingDashboardRouter);   // the marketing dashboard (managers only)
+app.use('/liewood', requireAuth, liewoodRouter);   // Liewood orders against their DEAR purchase orders
 app.use('/dropbox/callback', dropboxCallbackRouter);   // Dropbox sends the manager back here: no login, so it must come before /dropbox
 app.use('/dropbox', requireAuth, dropboxRouter);   // the Dropbox connection and customer folders (managers)
 app.use('/media', requireAuth, mediaRouter);   // photos and videos on accounts, kept in the company Dropbox
