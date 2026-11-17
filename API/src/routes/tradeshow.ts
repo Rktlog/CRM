@@ -1,9 +1,11 @@
 import { Router } from 'express';
+import * as XLSX from 'xlsx';
 import * as ts from '../lib/tradeshow';
 
 // Trade shows. Everyone signed in can write orders and take leads at a show; managers set up shows and give discounts.
 //   GET    /tradeshow/shows                      every show with its counts           POST /tradeshow/shows   PATCH/DELETE /tradeshow/shows/:id   (managers)
 //   GET    /tradeshow/shows/:id                  one show: its orders, leads and results
+//   GET    /tradeshow/shows/:id/export           everything about the show as an Excel file (orders, lines, products, leads, log, follow-ups)
 //   GET    /tradeshow/products?q=                products with wholesale price, stock free to sell, what is coming
 //   GET    /tradeshow/customers?q=               existing customers
 //   POST   /tradeshow/orders                     { showId, kind, accountId | newCustomer }   starts an order (a draft)
@@ -27,6 +29,18 @@ const h = (what: string, f: (req: any, res: any) => Promise<unknown>) => async (
 tradeshowRouter.get('/shows', h('shows', async (_q, res) => res.json({ shows: await ts.listShows() })));
 tradeshowRouter.post('/shows', h('new show', async (req, res) => res.status(201).json({ id: await ts.saveShow(rep(req), req.body) })));
 tradeshowRouter.get('/shows/:id', h('show', async (req, res) => res.json(await ts.getShow(req.params.id))));
+tradeshowRouter.get('/shows/:id/export', h('export', async (req, res) => {
+  const x = await ts.exportShow(req.params.id);
+  const wb = XLSX.utils.book_new();
+  for (const sh of x.sheets) {
+    const ws = sh.rows.length ? XLSX.utils.json_to_sheet(sh.rows) : XLSX.utils.aoa_to_sheet([['Nothing yet']]);
+    if (sh.rows.length) ws['!cols'] = Object.keys(sh.rows[0]!).map(k => ({ wch: Math.min(60, Math.max(k.length + 2, ...sh.rows.slice(0, 200).map(r => String(r[k] ?? '').length + 2))) }));
+    XLSX.utils.book_append_sheet(wb, ws, sh.name);
+  }
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${x.filename}"`);
+  res.send(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+}));
 tradeshowRouter.patch('/shows/:id', h('save show', async (req, res) => res.json({ id: await ts.saveShow(rep(req), req.body, req.params.id) })));
 tradeshowRouter.delete('/shows/:id', h('delete show', async (req, res) => { await ts.deleteShow(rep(req), req.params.id); res.json({ ok: true }); }));
 tradeshowRouter.get('/products', h('products', async (req, res) => res.json({ products: await ts.searchProducts(req.query.q) })));

@@ -3,7 +3,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPatch, apiPost } from '../lib/api';
 import { useMe } from '../lib/useMe';
 import TsLogFollowUps from '../components/TsLogFollowUps';
-import { $, errMsg, shortDay, STAGE_TONE, type Order, type Product } from '../lib/tradeshow';
+import { $, errMsg, shortDay, STAGE_TONE, type Incoming, type Order, type Product } from '../lib/tradeshow';
+import { liveStock as stockFor, liveTotals, packProblem } from '../lib/tsLive';
 
 // A trade show order or quote. While it is being written: search products (stock free to sell, and what is coming when it is short),
 // quantities, discount (managers), freight, card surcharge, totals. Confirm sends it to sales@ with the DEAR file. After that: the reference
@@ -12,7 +13,7 @@ const th: CSSProperties = { textAlign: 'left', fontSize: 13, color: 'var(--muted
 const td: CSSProperties = { padding: '8px', borderBottom: '1px solid var(--line)', fontSize: 14, verticalAlign: 'top' };
 const num: CSSProperties = { ...td, textAlign: 'right', whiteSpace: 'nowrap' };
 const field: CSSProperties = { padding: '7px 10px', border: '1px solid var(--line)', borderRadius: 3, font: 'inherit', fontSize: 15 };
-type Line = { sku: string; name: string; qty: number; comment: string };
+type Line = { sku: string; name: string; qty: number; comment: string; price: number; increment: number | null; available: number; pending: number; incoming: Incoming; eta: string | null };
 
 function stockText(p: Pick<Product, 'free' | 'incoming' | 'eta'>) {
   const coming = p.incoming ? `${p.incoming.qty} coming${p.incoming.date ? ` ${p.incoming.date}` : ''}` : p.eta ? `ETA ${p.eta}` : '';
@@ -39,7 +40,7 @@ export default function TradeShowOrder() {
   const latest = useRef(0);
 
   const show = useCallback((x: Order) => {
-    setO(x); setLines(x.lines.map(l => ({ sku: l.sku, name: l.name, qty: l.qty, comment: l.comment ?? '' }))); setDirty(false);
+    setO(x); setLines(x.lines.map(l => ({ sku: l.sku, name: l.name, qty: l.qty, comment: l.comment ?? '', price: l.price, increment: l.increment, available: l.stock?.available ?? 0, pending: l.stock?.pending ?? 0, incoming: l.stock?.incoming ?? null, eta: l.stock?.eta ?? null }))); setDirty(false);
     setDisc({ kind: x.discount?.kind ?? 'pct', value: x.discount ? String(x.discount.value) : '' }); setFreight(x.freight ? String(x.freight) : ''); setRef(x.reference); setPo(x.customerPo ?? ''); setNotes(x.notes ?? '');
   }, []);
   const load = useCallback(() => { apiGet(`/tradeshow/orders/${id}`, { fresh: true }).then((d: { order: Order }) => { show(d.order); setErr(null); }).catch(e => setErr(errMsg(e))); }, [id, show]);
@@ -66,14 +67,16 @@ export default function TradeShowOrder() {
     if (r) setMsg(r.emailed ? { ok: true, text: `Confirmed and emailed to sales with the DEAR file. Reference: ${r.order.reference}` } : { ok: false, text: `Confirmed, but not emailed: ${r.reason}` });
   }
   function add(p: Product) {
-    setLines(ls => { const i = ls.findIndex(l => l.sku === p.sku); const step = p.increment && p.increment > 1 ? p.increment : 1; return i >= 0 ? ls.map((l, j) => (j === i ? { ...l, qty: l.qty + step } : l)) : [...ls, { sku: p.sku, name: p.name, qty: step, comment: '' }]; });
+    setLines(ls => { const i = ls.findIndex(l => l.sku === p.sku); const step = p.increment && p.increment > 1 ? p.increment : 1; return i >= 0 ? ls.map((l, j) => (j === i ? { ...l, qty: l.qty + step } : l)) : [...ls, { sku: p.sku, name: p.name, qty: step, comment: '', price: p.price ?? 0, increment: p.increment, available: p.available, pending: p.pending, incoming: p.incoming, eta: p.eta }]; });
     setDirty(true); setQ(''); setHits([]);
   }
 
   if (err) return <><p><Link to="/trade-shows">← Trade Shows</Link></p><div className="save-msg err" role="alert">{err}</div></>;
   if (!o) return <div className="acct-region">Loading…</div>;
   const draft = o.status === 'draft', t = o.totals, mine = isManager || o.repId === me?.id;
-  const byLine = new Map(o.lines.map(l => [l.sku, l]));
+  const liveDisc = isManager ? (disc.value && Number(disc.value) > 0 ? { kind: disc.kind, value: Number(disc.value) } : null) : o.discount;
+  const live = liveTotals({ lines, discount: draft ? liveDisc : o.discount, freight: draft ? Number(freight) || 0 : o.freight, cardPayment: o.cardPayment, surchargePct: o.cardSurchargePct, gstRate: o.gstRate });
+  const tt = draft ? live : t;   // while drafting, the page's own sums (the server works them again on Save); after that, the saved ones
   const liveStock = draft || o.stage === 'sent' || o.stage === 'in_dear_quote';   // once DEAR has the order, its own stock view is what counts
   return (
     <>
@@ -117,14 +120,14 @@ export default function TradeShowOrder() {
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr><th style={th}>Product</th><th style={{ ...th, textAlign: 'right' }}>Qty</th><th style={{ ...th, textAlign: 'right' }}>Price ex GST</th><th style={{ ...th, textAlign: 'right' }}>Line ex GST</th><th style={th}>Stock</th>{draft && mine && <th style={th} />}</tr></thead>
           <tbody>
-            {lines.map((l, i) => { const saved = byLine.get(l.sku); const changed = !saved || saved.qty !== l.qty; return (
+            {lines.map((l, i) => { const st = draft ? stockFor(l.qty, l.available, l.pending, l.incoming, l.eta) : o.lines[i]?.stock ?? null; const pack = packProblem(l.qty, l.increment); const lineTot = draft ? live.lineTotals[i] ?? 0 : o.lines[i]?.lineTotal ?? 0; return (
               <tr key={l.sku}>
-                <td style={td}><b>{l.name}</b><div className="acct-region" style={{ fontSize: 12.5 }}>{l.sku}{saved?.packNote && !changed ? <span style={{ color: 'var(--amber)' }}> · {saved.packNote}</span> : ''}</div>
+                <td style={td}><b>{l.name}</b><div className="acct-region" style={{ fontSize: 12.5 }}>{l.sku}{pack ? <span style={{ color: 'var(--amber)' }}> · {pack}</span> : ''}</div>
                   {draft && mine ? <input style={{ ...field, fontSize: 13, padding: '3px 6px', marginTop: 4, width: '100%' }} placeholder="Comment for DEAR (optional)" value={l.comment} onChange={e => { setLines(ls => ls.map((x, j) => (j === i ? { ...x, comment: e.target.value } : x))); setDirty(true); }} /> : l.comment && <div style={{ fontSize: 12.5 }}>{l.comment}</div>}</td>
                 <td style={num}>{draft && mine ? <input inputMode="numeric" style={{ ...field, width: 70, textAlign: 'right' }} value={l.qty} onChange={e => { const n = Math.max(0, Math.floor(Number(e.target.value) || 0)); setLines(ls => ls.map((x, j) => (j === i ? { ...x, qty: n } : x))); setDirty(true); }} /> : l.qty}</td>
-                <td style={num}>{saved ? $(saved.price) : ''}</td>
-                <td style={num}>{saved && !changed ? $(saved.lineTotal) : <span className="acct-region">save to see</span>}</td>
-                <td style={{ ...td, fontSize: 13, color: liveStock && saved?.stock && saved.stock.backorder > 0 && !changed ? 'var(--rust)' : undefined }}>{saved?.stock && !changed && liveStock ? saved.stock.note : !liveStock ? <span className="acct-region">In DEAR</span> : ''}</td>
+                <td style={num}>{$(l.price)}</td>
+                <td style={num}>{$(lineTot)}</td>
+                <td style={{ ...td, fontSize: 13, color: liveStock && st && st.backorder > 0 ? 'var(--rust)' : undefined }}>{st && liveStock ? st.note : !liveStock ? <span className="acct-region">In DEAR</span> : ''}</td>
                 {draft && mine && <td style={td}><button type="button" className="link-btn" onClick={() => { setLines(ls => ls.filter((_, j) => j !== i)); setDirty(true); }}>Remove</button></td>}
               </tr>
             ); })}
@@ -149,14 +152,14 @@ export default function TradeShowOrder() {
           </div>
         </div>
         <div className="card" style={{ marginBottom: 0 }}>
-          <div className="panel-title">Total{dirty && draft ? ' (press Save to update)' : ''}</div>
-          <div className="kv"><span>Goods (wholesale ex GST)</span><span className="num">{$(t.goods)}</span></div>
-          {t.linePct > 0 && <div className="kv"><span>Discount {t.linePct}%</span><span className="num">-{$(t.discount)}</span></div>}
-          <div className="kv"><span>Freight</span><span className="num">{$(t.freight)}</span></div>
-          {t.surcharge > 0 && <div className="kv"><span>Card surcharge {t.surchargePct}%</span><span className="num">{$(t.surcharge)}</span></div>}
-          <div className="kv"><span>Total ex GST</span><span className="num">{$(t.exGst)}</span></div>
-          <div className="kv"><span>GST{o.gstRate === 0 ? ' (none: overseas)' : ''}</span><span className="num">{$(t.gst)}</span></div>
-          <div className="kv" style={{ fontWeight: 600, fontSize: 16 }}><span>Total inc GST</span><span className="num">{$(t.total)}</span></div>
+          <div className="panel-title">Total</div>
+          <div className="kv"><span>Goods (wholesale ex GST)</span><span className="num">{$(tt.goods)}</span></div>
+          {tt.linePct > 0 && <div className="kv"><span>Discount {tt.linePct}%</span><span className="num">-{$(tt.discount)}</span></div>}
+          <div className="kv"><span>Freight</span><span className="num">{$(tt.freight)}</span></div>
+          {tt.surcharge > 0 && <div className="kv"><span>Card surcharge {tt.surchargePct}%</span><span className="num">{$(tt.surcharge)}</span></div>}
+          <div className="kv"><span>Total ex GST</span><span className="num">{$(tt.exGst)}</span></div>
+          <div className="kv"><span>GST{o.gstRate === 0 ? ' (none: overseas)' : ''}</span><span className="num">{$(tt.gst)}</span></div>
+          <div className="kv" style={{ fontWeight: 600, fontSize: 16 }}><span>Total inc GST</span><span className="num">{$(tt.total)}</span></div>
         </div>
       </div>
 

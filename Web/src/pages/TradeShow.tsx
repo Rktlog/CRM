@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { apiGet } from '../lib/api';
+import { apiDownload, apiGet } from '../lib/api';
 import { useMe } from '../lib/useMe';
 import TsShowForm from '../components/TsShowForm';
 import TsCustomerPicker, { type Picked } from '../components/TsCustomerPicker';
@@ -24,6 +24,7 @@ export default function TradeShow() {
   const [d, setD] = useState<ShowPage | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('orders');
+  const [exporting, setExporting] = useState(false);
   const [editing, setEditing] = useState(false);
   const [starting, setStarting] = useState<null | 'order' | 'quote' | 'lead'>(null);
   const [lead, setLead] = useState({ brands: '', notes: '' });
@@ -48,13 +49,19 @@ export default function TradeShow() {
   if (err) return <><p><Link to="/trade-shows">← Trade Shows</Link></p><div className="save-msg err" role="alert">{err}</div></>;
   if (!d) return <div className="acct-region">Loading…</div>;
   const s = d.show, r = d.results;
+  async function exportAll() {
+    setExporting(true);
+    try { await apiDownload(`/tradeshow/shows/${id}/export`, `trade-show-${s.name.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'show'}.xlsx`); }
+    catch (e) { window.alert(errMsg(e)); } finally { setExporting(false); }
+  }
   const open = (k: 'order' | 'quote' | 'lead') => { setStarting(k); setMatches(null); setStartErr(null); };
   return (
     <>
       <p style={{ margin: '0 0 6px' }}><Link to="/trade-shows">← Trade Shows</Link></p>
       <h1 style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>{s.name}{s.archived && <span className="pill neutral">Closed</span>}</h1>
       <div className="acct-region" style={{ marginBottom: 12 }}>{shortDay(s.startsOn)}{s.endsOn !== s.startsOn ? ` to ${shortDay(s.endsOn)}` : ''}{s.venue ? ` · ${s.venue}` : ''}{s.stand ? ` · stand ${s.stand}` : ''}{s.staff ? ` · ${s.staff}` : ''} · references start "{s.refName}"
-        {isManager && !editing && <> · <button type="button" className="link-btn" onClick={() => setEditing(true)}>Edit</button></>}</div>
+        {isManager && !editing && <> · <button type="button" className="link-btn" onClick={() => setEditing(true)}>Edit</button></>}
+        {' · '}<button type="button" className="link-btn" disabled={exporting} onClick={exportAll}>{exporting ? 'Preparing…' : 'Export to Excel'}</button></div>
       {editing && <TsShowForm show={s} onSaved={() => { setEditing(false); load(); }} onCancel={() => setEditing(false)} />}
 
       {!s.archived && !starting && (
