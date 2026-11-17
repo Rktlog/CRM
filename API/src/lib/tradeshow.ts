@@ -24,10 +24,10 @@ const NOT_A_SALE = ['DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING', 'VOIDED', 'C
 
 // Each trade show order with the DEAR order made from it: linked by hand (dear_quote_id), or found by the TS number in the DEAR reference,
 // or the whole reference. Used everywhere a stage, a stock hold or a follow-up depends on DEAR.
-const LINKED = `
+const linkedCte = (where = '') => `
   with ol as (
     select o.*, dq.id as dear_id, dq.number as dear_number, dq.fulfillment_status as dear_status, dq.invoiced_total as dear_invoiced, dq.amount_due as dear_due
-    from crm.ts_orders o
+    from (select * from crm.ts_orders o${where}) o
     left join lateral (
       select q.id, q.number, q.fulfillment_status, q.invoiced_total, q.amount_due from crm.quotes q
       where (o.dear_quote_id is not null and q.id = o.dear_quote_id)
@@ -37,6 +37,7 @@ const LINKED = `
       order by upper(coalesce(q.fulfillment_status, '')) in ('VOIDED', 'CREDITED'), q.sent_at desc limit 1
     ) dq on true
   )`;
+const LINKED = linkedCte();
 type Linked = { id: string; number: string; show_id: string; account_id: string; kind: 'order' | 'quote'; status: string; dear_id: string | null; dear_number: string | null; dear_status: string | null; dear_invoiced: number | null; dear_due: number | null; [k: string]: any };
 const dearOf = (o: Linked): DearLink => (o.dear_id ? { number: o.dear_number!, status: o.dear_status, invoiced: num(o.dear_invoiced), due: num(o.dear_due) } : null);
 const stageOf = (o: Linked): OrderStage => orderStage(o.status, dearOf(o));
@@ -46,7 +47,9 @@ export type ProductHit = { sku: string; name: string; brand: string | null; pric
 /** Units on trade show orders that DEAR has not allocated yet, by SKU (sent orders not yet confirmed in DEAR). */
 async function pendingBySku(skus: string[], exceptOrder: string | null = null): Promise<Map<string, number>> {
   if (!skus.length) return new Map();
-  const rows = await prisma.$queryRawUnsafe<(Linked & { sku: string; qty: number })[]>(`${LINKED}
+  // only the sent orders that have one of these SKUs are matched to DEAR (matching every order to every DEAR quote is the slow part)
+  const only = ` where o.kind = 'order' and o.status = 'sent' and ($2::uuid is null or o.id <> $2::uuid) and exists (select 1 from crm.ts_order_lines x where x.order_id = o.id and upper(x.sku) = any($1::text[]))`;
+  const rows = await prisma.$queryRawUnsafe<(Linked & { sku: string; qty: number })[]>(`${linkedCte(only)}
     select ol.*, l.sku, l.qty from ol join crm.ts_order_lines l on l.order_id = ol.id
     where ol.kind = 'order' and ol.status = 'sent' and upper(l.sku) = any($1::text[]) and ($2::uuid is null or ol.id <> $2::uuid)`, skus.map(s => s.toUpperCase()), exceptOrder);
   const m = new Map<string, number>();
@@ -55,18 +58,21 @@ async function pendingBySku(skus: string[], exceptOrder: string | null = null): 
 }
 async function stockFacts(skus: string[], exceptOrder: string | null = null) {
   const up = [...new Set(skus.map(s => s.toUpperCase()))];
-  const prods = up.length ? await prisma.$queryRaw<any[]>`select sku, name, brand, status, available, prices, order_increment, image_url, to_char(eta, 'DD Mon YYYY') as eta from crm.products where upper(sku) = any(${up}::text[])` : [];
-  let dearEta = new Map<string, string>();
-  try { dearEta = new Map((up.length ? await prisma.$queryRaw<{ sku: string; e: string | null }[]>`select upper(sku) as sku, dear_eta as e from crm.products where upper(sku) = any(${up}::text[]) and dear_eta is not null` : []).map(r => [r.sku, r.e!])); } catch { /* product-eta.sql not run */ }
-  const pos = up.length ? await prisma.$queryRaw<{ sku: string; qty: number; due: Date | null; po: string | null }[]>`
-    select upper(pl.sku) as sku, (pl.quantity_ordered - pl.quantity_received)::float8 as qty, p.required_by as due, p.number as po
-    from crm.purchase_lines pl join crm.purchases p on p.id = pl.purchase_id
-    where upper(pl.sku) = any(${up}::text[]) and pl.quantity_ordered - pl.quantity_received > 0
-      and upper(coalesce(p.status, '')) not in ('VOIDED', 'CREDITED', 'DRAFT') and upper(coalesce(p.status, '')) not like 'COMPLETED%'
-    order by p.required_by nulls last` : [];
+  // the four lookups are independent, so they run together (one wait instead of four)
+  const [prods, dearEtaRows, pos, pending] = up.length ? await Promise.all([
+    prisma.$queryRaw<any[]>`select sku, name, brand, status, available, prices, order_increment, image_url, to_char(eta, 'DD Mon YYYY') as eta from crm.products where upper(sku) = any(${up}::text[])`,
+    prisma.$queryRaw<{ sku: string; e: string | null }[]>`select upper(sku) as sku, dear_eta as e from crm.products where upper(sku) = any(${up}::text[]) and dear_eta is not null`.catch(() => [] as { sku: string; e: string | null }[]),   // product-eta.sql not run
+    prisma.$queryRaw<{ sku: string; qty: number; due: Date | null; po: string | null }[]>`
+      select upper(pl.sku) as sku, (pl.quantity_ordered - pl.quantity_received)::float8 as qty, p.required_by as due, p.number as po
+      from crm.purchase_lines pl join crm.purchases p on p.id = pl.purchase_id
+      where upper(pl.sku) = any(${up}::text[]) and pl.quantity_ordered - pl.quantity_received > 0
+        and upper(coalesce(p.status, '')) not in ('VOIDED', 'CREDITED', 'DRAFT') and upper(coalesce(p.status, '')) not like 'COMPLETED%'
+      order by p.required_by nulls last`,
+    pendingBySku(up, exceptOrder),
+  ]) : [[], [], [], new Map<string, number>()] as const;
+  const dearEta = new Map(dearEtaRows.map(r => [r.sku, r.e!]));
   const incoming = new Map<string, { qty: number; date: string | null; po: string | null }>();
   for (const p of pos) if (!incoming.has(p.sku)) incoming.set(p.sku, { qty: Math.round(p.qty), date: p.due ? new Date(p.due).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : null, po: p.po });
-  const pending = await pendingBySku(up, exceptOrder);
   return new Map(prods.map(p => {
     const k = String(p.sku).toUpperCase(), avail = Math.floor(Number(p.available) || 0), pend = pending.get(k) ?? 0;
     const hit: ProductHit = { sku: p.sku, name: p.name, brand: p.brand, price: wholesalePrice(p.prices), increment: p.order_increment ?? null, image: p.image_url ?? null, status: p.status,
@@ -615,6 +621,50 @@ export async function deleteShow(rep: Rep, id: unknown) {
     const [n] = await prisma.$queryRaw<{ n: number }[]>`select ((select count(*) from crm.ts_orders where show_id = ${sid}::uuid) + (select count(*) from crm.ts_leads where show_id = ${sid}::uuid))::int as n`;
     if (n!.n > 0) throw new TsError('This show has orders or leads, so it cannot be deleted. Mark it closed instead.');
     await prisma.$queryRaw`delete from crm.ts_shows where id = ${sid}::uuid`;
+  });
+}
+// ---------- export ----------
+/** Everything about one show as sheets of rows (the route turns them into an Excel file): summary, orders and quotes, their lines, products, leads, log, follow-ups. */
+export async function exportShow(id: unknown) {
+  const sid = idOk(id, 'That show');
+  const page = await getShow(sid);
+  return guard(async () => {
+    const orders = await linkedOrders('ol.show_id = $1::uuid order by ol.created_at', sid);
+    const lines = await linesOf(orders.map(o => o.id));
+    const leadRows = await prisma.$queryRaw<any[]>`select l.*, a.name as customer, a.region from crm.ts_leads l join crm.accounts a on a.id = l.account_id where l.show_id = ${sid}::uuid order by l.created_at`;
+    const logs = await prisma.$queryRaw<any[]>`select g.at, g.kind, g.note, r.name as rep, g.order_id, g.lead_id from crm.ts_log g left join crm.reps r on r.id = g.rep_id
+      where g.order_id in (select id from crm.ts_orders where show_id = ${sid}::uuid) or g.lead_id in (select id from crm.ts_leads where show_id = ${sid}::uuid) order by g.at`;
+    const fus = await prisma.$queryRaw<any[]>`select f.due_on, f.done_on, f.done_note, f.order_id, f.lead_id, r.name as rep, d.name as done_by from crm.ts_followups f left join crm.reps r on r.id = f.rep_id left join crm.reps d on d.id = f.done_by
+      where f.order_id in (select id from crm.ts_orders where show_id = ${sid}::uuid) or f.lead_id in (select id from crm.ts_leads where show_id = ${sid}::uuid) order by f.due_on`;
+    const sh = page.show as any, r = page.results;
+    const oLabel = new Map(orders.map(o => [o.id, `${o.number} ${o.customer}`])), lLabel = new Map(leadRows.map(l => [l.id, `Lead: ${l.customer}`]));
+    const what = (x: { order_id: string | null; lead_id: string | null }) => (x.order_id ? oLabel.get(x.order_id) : lLabel.get(x.lead_id ?? '')) ?? '';
+    const stamp = (d: Date | string | null) => (d ? new Date(d).toLocaleString('en-AU', { timeZone: 'Australia/Melbourne', day: '2-digit', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '');
+    const pctOf = (n: number | null) => (n === null ? '' : `${Math.round(n * 1000) / 10}%`);
+    const summary: [string, string | number][] = [
+      ['Show', sh.name], ['Reference name', sh.refName], ['Dates', `${sh.startsOn} to ${sh.endsOn}`], ['Venue', sh.venue ?? ''], ['Stand', sh.stand ?? ''], ['Staff', sh.staff ?? ''],
+      ['Orders', r.orders], ['Order value (goods ex GST, after discount)', r.orderValue], ['Quotes', r.quotes], ['Quote value', r.quoteValue], ['Average order', r.averageOrder],
+      ['Target', r.target ?? ''], ['Reached', pctOf(r.toTarget)], ['New customers (orders)', r.newCustomers.count], ['New customer value', r.newCustomers.value],
+      ['Existing customers (orders)', r.existingCustomers.count], ['Existing customer value', r.existingCustomers.value],
+      ['Costs', r.cost], ['Cost per order', r.costPerOrder ?? ''], ['Return on cost', r.returnOnCost === null ? '' : `${Math.round(r.returnOnCost * 10) / 10}x`],
+      ['Leads taken', r.leads.taken], ['Leads won', r.leads.won], ['Leads lost', r.leads.lost], ['Lead win rate', pctOf(r.leads.winRate)], ['Sales from won leads', r.leads.wonSales],
+      ...r.byRep.map((x): [string, string] => [`Rep: ${x.name}`, `${x.orders} orders, $${x.value.toFixed(2)}`]), ...r.byBrand.map((x): [string, number] => [`Brand: ${x.name}`, x.value]),
+    ];
+    const ordersSheet = orders.map(o => { const ls = lines.get(o.id) ?? [], t = orderTotals(o, ls.map(l => ({ qty: l.qty, price: Number(l.price) })));
+      return { Number: o.number, Type: o.kind === 'quote' ? 'Quote' : 'Order', Status: o.status === 'cancelled' ? 'Cancelled' : o.status === 'draft' ? 'Draft' : STAGE_LABEL[stageOf(o)], 'DEAR number': o.dear_number ?? '', Reference: o.reference, "Customer PO": o.customer_po ?? '',
+        Customer: o.customer, State: o.region, 'New customer': o.new_customer ? 'Yes' : '', Contact: o.contact_name ?? '', Email: o.contact_email ?? '', Phone: o.contact_phone ?? '', 'Delivery address': o.delivery_address ?? '', Date: day(o.order_date), Rep: o.rep_name ?? '',
+        'Goods ex GST': t.goods, 'Discount %': t.linePct, Discount: t.discount, Freight: t.freight, 'Card surcharge': t.surcharge, 'Total ex GST': t.exGst, GST: t.gst, 'Total inc GST': t.total, Notes: o.notes ?? '', 'Emailed to sales': stamp(o.emailed_at) }; });
+    const linesSheet = orders.flatMap(o => { const ls = lines.get(o.id) ?? [], t = orderTotals(o, ls.map(l => ({ qty: l.qty, price: Number(l.price) })));
+      return ls.map((l, i) => ({ Number: o.number, Type: o.kind === 'quote' ? 'Quote' : 'Order', Customer: o.customer, SKU: l.sku, Product: l.name, Brand: l.brand ?? '', Qty: l.qty, 'Price ex GST': Number(l.price), 'Discount %': t.linePct, 'Line ex GST': t.lineTotals[i], Comment: l.comment ?? '' })); });
+    const productsSheet = r.products.map(p => ({ SKU: p.sku, Product: p.name, Units: p.units, 'Value ex GST': p.value, 'Free to sell now': p.free ?? '', 'Next incoming': p.incoming ? `${p.incoming.qty}${p.incoming.date ? ` due ${p.incoming.date}` : ''}${p.incoming.po ? ` (${p.incoming.po})` : ''}` : '' }));
+    const leadsSheet = leadRows.map(l => ({ Customer: l.customer, State: l.region, 'New account': l.new_account ? 'Yes' : '', Contact: l.contact_name ?? '', Email: l.contact_email ?? '', Phone: l.contact_phone ?? '', Brands: l.brands ?? '', Notes: l.notes ?? '',
+      Status: l.status === 'won' ? 'Won' : l.status === 'lost' ? 'Lost' : 'Open', 'Lost reason': l.lost_reason ?? '', Taken: day(l.taken_on) }));
+    const logSheet = logs.map(g => ({ When: stamp(g.at), For: what(g), Type: g.kind, Note: g.note, By: g.rep ?? '' }));
+    const fuSheet = fus.map(f => ({ For: what(f), Due: day(f.due_on), 'Who': f.rep ?? 'Sales team', Done: day(f.done_on) ?? '', 'Done by': f.done_by ?? '', 'What happened': f.done_note ?? '' }));
+    const safe = String(sh.name).replace(/[^A-Za-z0-9 _-]+/g, '').trim().replace(/\s+/g, '-').slice(0, 50) || 'show';
+    return { filename: `trade-show-${safe}.xlsx`, sheets: [
+      { name: 'Summary', rows: summary.map(([k, v]) => ({ '': k, Value: v })) }, { name: 'Orders and quotes', rows: ordersSheet }, { name: 'Order lines', rows: linesSheet }, { name: 'Products', rows: productsSheet },
+      { name: 'Leads', rows: leadsSheet }, { name: 'Log', rows: logSheet }, { name: 'Follow-ups', rows: fuSheet } ] as { name: string; rows: Record<string, any>[] }[] };
   });
 }
 export async function repsList() { return prisma.$queryRaw<{ id: string; name: string }[]>`select id, name from crm.reps order by name`; }
