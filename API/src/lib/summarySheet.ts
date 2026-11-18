@@ -1,6 +1,7 @@
 import { prisma } from './prisma';
 import { hiddenAccountIds, assignedRegions } from './territory';
 import { asSales, salesOf } from './salesRules';
+import { creditSalesFor } from './creditSales';
 import { openQuotes } from './receivables';
 
 // The rep's "Summary" sheet, as the team's Summary_Rhonda sheet lays it out: a financial year in two halves (July to December, January
@@ -66,7 +67,7 @@ export async function loadSheetRaw(opts: { repId: string; regions: string[]; fy:
       : [];
 
     // Invoiced sales, by the tax invoice's month (goods ex GST, credit notes taken off), as on Sales Data.
-    for (const s of salesOf(quotes)) current.set(monthKey(s.sentAt), (current.get(monthKey(s.sentAt)) ?? 0) + s.amount);
+    for (const s of [...salesOf(quotes), ...await creditSalesFor(accounts.map(a => a.id))]) current.set(monthKey(s.sentAt), (current.get(monthKey(s.sentAt)) ?? 0) + s.amount);
 
     // Quotes awaiting payment: the Open Quotes page's list for this rep's states (pay-first customers, orders not yet paid), showing what is
     // still to pay, by order date. The sheet adds them up by the month's name, whatever the year.
