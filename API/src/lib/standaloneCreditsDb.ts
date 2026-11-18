@@ -46,6 +46,6 @@ export async function runStandaloneCreditNotes(opts: { sinceDaysAgo?: number; si
   return result;
 }
 
-// The one-off catch-up from the start of the 2024/25 financial year. Call it again until it reports 0 left.
-export const BACKFILL_FROM = '2024-07-01';
+// The one-off catch-up from 1 Jan 2026 (DEAR ignores the date filter when it is older than about a year, so it cannot start earlier). Call it again until it reports 0 left.
+export const BACKFILL_FROM = '2026-01-01';
 export const runStandaloneCreditNotesBackfill = (get: Get = dearGet) => runStandaloneCreditNotes({ since: BACKFILL_FROM, maxPages: 60 }, get);
