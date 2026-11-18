@@ -27,6 +27,7 @@ import { orderingRouter } from './routes/ordering';
 import { marketingDashboardRouter } from './routes/marketingDashboard';
 import { liewoodRouter } from './routes/liewood';
 import { tradeshowRouter } from './routes/tradeshow';
+import { promosRouter } from './routes/promos';
 import { dropboxRouter, dropboxCallbackRouter } from './routes/dropbox';
 import { mediaRouter } from './routes/media';
 import { emailSendRouter } from './routes/emailSend';
@@ -103,6 +104,7 @@ app.use('/ai', requireAuth, aiRouter);
 app.use('/ordering', requireAuth, orderingRouter);   // the Ordering page (managers): what to order, from the database
 app.use('/mkt', requireAuth, marketingDashboardRouter);   // the marketing dashboard (managers only)
 app.use('/liewood', requireAuth, liewoodRouter);   // Liewood orders against their DEAR purchase orders
+app.use('/promos', requireAuth, promosRouter);   // promos: the list, the tick boxes on orders, and the orders that used each one
 app.use('/tradeshow', requireAuth, tradeshowRouter);   // trade shows: orders, leads, follow-ups
 app.use('/dropbox/callback', dropboxCallbackRouter);   // Dropbox sends the manager back here: no login, so it must come before /dropbox
 app.use('/dropbox', requireAuth, dropboxRouter);   // the Dropbox connection and customer folders (managers)

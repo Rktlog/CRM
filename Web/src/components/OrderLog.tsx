@@ -6,6 +6,7 @@ import { fmtDate } from '../lib/types';
 import EditActivityModal from './EditActivityModal';
 import DeleteLogLink from './DeleteLogLink';
 import DictationTextarea from './DictationTextarea';
+import OrderPromos from './OrderPromos';
 
 // The team's log for ONE order: a call, email, visit or remark about it (chasing payment, a follow-up, any comment or feedback). Everyone who can see the
 // account sees it, and every entry also shows in the account's own activity log (it is the same record, linked to the order).
@@ -50,6 +51,8 @@ export default function OrderLog({ orderId, accountId, accountName, onChange }: 
     <div className="card" id="order-log">
       <h3>Team log for this order</h3>
       <div className="acct-region" style={{ marginBottom: 10 }}>Log a call, email, visit or remark about this order, such as chasing payment, a follow-up or any comment or feedback. Everyone who can see this account sees it, and each one also shows in the account's activity log.</div>
+
+      <OrderPromos orderId={orderId} onChange={onChange} />
 
       <form onSubmit={add}>
         <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }} role="group" aria-label="Kind of log">
