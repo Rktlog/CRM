@@ -77,7 +77,7 @@ aiRouter.get('/status', async (req, res) => {
 
 aiRouter.put('/settings', async (req, res) => {
   if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Only a manager can change the assistant settings' });
-  try { const cur = await loadSettings(); await saveSettings(validateSettings({ limitsOn: cur.limitsOn, ...req.body }), req.rep!.id); res.json({ ok: true }); }
+  try { await saveSettings(validateSettings(req.body), req.rep!.id); res.json({ ok: true }); }
   catch (e) { res.status(400).json({ error: (e as Error).message }); }
 });
 
@@ -133,7 +133,6 @@ aiRouter.post('/chat', express.text({ type: '*/*', limit: '40mb' }), async (req,
   try {
     const g = await gate(req);
     if ('error' in g) return res.status(g.status).json({ error: g.error });
-    if (g.settings.limitsOn && overLimit(`chat:${req.rep!.id}`, Date.now(), 60)) return res.status(429).json({ error: "That's 60 questions in the last hour. Try again later." });
     const prefs = await getPrefs(req.rep!.id).catch(() => '');
 
     // 2. From here the answer streams. The person can stop it, and then Claude is stopped too.
@@ -149,7 +148,7 @@ aiRouter.post('/chat', express.text({ type: '*/*', limit: '40mb' }), async (req,
     try {
       const r = await runChat({
         history, ctx: { rep: req.rep!, today: melDay(), addFile: f => saveFile(req.rep!.id, f) },
-        maxReplyTokens: g.settings.maxReplyTokens, perRequestTokens: g.settings.limitsOn ? g.settings.perRequestTokens : Number.MAX_SAFE_INTEGER, instructions: g.settings.instructions, prefs,
+        maxReplyTokens: g.settings.maxReplyTokens, perRequestTokens: Number.MAX_SAFE_INTEGER, instructions: g.settings.instructions, prefs,
         think: raw?.think === true ? { budget: g.settings.thinkingBudgetTokens } : undefined,
         onText: d => send({ type: 'text', delta: d }), onStatus: s => send({ type: 'status', text: s }), onReset: () => send({ type: 'reset' }), signal: stop.signal,
       });

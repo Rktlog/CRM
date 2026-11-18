@@ -10,7 +10,7 @@ import { chartSrc, downloadSvg, downloadPng } from '../lib/chartDownload';
 // Claude, inside the CRM. Ask anything, in words or with the microphone. It looks things up in your data, summarises,
 // forecasts, prices, draws charts, writes reports (Excel, CSV, Word, PDF) and reads files you attach. It reads only what you
 // can already see and changes nothing. Chats are saved for you alone, in the list on the left, and you can search, rename,
-// reopen and delete them. Managers set the limits and the company's instructions under Limits.
+// reopen and delete them. Managers set the company's instructions and the reply settings under Settings.
 
 type Att = { name: string; type: string; size: number; data?: string };   // data is there only for files attached in this visit
 type Msg = { role: 'user' | 'assistant'; content: string; attachments?: Att[]; files?: MadeFile[]; tools?: string[]; steps?: Step[]; charts?: Chart[]; stopped?: boolean; thinking?: boolean };
@@ -29,19 +29,12 @@ const SUGGESTIONS = [
   'Write a one-page Word report on our open quotes for the Monday meeting',
 ];
 const FIELDS: { key: Exclude<keyof Settings, 'enabled' | 'instructions'>; label: string; hint: string }[] = [
-  { key: 'userDailyTokens', label: 'Tokens per person per day', hint: 'Everything one person asks, added up' },
-  { key: 'monthlyTokens', label: 'Tokens per month (team)', hint: 'The whole team, per calendar month' },
-  { key: 'perRequestTokens', label: 'Tokens per question', hint: 'Stops one question running away' },
   { key: 'maxReplyTokens', label: 'Longest reply', hint: 'In tokens, up to 16,000. Raise it for long reports' },
   { key: 'thinkingBudgetTokens', label: 'Thinking budget (Think harder)', hint: 'How much it may think first: 1,024 to 32,000' },
   { key: 'chatRetentionDays', label: 'Days to keep saved chats', hint: '0 keeps them for ever' },
-  { key: 'monthlyUsd', label: 'Monthly dollar limit', hint: '0 = none. Needs the two prices below' },
-  { key: 'usdPerMInput', label: 'Price per million input tokens ($)', hint: 'Use the dearest model you use' },
-  { key: 'usdPerMOutput', label: 'Price per million output tokens ($)', hint: 'Use the dearest model you use' },
 ];
 const DEFAULT_SETTINGS: Settings = { enabled: true, maxReplyTokens: 4000, perRequestTokens: 120_000, userDailyTokens: 300_000, monthlyTokens: 3_000_000, monthlyUsd: 0, usdPerMInput: 0, usdPerMOutput: 0, thinkingBudgetTokens: 8000, chatRetentionDays: 90, instructions: '' };
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
-const n = (v: unknown) => num(v).toLocaleString('en-AU');
 
 // Whatever the server sends, the page copes: a missing number counts as 0 and a missing block is left out. Before this, one
 // missing number crashed the whole page and left it blank.
@@ -217,7 +210,7 @@ function AssistantPage() {
   }
 
   const copy = (i: number) => { navigator.clipboard?.writeText(messages[i].content).then(() => { setCopied(i); setTimeout(() => setCopied(c => (c === i ? null : c)), 1500); }); };
-  const u = status?.usage, s = status?.settings;
+  const s = status?.settings;
   const blocked = !!status?.blocked || status?.configured === false;
   const lastAssistant = messages.length - 1;
 
@@ -255,7 +248,7 @@ function AssistantPage() {
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           {!wide && <button className="btn secondary" type="button" onClick={() => setShowList(v => !v)}>{showList ? 'Hide chats' : 'Chats'}</button>}
           <button className="btn secondary" type="button" onClick={openPrefs}>About me</button>
-          {isManager && <button className="btn secondary" type="button" onClick={() => setShowLimits(v => !v)}>{showLimits ? 'Hide limits' : 'Limits'}</button>}
+          {isManager && <button className="btn secondary" type="button" onClick={() => setShowLimits(v => !v)}>{showLimits ? 'Hide settings' : 'Settings'}</button>}
         </div>
       </div>
       <div className="acct-region" style={{ marginBottom: 10, maxWidth: 780 }}>
@@ -265,12 +258,6 @@ function AssistantPage() {
 
       {status && !status.configured && <div className="save-msg err" style={{ marginBottom: 10 }}>Claude isn't set up yet. The API needs <b>ANTHROPIC_API_KEY</b>.</div>}
       {status?.blocked && <div className="save-msg err" style={{ marginBottom: 10 }}>{status.blocked}</div>}
-      {u && s && (
-        <div className="acct-region" style={{ marginBottom: 12 }}>
-          Today you've used {n(u.userDayTokens)} of {n(s.userDailyTokens)} tokens. The team has used {n(u.monthTokens)} of {n(s.monthlyTokens)} this month
-          {u.monthCostUsd != null ? `, about $${n(u.monthCostUsd)}${s.monthlyUsd > 0 ? ` of $${n(s.monthlyUsd)}` : ''}` : ''}.
-        </div>
-      )}
 
       {prefsOpen && (
         <div className="section">
@@ -286,7 +273,7 @@ function AssistantPage() {
 
       {isManager && showLimits && form && (
         <div className="section">
-          <div className="panel-title">Limits and instructions <span className="plan-count">on top of the spend limit set in the Claude Console</span></div>
+          <div className="panel-title">Settings and instructions <span className="plan-count">the spend limit is set in the Claude Console</span></div>
           <label className="acct-region" style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
             <input type="checkbox" checked={form.enabled} onChange={e => setForm({ ...form, enabled: e.target.checked })} /> Assistant on
           </label>
@@ -305,7 +292,7 @@ function AssistantPage() {
             ))}
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 10 }}>
-            <button className="btn" onClick={saveLimits}>Save limits</button>
+            <button className="btn" onClick={saveLimits}>Save settings</button>
             {saved && <span className="save-msg ok">{saved}</span>}
           </div>
         </div>
