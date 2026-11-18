@@ -219,7 +219,7 @@ export async function syncLiewoodPos(d: Deps = realDeps, o: { max?: number } = {
           { const m = new Map<string, (typeof rows)[number]>(); for (const r of rows) { const k = `${r[0]}|${r[1]}|${r[5]}`, h = m.get(k); if (h) h[6] += r[6]; else m.set(k, [...r]); } rows.splice(0, rows.length, ...m.values()); }   // one row per document and SKU
           await prisma.$queryRaw`delete from crm.lw_po_docs where po_number = ${po}`;
           if (rows.length) await prisma.$queryRaw`insert into crm.lw_po_docs (po_number, kind, doc_key, doc_number, doc_date, status, sku, qty)
-            select ${po}, * from unnest(${rows.map(r => r[0])}::text[], ${rows.map(r => r[1])}::text[], ${rows.map(r => r[2])}::text[], ${rows.map(r => r[3])}::date[], ${rows.map(r => r[4])}::text[], ${rows.map(r => r[5])}::text[], ${rows.map(r => dec(r[6]))}::numeric[])
+            select ${po}, t.kind, t.doc_key, t.doc_number, t.doc_date::date, t.status, t.sku, t.qty from unnest(${rows.map(r => r[0])}::text[], ${rows.map(r => r[1])}::text[], ${rows.map(r => r[2])}::text[], ${rows.map(r => r[3])}::text[], ${rows.map(r => r[4])}::text[], ${rows.map(r => r[5])}::text[], ${rows.map(r => dec(r[6]))}::numeric[]) as t(kind, doc_key, doc_number, doc_date, status, sku, qty)
 `;
           await prisma.$queryRaw`insert into crm.lw_po_state (po_number, dear_id, status, fields, ok, error, fetched_at) values (${po}, ${id}, ${purchase.status}, ${purchase.fields}::text[], true, null, now())
             on conflict (po_number) do update set dear_id = excluded.dear_id, status = excluded.status, fields = excluded.fields, ok = true, error = null, fetched_at = now()`;
