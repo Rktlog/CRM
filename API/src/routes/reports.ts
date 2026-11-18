@@ -3,6 +3,7 @@ import { hiddenAccountIds } from '../lib/territory';
 import { prisma } from '../lib/prisma';
 import { isHistory, isOwing } from '../lib/orderSource';
 import { NOT_A_SALE, isChargeLine, isHistoryOrder, salesOf } from '../lib/salesRules';
+import { creditSalesFor, creditSalesMisc } from '../lib/creditSales';
 
 export const reportsRouter = Router();
 
@@ -164,7 +165,8 @@ reportsRouter.get('/sales', async (req, res) => {
   const accountIds = accounts.map(a => a.id);
 
   // Same definition as Sales Data: each tax invoice, on its own date, goods ex GST.
-  const quotes = salesOf(await prisma.quote.findMany({
+  const standaloneCredits = await creditSalesFor(accountIds);   // credit notes that are on no order, as negative sales
+  const quotes: { amount: number; sentAt: Date }[] = [...salesOf(await prisma.quote.findMany({
     where: {
       accountId: { in: accountIds },
       miscType: null,
@@ -178,7 +180,7 @@ reportsRouter.get('/sales', async (req, res) => {
     },
     select: { amount: true, sentAt: true, source: true, number: true, paid: true, invoiceDate: true,
               fulfillmentStatus: true, goodsTotal: true, taxTotal: true, invoices: true, creditNotes: true },
-  })).filter(q => q.sentAt >= previousStart && q.sentAt < currentEnd);
+  })), ...standaloneCredits].filter(q => q.sentAt >= previousStart && q.sentAt < currentEnd);
 
   const currentQuotes = quotes.filter(q => q.sentAt >= currentStart && q.sentAt < currentEnd);
   const previousQuotes = quotes.filter(q => q.sentAt >= previousStart && q.sentAt < previousEnd);
@@ -363,17 +365,19 @@ reportsRouter.get('/ledger', async (req, res) => {
     orderBy: { sentAt: 'desc' },
   });
   // Sales by the team's definition: each tax invoice, on its own date, goods ex GST.
-  const paidQuotes = salesOf(allQuotes);
+  const quoteSales = salesOf(allQuotes);
+  const paidQuotes = [...quoteSales, ...((await creditSalesFor(accountIds)) as unknown as typeof quoteSales)];   // plus credit notes that are on no order
   // Marketing and warranty (orders with a misc type, and accounts marked misc) are part of the OVERALL sales figures: Total invoiced, the months and
   // the quarters, when the page covers the whole company (every state, no rep, no category picked). They never count as new business, new customers,
   // active accounts or orders, so they are kept apart from paidQuotes, which all of those use.
   const overall = !scope.regions && !effectiveRepId && !picked.length;
-  const miscSales = overall
+  const miscOrderSales = overall
     ? salesOf(await prisma.quote.findMany({
         where: { OR: [{ miscType: { not: null } }, { account: { misc: true } }], ...(scope.hidden.length ? { accountId: { notIn: scope.hidden } } : {}) },
         orderBy: { sentAt: 'desc' },
       }))
     : [];
+  const miscSales = [...miscOrderSales, ...(overall ? ((await creditSalesMisc(scope.hidden)) as unknown as typeof miscOrderSales) : [])];
   const moneyQuotes = [...paidQuotes, ...miscSales];
 
   // ---- Monthly trend — bounded to the selected year/period window,
