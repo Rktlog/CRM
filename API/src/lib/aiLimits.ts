@@ -5,6 +5,7 @@ import { prisma } from './prisma';
 // whole team can use a month (in tokens, and in dollars if prices are entered), and how big one question can get.
 export type AiSettings = {
   enabled: boolean;
+  limitsOn: boolean;         // false = none of the limits below are applied (they stay saved). The on/off switch above and the Console spend limit still apply
   maxReplyTokens: number;    // the longest reply Claude may write
   perRequestTokens: number;  // everything one question may use, across its look-ups
   userDailyTokens: number;   // per person, per day (Melbourne)
@@ -16,10 +17,10 @@ export type AiSettings = {
   chatRetentionDays: number;     // saved chats older than this are deleted. 0 = keep them
   instructions: string;          // the company's own instructions for the assistant (tone, rules, terms), up to 4,000 characters
 };
-export const DEFAULTS: AiSettings = { enabled: true, maxReplyTokens: 4000, perRequestTokens: 120_000, userDailyTokens: 300_000, monthlyTokens: 3_000_000, monthlyUsd: 0, usdPerMInput: 0, usdPerMOutput: 0, thinkingBudgetTokens: 8000, chatRetentionDays: 90, instructions: '' };
+export const DEFAULTS: AiSettings = { enabled: true, limitsOn: false, maxReplyTokens: 4000, perRequestTokens: 120_000, userDailyTokens: 300_000, monthlyTokens: 3_000_000, monthlyUsd: 0, usdPerMInput: 0, usdPerMOutput: 0, thinkingBudgetTokens: 8000, chatRetentionDays: 90, instructions: '' };
 export const MAX_INSTRUCTIONS = 4000;
 
-const FIELDS: { key: Exclude<keyof AiSettings, 'enabled' | 'instructions'>; label: string; lo: number; hi: number }[] = [
+const FIELDS: { key: Exclude<keyof AiSettings, 'enabled' | 'limitsOn' | 'instructions'>; label: string; lo: number; hi: number }[] = [
   { key: 'maxReplyTokens', label: 'Longest reply', lo: 100, hi: 16000 },
   { key: 'perRequestTokens', label: 'Tokens per question', lo: 2000, hi: 200_000 },
   { key: 'userDailyTokens', label: 'Tokens per person per day', lo: 1000, hi: 5_000_000 },
@@ -34,7 +35,7 @@ const FIELDS: { key: Exclude<keyof AiSettings, 'enabled' | 'instructions'>; labe
 // From the stored rows. Anything missing or out of range falls back, so a bad row can never switch the limits off.
 export function parseSettings(rows: { key: string; value: string }[]): AiSettings {
   const m = new Map(rows.map(r => [r.key, r.value]));
-  const out: AiSettings = { ...DEFAULTS, enabled: m.has('enabled') ? m.get('enabled') === 'true' : DEFAULTS.enabled, instructions: (m.get('instructions') ?? '').slice(0, MAX_INSTRUCTIONS) };
+  const out: AiSettings = { ...DEFAULTS, enabled: m.has('enabled') ? m.get('enabled') === 'true' : DEFAULTS.enabled, limitsOn: m.get('limitsOn') === 'true', instructions: (m.get('instructions') ?? '').slice(0, MAX_INSTRUCTIONS) };
   for (const f of FIELDS) {
     const v = Number(m.get(f.key));
     if (m.has(f.key) && Number.isFinite(v) && v >= f.lo && v <= f.hi) out[f.key] = v;
@@ -48,7 +49,7 @@ export function validateSettings(raw: unknown): AiSettings {
   if (typeof o.enabled !== 'boolean') throw new Error('Say whether the assistant is on or off');
   const instructions = o.instructions === undefined || o.instructions === null ? '' : String(o.instructions).trim();
   if (instructions.length > MAX_INSTRUCTIONS) throw new Error(`Instructions are too long: ${instructions.length.toLocaleString('en-AU')} characters, and the most is ${MAX_INSTRUCTIONS.toLocaleString('en-AU')}`);
-  const out: AiSettings = { ...DEFAULTS, enabled: o.enabled, instructions };
+  const out: AiSettings = { ...DEFAULTS, enabled: o.enabled, limitsOn: o.limitsOn === true, instructions };
   for (const f of FIELDS) {
     const v = Number(o[f.key]);
     if (!Number.isFinite(v) || v < f.lo || v > f.hi) throw new Error(`${f.label} must be between ${f.lo.toLocaleString('en-AU')} and ${f.hi.toLocaleString('en-AU')}`);
@@ -69,6 +70,7 @@ export const costUsd = (s: AiSettings, inputTokens: number, outputTokens: number
 // null = fine to go ahead, otherwise what to tell the person.
 export function checkCaps(s: AiSettings, u: Usage): string | null {
   if (!s.enabled) return 'The assistant is switched off. A manager can turn it on in the assistant settings.';
+  if (!s.limitsOn) return null;   // limits switched off: nobody is stopped by tokens or dollars (the Console spend limit still is)
   if (u.userDayTokens >= s.userDailyTokens) return `You've used your ${s.userDailyTokens.toLocaleString('en-AU')} tokens for today. It starts again at midnight (Melbourne time).`;
   if (u.monthInput + u.monthOutput >= s.monthlyTokens) return `The team has used this month's ${s.monthlyTokens.toLocaleString('en-AU')} tokens. A manager can raise the limit.`;
   if (s.monthlyUsd > 0 && (s.usdPerMInput > 0 || s.usdPerMOutput > 0) && costUsd(s, u.monthInput, u.monthOutput) >= s.monthlyUsd) {
@@ -93,7 +95,7 @@ export async function loadUsage(repId: string, today: string): Promise<Usage> {
 }
 
 export async function saveSettings(s: AiSettings, repId: string): Promise<void> {
-  const rows: [string, string][] = [['enabled', String(s.enabled)], ['instructions', s.instructions], ...FIELDS.map(f => [f.key, String(s[f.key])] as [string, string])];
+  const rows: [string, string][] = [['enabled', String(s.enabled)], ['limitsOn', String(s.limitsOn)], ['instructions', s.instructions], ...FIELDS.map(f => [f.key, String(s[f.key])] as [string, string])];
   for (const [key, value] of rows) {
     await prisma.$executeRaw`insert into crm.ai_settings (key, value, updated_by) values (${key}, ${value}, ${repId}::uuid)
       on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`;
