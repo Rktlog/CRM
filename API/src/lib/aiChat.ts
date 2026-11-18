@@ -5,7 +5,7 @@ import { attachmentBlocks as realBlocks, Attachment } from './aiFiles';
 import { billableInput } from './aiLimits';
 
 // The chat loop: ask Claude, run the look-ups it asks for, hand the results back, repeat until it answers.
-// Bounded so it can't run away: at most 8 rounds, a token ceiling for the whole question, a ceiling on each reply.
+// Bounded so it can't run away: at most 25 rounds, a token ceiling for the whole question, a ceiling on each reply.
 // Files the person attached ride along on every turn (and are cached, so asking follow-up questions is cheap).
 export type Turn = { role: 'user' | 'assistant'; content: string; attachments?: Attachment[] };
 export type Step = { tool: string; what: string };
@@ -20,6 +20,7 @@ Today is ${ctx.today} (Melbourne). Use Australian English, AUD and metric units.
 
 Using the company's data:
 - Never guess a company number, date or name. Look it up with the tools. If a tool returns nothing or an error, say so.
+- When a question needs several look-ups that do not depend on each other (different customers, different data sets, a report and a list), ask for all of them in the same turn, not one after another.
 - You can reach everything the CRM has saved, the same as its screens do: customer contact details, orders and lines, balances, credit, notes, emails logged on customers, marketing emails, tasks, stock on order, targets and more. The only things you cannot read are keys and sign-in details.
 - For one customer use account_details, and for one order use order_details: each gives everything saved about it in one go. For lists and totals use query_data (balances owing, unpaid invoices, orders to ship, quotes, the team log, the planner, credit, emails, marketing emails, campaigns and contacts (managers), stock on order, conversion, the team, targets, your own calendar) and run_report (sales lines, products, customers). If something is not covered, say so plainly.
 - Calculating: use the calculate tool for every sum, percentage, average, growth rate, margin, GST figure or multi-step calculation, instead of working it out yourself. Show the figures and the formula in a line, and round money to cents.
@@ -71,7 +72,7 @@ export async function runChat(
   const text = (m: Anthropic.Message) => m.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('').trim();
   const system = SYSTEM(ctx, { instructions: o.instructions, prefs: o.prefs });
 
-  for (let round = 0; round < 8; round++) {
+  for (let round = 0; round < 25; round++) {
     if (o.signal?.aborted) throw new Error('Stopped');
     if (round > 0) o.onReset?.();
     const msg = await deps.chatTurn({ system, messages, tools: TOOLS, maxTokens: o.maxReplyTokens, onText: o.onText, signal: o.signal, think: o.think });
@@ -85,13 +86,11 @@ export async function runChat(
       return { reply: 'That needed more look-ups than one question is allowed. Ask for something narrower, for example one customer or one state.', tools, steps, files, charts, inputTokens, outputTokens, calls, stopped: 'question too big' };
     }
     messages.push({ role: 'assistant', content: msg.content });
-    const results: Anthropic.ToolResultBlockParam[] = [];
-    for (const b of msg.content) {
-      if (b.type !== 'tool_use') continue;
-      tools.push(b.name); steps.push({ tool: b.name, what: describeCall(b.name, b.input) });
-      o.onStatus?.(`Looking up ${STATUS[b.name] ?? b.name}…`);
-      results.push({ type: 'tool_result', tool_use_id: b.id, content: await deps.runTool(b.name, b.input, ctx) });
-    }
+    // Everything Claude asked for in this round runs at the same time; the results go back in the order it asked.
+    const asked = msg.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
+    for (const b of asked) { tools.push(b.name); steps.push({ tool: b.name, what: describeCall(b.name, b.input) }); }
+    o.onStatus?.(asked.length > 1 ? `Looking up ${asked.length} things at once…` : `Looking up ${STATUS[asked[0]?.name ?? ''] ?? asked[0]?.name}…`);
+    const results: Anthropic.ToolResultBlockParam[] = await Promise.all(asked.map(async (b): Promise<Anthropic.ToolResultBlockParam> => ({ type: 'tool_result', tool_use_id: b.id, content: await deps.runTool(b.name, b.input, ctx) })));
     messages.push({ role: 'user', content: results });
   }
   return { reply: 'I could not finish that. Try asking for something narrower.', tools, steps, files, charts, inputTokens, outputTokens, calls, stopped: 'too many look-ups' };
