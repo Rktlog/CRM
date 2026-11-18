@@ -4,7 +4,7 @@ import { syncPurchaseDates } from '../sync/syncPurchaseDates';
 import { syncProductDetails } from '../sync/syncProductDetails';
 import { syncCustomerDates } from '../sync/syncCustomers';
 import { runFollowUpDrafts } from '../lib/followupDrafts';
-import { runStandaloneCreditNotes, runStandaloneCreditNotesBackfill } from '../lib/standaloneCreditsDb';
+import { runStandaloneCreditNotes, runStandaloneCreditNotesBackfill, runStandaloneCreditNotesByNumber } from '../lib/standaloneCreditsDb';
 import { syncLiewoodPos } from '../lib/liewood';
 import { syncProductCartons } from '../lib/productCartons';
 import { movePhotos } from '../lib/movePhotos';
@@ -38,6 +38,7 @@ export const JOBS: Record<string, Job> = {
   'customer-dates': { what: "DEAR's creation date for each customer", run: () => syncCustomerDates() },
   'followup-drafts': { what: 'payment reminder drafts on the first follow-up day', run: () => runFollowUpDrafts() },
   'credit-notes': { what: 'standalone credit notes from DEAR (changed in the last 45 days)', run: () => runStandaloneCreditNotes() },
+  'credit-notes-missing': { what: 'one-off: the 16 older standalone credit notes, by number', run: () => runStandaloneCreditNotesByNumber(["CR01209","CR02133","CR02176","CR02211","CR02231","CR02232","CR02233","CR02235","CR02239","CR02241","CR02261","CR02301","CR02338","CR02363","CR02364","CR02365"]) },
   'credit-notes-backfill': { what: 'standalone credit notes from DEAR since 1 January 2026: call again until it reports 0 left', run: () => runStandaloneCreditNotesBackfill() },
   'liewood-pos': { what: 'reads the Liewood purchase orders from DEAR (read only) and sends the Liewood alerts', run: () => syncLiewoodPos() },
   'product-cartons': { what: 'reads inner and outer carton and supplier cost from DEAR (read only)', run: () => syncProductCartons() },
