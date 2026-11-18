@@ -180,7 +180,6 @@ aiRouter.post('/tidy-note', async (req, res) => {
   try {
     const g = await gate(req);
     if ('error' in g) return res.status(g.status).json({ error: g.error });
-    if (overLimit(req.rep!.id)) return res.status(429).json({ error: `You've used the ${PER_HOUR} tidies an hour. Try again later.` });
     const r = await ask({ fast: true, maxTokens: Math.min(700, g.settings.maxReplyTokens), system: TIDY, user: `<note>\n${text}\n</note>` });
     logUsage(req.rep!.id, 'tidy-note', r.model, r.inputTokens, r.outputTokens);
     const tidy = safeTidy(text, r.text);

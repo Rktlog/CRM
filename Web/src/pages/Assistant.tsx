@@ -28,12 +28,7 @@ const SUGGESTIONS = [
   'Tell me everything about Little Whimsy before my call',
   'Write a one-page Word report on our open quotes for the Monday meeting',
 ];
-const FIELDS: { key: Exclude<keyof Settings, 'enabled' | 'instructions'>; label: string; hint: string }[] = [
-  { key: 'maxReplyTokens', label: 'Longest reply', hint: 'In tokens, up to 16,000. Raise it for long reports' },
-  { key: 'thinkingBudgetTokens', label: 'Thinking budget (Think harder)', hint: 'How much it may think first: 1,024 to 32,000' },
-  { key: 'chatRetentionDays', label: 'Days to keep saved chats', hint: '0 keeps them for ever' },
-];
-const DEFAULT_SETTINGS: Settings = { enabled: true, maxReplyTokens: 4000, perRequestTokens: 120_000, userDailyTokens: 300_000, monthlyTokens: 3_000_000, monthlyUsd: 0, usdPerMInput: 0, usdPerMOutput: 0, thinkingBudgetTokens: 8000, chatRetentionDays: 90, instructions: '' };
+const DEFAULT_SETTINGS: Settings = { enabled: true, maxReplyTokens: 16000, perRequestTokens: 120_000, userDailyTokens: 300_000, monthlyTokens: 3_000_000, monthlyUsd: 0, usdPerMInput: 0, usdPerMOutput: 0, thinkingBudgetTokens: 32000, chatRetentionDays: 0, instructions: '' };
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 
 // Whatever the server sends, the page copes: a missing number counts as 0 and a missing block is left out. Before this, one
@@ -273,7 +268,7 @@ function AssistantPage() {
 
       {isManager && showLimits && form && (
         <div className="section">
-          <div className="panel-title">Settings and instructions <span className="plan-count">the spend limit is set in the Claude Console</span></div>
+          <div className="panel-title">Settings and instructions</div>
           <label className="acct-region" style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
             <input type="checkbox" checked={form.enabled} onChange={e => setForm({ ...form, enabled: e.target.checked })} /> Assistant on
           </label>
@@ -282,15 +277,6 @@ function AssistantPage() {
             <textarea value={form.instructions} onChange={e => setForm({ ...form, instructions: e.target.value })} rows={5} maxLength={4000} placeholder="For example: We are a gift wholesaler. Wholesale terms are 30 days. Always quote prices ex GST. Never promise delivery dates." style={{ width: '100%' }} />
             <span className="acct-region">Everyone's assistant follows this. {form.instructions.length}/4,000</span>
           </label>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
-            {FIELDS.map(f => (
-              <label key={f.key} className="modal-field">
-                {f.label}
-                <input type="number" min={0} step="any" value={Number(form[f.key])} onChange={e => setForm({ ...form, [f.key]: Number(e.target.value) })} />
-                <span className="acct-region">{f.hint}</span>
-              </label>
-            ))}
-          </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 10 }}>
             <button className="btn" onClick={saveLimits}>Save settings</button>
             {saved && <span className="save-msg ok">{saved}</span>}

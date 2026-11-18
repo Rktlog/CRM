@@ -16,20 +16,10 @@ export type AiSettings = {
   chatRetentionDays: number;     // saved chats older than this are deleted. 0 = keep them
   instructions: string;          // the company's own instructions for the assistant (tone, rules, terms), up to 4,000 characters
 };
-export const DEFAULTS: AiSettings = { enabled: true, maxReplyTokens: 4000, perRequestTokens: 120_000, userDailyTokens: 300_000, monthlyTokens: 3_000_000, monthlyUsd: 0, usdPerMInput: 0, usdPerMOutput: 0, thinkingBudgetTokens: 8000, chatRetentionDays: 90, instructions: '' };
+export const DEFAULTS: AiSettings = { enabled: true, maxReplyTokens: 16000, perRequestTokens: 120_000, userDailyTokens: 300_000, monthlyTokens: 3_000_000, monthlyUsd: 0, usdPerMInput: 0, usdPerMOutput: 0, thinkingBudgetTokens: 32000, chatRetentionDays: 0, instructions: '' };
 export const MAX_INSTRUCTIONS = 4000;
 
-const FIELDS: { key: Exclude<keyof AiSettings, 'enabled' | 'instructions'>; label: string; lo: number; hi: number }[] = [
-  { key: 'maxReplyTokens', label: 'Longest reply', lo: 100, hi: 16000 },
-  { key: 'perRequestTokens', label: 'Tokens per question', lo: 2000, hi: 200_000 },
-  { key: 'userDailyTokens', label: 'Tokens per person per day', lo: 1000, hi: 5_000_000 },
-  { key: 'monthlyTokens', label: 'Tokens per month', lo: 10_000, hi: 500_000_000 },
-  { key: 'monthlyUsd', label: 'Monthly dollar limit', lo: 0, hi: 100_000 },
-  { key: 'usdPerMInput', label: 'Price per million input tokens', lo: 0, hi: 1000 },
-  { key: 'usdPerMOutput', label: 'Price per million output tokens', lo: 0, hi: 1000 },
-  { key: 'thinkingBudgetTokens', label: 'Thinking budget when Think harder is on', lo: 1024, hi: 32000 },
-  { key: 'chatRetentionDays', label: 'Days to keep saved chats (0 keeps them)', lo: 0, hi: 3650 },
-];
+const FIELDS: { key: Exclude<keyof AiSettings, 'enabled' | 'instructions'>; label: string; lo: number; hi: number }[] = [];   // none: nothing is capped here any more (the numbers are fixed in DEFAULTS)
 
 // From the stored rows. Anything missing or out of range falls back, so a bad row can never switch the limits off.
 export function parseSettings(rows: { key: string; value: string }[]): AiSettings {
