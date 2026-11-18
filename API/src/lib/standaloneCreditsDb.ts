@@ -46,6 +46,14 @@ export async function runStandaloneCreditNotes(opts: { sinceDaysAgo?: number; si
   return result;
 }
 
+// One-off: read these credit notes by number (they are older than the date filter reaches).
+export async function runStandaloneCreditNotesByNumber(numbers: string[], get: Get = dearGet): Promise<Result> {
+  const result = await syncStandaloneCreditNotes(await dbDeps(get), { since: 'by number', search: numbers, budgetMs: 55_000 });
+  console.log(`Credit notes by number (${numbers.length} asked for): ${result.standalone} found, ${result.saved} saved, ${result.voidedUpdated} voided, ${result.alreadySaved} already up to date, ${result.left} left to read${result.problems.length ? `, ${result.problems.length} problems` : ''}.`);
+  for (const p of result.problems.slice(0, 20)) console.warn('  credit note problem: ' + p);
+  return result;
+}
+
 // The one-off catch-up from 1 Jan 2026 (DEAR ignores the date filter when it is older than about a year, so it cannot start earlier). Call it again until it reports 0 left.
 export const BACKFILL_FROM = '2026-01-01';
 export const runStandaloneCreditNotesBackfill = (get: Get = dearGet) => runStandaloneCreditNotes({ since: BACKFILL_FROM, maxPages: 60 }, get);

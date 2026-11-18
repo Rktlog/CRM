@@ -70,7 +70,7 @@ export type Deps = {
   save: (row: NoteRow) => Promise<void>;
   now?: () => number;
 };
-export type Options = { since: string; maxDetails?: number; budgetMs?: number; pageLimit?: number; maxPages?: number };
+export type Options = { since: string; search?: string[]; maxDetails?: number; budgetMs?: number; pageLimit?: number; maxPages?: number };
 export type Result = {
   since: string; listed: number; listTotal: number | null; standalone: number; ordinaryOrdersSkipped: number; alreadySaved: number; read: number; saved: number; voidedUpdated: number;
   withoutShop: number; left: number; stoppedEarly: 'time' | 'rateLimit' | null; problems: string[];
@@ -79,6 +79,25 @@ const keyOf = (saleId: string, cr: string) => `${saleId}|${cr.toUpperCase()}`;
 const isRateLimit = (e: unknown) => /rate limit/i.test(String((e as Error)?.message ?? e));
 const msg = (e: unknown) => String((e as Error)?.message ?? e).slice(0, 200);
 
+// Reads the list by search term (one call per credit note number) instead of by date. For notes older than the date filter reaches.
+async function searchTerms(d: Deps, terms: string[], limit: number, entries: Map<string, any>, res: Result, started: number, budgetMs: number): Promise<void> {
+  const now = d.now ?? Date.now;
+  for (const t of terms) {
+    if (now() - started > budgetMs) { res.problems.push(`${t}: not searched, out of time (run it again)`); continue; }
+    try {
+      const r = await d.get('/saleCreditNoteList', { Page: 1, Limit: limit, Search: t });
+      const batch: any[] = arr(r?.SaleList ?? Object.values(r ?? {}).find(Array.isArray));
+      res.listed += batch.length;
+      const hits = batch.filter(isStandalone);
+      for (const e of hits) entries.set(String(e.SaleID), e);
+      if (!hits.length) res.problems.push(`${t}: no standalone credit note found in DEAR`);
+    } catch (err) {
+      res.problems.push(`${t}: search failed (${msg(err)})`);
+      if (isRateLimit(err)) { res.stoppedEarly = 'rateLimit'; break; }
+    }
+  }
+}
+
 export async function syncStandaloneCreditNotes(d: Deps, o: Options): Promise<Result> {
   const now = d.now ?? Date.now, started = now();
   const maxDetails = o.maxDetails ?? 40, budgetMs = o.budgetMs ?? 45_000, limit = o.pageLimit ?? 100, maxPages = o.maxPages ?? 60;
@@ -86,7 +105,8 @@ export async function syncStandaloneCreditNotes(d: Deps, o: Options): Promise<Re
 
   // 1. the credit note list, page by page, since the date
   const entries = new Map<string, any>();
-  for (let page = 1; page <= maxPages; page++) {
+  if (o.search) await searchTerms(d, o.search, limit, entries, res, started, budgetMs);
+  else for (let page = 1; page <= maxPages; page++) {
     const r = await d.get('/saleCreditNoteList', { Page: page, Limit: limit, UpdatedSince: new Date(`${o.since}T00:00:00Z`).toISOString() });
     const batch: any[] = arr(r?.SaleList ?? Object.values(r ?? {}).find(Array.isArray));
     for (const e of batch) if (e?.SaleID) entries.set(String(e.SaleID), e);
