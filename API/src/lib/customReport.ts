@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
 import { territoryWhere } from './territory';
 import { chooseEta, incomingFor } from './eta';
-import { listStatuses } from './productStatuses';
+import { listStatuses, matchStatus } from './productStatuses';
 import { councilReady } from './council';
 
 // Custom reports: pick a dataset, the columns, filters, and (optionally) how to add it up. Nothing the browser sends
@@ -15,6 +15,7 @@ export type DatasetKey = 'sales' | 'products' | 'customers';
 export type Filters = {
   from?: string; to?: string; brands?: string[]; states?: string[]; categories?: string[]; statuses?: string[]; reps?: string[];
   realOrdersOnly?: boolean; inStockOnly?: boolean; includeArchived?: boolean;
+  includeOldOrders?: boolean;   // order lines only: also count old (Q) orders from before July 2025. Off by default; the assistant turns it on.
 };
 export type Definition = { dataset: DatasetKey; columns: string[]; filters: Filters; groupBy: string[]; sort?: { key: string; dir: 'asc' | 'desc' } };
 export type Rep = { id: string; role: string };
@@ -22,13 +23,14 @@ export type Rep = { id: string; role: string };
 export const DATASETS: Record<DatasetKey, { label: string; blurb: string; filters: (keyof Filters)[]; columns: Col[] }> = {
   sales: {
     label: 'Order lines',
-    blurb: 'Every product line on every order, by order date. (Sales Data counts invoices, so its totals can differ.)',
-    filters: ['from', 'to', 'brands', 'states', 'categories', 'realOrdersOnly'],
+    blurb: 'Every product line on every order, by order date. Old (Q) orders from before July 2025 are included for the assistant (Order type shows Old or Live). Sales Data counts invoices, so its totals can differ.',
+    filters: ['from', 'to', 'brands', 'states', 'categories', 'realOrdersOnly', 'includeOldOrders'],
     columns: [
       { key: 'orderDate', label: 'Order date', type: 'date', dim: true },
       { key: 'orderMonth', label: 'Order month', type: 'text', dim: true },
       { key: 'orderNo', label: 'Order no', type: 'text', dim: true },
       { key: 'status', label: 'Order status', type: 'text', dim: true },
+      { key: 'orderType', label: 'Order type', type: 'text', dim: true },
       { key: 'customer', label: 'Customer', type: 'text', dim: true },
       { key: 'state', label: 'State', type: 'text', dim: true },
       { key: 'council', label: 'Customer council', type: 'text', dim: true },
@@ -113,11 +115,11 @@ export function parseDefinition(raw: unknown): Definition {
   if (filters.from && filters.to && filters.from > filters.to) throw new ReportInputError('The "from" date is after the "to" date');
   for (const k of ['brands', 'states', 'categories', 'reps'] as const) if (ds.filters.includes(k) && strings(f[k]).length) filters[k] = strings(f[k]);
   if (ds.filters.includes('statuses') && strings(f.statuses).length) {
-    // Product statuses are managers' to add and remove, so a key is only checked for being shaped like one here; one that no longer
-    // exists simply matches nothing when the report runs.
-    filters.statuses = o.dataset === 'products' ? strings(f.statuses).filter(s => s === 'none' || /^[a-z0-9_]{1,40}$/.test(s)) : strings(f.statuses).filter(s => CUSTOMER_STATUSES.includes(s));
+    // Product statuses are managers' to add and remove, so they are checked against the live list when the report runs (by key or by name,
+    // see loadProducts). Here they are only kept to a sensible length. Customer statuses are a fixed list.
+    filters.statuses = o.dataset === 'products' ? strings(f.statuses).filter(s => s.length <= 60) : strings(f.statuses).filter(s => CUSTOMER_STATUSES.includes(s));
   }
-  for (const k of ['realOrdersOnly', 'inStockOnly', 'includeArchived'] as const) if (ds.filters.includes(k) && typeof f[k] === 'boolean') filters[k] = f[k];
+  for (const k of ['realOrdersOnly', 'inStockOnly', 'includeArchived', 'includeOldOrders'] as const) if (ds.filters.includes(k) && typeof f[k] === 'boolean') filters[k] = f[k];
   const sort = o.sort && keys.includes(o.sort.key) ? { key: String(o.sort.key), dir: (o.sort.dir === 'desc' ? 'desc' : 'asc') as 'asc' | 'desc' } : undefined;
   return { dataset: o.dataset, columns, filters, groupBy, sort };
 }
@@ -145,9 +147,20 @@ async function loadSales(f: Filters, rep: Rep): Promise<Row[]> {
   // Council and postcode come from the account (council.sql). Until that has been run the columns are simply empty.
   const councilCols = (await councilReady()) ? Prisma.sql`a.council, a.postcode` : Prisma.sql`null::text as council, null::text as postcode`;
   if (f.realOrdersOnly !== false) w.push(Prisma.sql`upper(coalesce(q.fulfillment_status, '')) not in ('DRAFT', 'ESTIMATING', 'ESTIMATED', 'ORDERING', 'VOIDED', 'CREDITED')`);
+  // Old (Q) orders ran until the move to the new DEAR on 1 July 2025. A Q order that was still open then was made again as an SQ order that
+  // names its Q number in the reference, so those Q orders are left out here or their products would be counted twice.
+  const oldOrders = f.includeOldOrders === true;
+  const remade = oldOrders ? Prisma.sql`with remade as (
+      select distinct upper(m[1]) as n from crm.quotes s, regexp_matches(coalesce(s.reference, ''), '(Q[0-9]{3,6})', 'gi') as m where s.number like 'SQ%'
+    )` : Prisma.empty;
+  const liveOnly = oldOrders
+    ? Prisma.sql`((q.source <> 'rhino-history' and q.number not like 'Q%') or q.number not in (select n from remade))`
+    : Prisma.sql`q.source <> 'rhino-history' and q.number not like 'Q%'`;
   const rows = await prisma.$queryRaw<any[]>(Prisma.sql`
+    ${remade}
     select ((q.sent_at at time zone 'UTC') at time zone 'Australia/Melbourne')::date::text as order_date, q.number as order_no,
-           coalesce(q.fulfillment_status, '') as status, a.name as customer, a.region as state, ${councilCols},
+           case when q.source = 'rhino-history' or q.number like 'Q%' then 'Old' else 'Live' end as order_type,
+           case when q.source = 'rhino-history' or q.number like 'Q%' then '' else coalesce(q.fulfillment_status, '') end as status, a.name as customer, a.region as state, ${councilCols},
            coalesce(nullif(a.category, ''), 'Uncategorized') as category, rp.name as rep,
            l.brand, l.sku, l.product_name as product, l.quantity::float8 as qty, l.unit_price::float8 as unit_price,
            l.discount::float8 as discount, l.line_total::float8 as line_total
@@ -155,12 +168,12 @@ async function loadSales(f: Filters, rep: Rep): Promise<Row[]> {
     join crm.quotes q on q.id = l.quote_id
     join crm.accounts a on a.id = q.account_id
     left join crm.reps rp on rp.id = a.rep_id
-    where q.source <> 'rhino-history' and q.number not like 'Q%' ${and(w)}
+    where ${liveOnly} ${and(w)}
     order by q.sent_at desc, q.number, l.sku
     limit ${MAX_ROWS + 1}`);
   return rows.map(r => ({
     orderDate: r.order_date, orderMonth: String(r.order_date).slice(0, 7), orderNo: r.order_no, status: r.status.charAt(0) + r.status.slice(1).toLowerCase(),
-    customer: r.customer, state: r.state, council: r.council ?? '', postcode: r.postcode ?? '', category: r.category, rep: r.rep ?? '', brand: r.brand ?? '', sku: r.sku, product: r.product,
+    orderType: r.order_type === 'Old' ? 'Old (before July 2025)' : 'Live', customer: r.customer, state: r.state, council: r.council ?? '', postcode: r.postcode ?? '', category: r.category, rep: r.rep ?? '', brand: r.brand ?? '', sku: r.sku, product: r.product,
     qty: r.qty, unitPrice: r.unit_price, discount: r.discount, lineTotal: r.line_total,
   }));
 }
@@ -172,7 +185,15 @@ async function loadProducts(f: Filters, today: string): Promise<Row[]> {
   if (f.inStockOnly) w.push({ available: { gt: 0 } });
   const statusList = await listStatuses();
   if (f.statuses?.length) {
-    const keys = f.statuses.filter(k => statusList.some(s => s.key === k));
+    // A status may be given by its key (eol_phasing_out) or by its name ("EOL & Phasing Out"). One that matches neither is an error:
+    // quietly dropping it would return every product, which looks like an answer and is not.
+    const keys: string[] = [], unknown: string[] = [];
+    for (const given of f.statuses) {
+      if (given === 'none') continue;
+      const hit = matchStatus(statusList, given);
+      if (hit) keys.push(hit.key); else unknown.push(given);
+    }
+    if (unknown.length) throw new ReportInputError(`Unknown product status: ${unknown.join(', ')}. The statuses are: ${statusList.map(s => s.label).join(', ')}.`);
     w.push({ OR: [...(keys.length ? [{ lifecycle: { in: keys } }] : []), ...(f.statuses.includes('none') ? [{ lifecycle: null }] : [])] });
   }
   const products = await prisma.product.findMany({ where: { AND: w }, orderBy: [{ brand: 'asc' }, { sku: 'asc' }], take: MAX_ROWS + 1 });

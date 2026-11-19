@@ -36,7 +36,15 @@ async function productDescriptions(skus: string[]): Promise<Map<string, string>>
   } catch { /* not there yet */ }
   return out;
 }
-import { DATASETS, parseDefinition, runReport, ReportInputError } from './customReport';
+import { DATASETS, parseDefinition as parseReport, runReport, ReportInputError } from './customReport';
+
+// For the assistant, the order lines report also counts old (Q) orders, so product sales before July 2025 can be answered. The screens
+// keep their own default (live orders only) because a saved report there should not change under the person using it.
+const parseDefinition = (raw: unknown) => {
+  const def = parseReport(raw);
+  if (def.dataset === 'sales' && (raw as any)?.filters?.includeOldOrders === undefined) def.filters.includeOldOrders = true;
+  return def;
+};
 import { reportWorkbook } from './customReportXlsx';
 import { safeFilename, toCsv, OutFormat, Attachment } from './aiFiles';
 import { parseMarkdown, withTitle, renderDocx, renderPdf, DocsMissingError } from './aiDocs';
@@ -117,7 +125,7 @@ Dates are YYYY-MM-DD. Adding up (groupBy) totals the number and money columns fo
       properties: {
         dataset: { type: 'string', enum: Object.keys(DATASETS) },
         columns: { type: 'array', items: { type: 'string' } },
-        filters: { type: 'object', description: 'Any of: from, to, brands[], states[], categories[], statuses[], reps[], realOrdersOnly, inStockOnly, includeArchived. Only those the dataset allows.' },
+        filters: { type: 'object', description: 'Any of: from, to, brands[], states[], categories[], statuses[], reps[], realOrdersOnly, inStockOnly, includeArchived, includeOldOrders (order lines: on by default here, counts old Q orders from before July 2025). Only those the dataset allows. Product statuses can be given by name, such as "EOL & Phasing Out".' },
         groupBy: { type: 'array', items: { type: 'string' } },
         sort: { type: 'object', properties: { key: { type: 'string' }, dir: { type: 'string', enum: ['asc', 'desc'] } } },
         limit: { type: 'number', description: 'How many rows to return, up to 100. Default 40.' },
