@@ -5,6 +5,7 @@
 //   has not allocated yet. If it is short: what is coming, when.
 // - The reference for DEAR, the file DEAR imports (Bulk Update Sale Quote), the email to sales, and the follow-up rules.
 
+import { combinePct } from './tsOffers';
 export class TsError extends Error { status: number; constructor(message: string, status = 400) { super(message); this.status = status; } }
 export const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const money = (n: number) => n.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -14,15 +15,17 @@ export const gstRateFor = (region: string | null | undefined) => (/^(NZ|INTL)$/i
 
 // ---------- totals ----------
 export type Discount = { kind: 'pct' | 'amount'; value: number } | null;
-export type TotalsIn = { lines: { qty: number; price: number }[]; discount: Discount; freight: number; cardPayment: boolean; surchargePct: number | null; gstRate: number };
+export type TotalsIn = { lines: { qty: number; price: number; pct?: number }[]; discount: Discount; freight: number; cardPayment: boolean; surchargePct: number | null; gstRate: number };
 export type Totals = {
-  goods: number;            // lines at their price, before discount
-  linePct: number;          // the discount % put on every line (what DEAR applies)
-  discount: number;         // what the discount takes off, in dollars, as DEAR will work it out
-  goodsAfter: number;       // goods after the discount
+  goods: number;            // lines at their price, before any discount (free bonus products at their price)
+  linePct: number;          // the manager's discount % put on every paying line
+  offerDiscount: number;    // what the offers take off (percent offers, bundles, free bonus products), in dollars
+  discount: number;         // everything the offers and the discount take off, in dollars, as DEAR will work it out
+  goodsAfter: number;       // goods after both
   freight: number; surcharge: number; surchargePct: number;
   exGst: number; gst: number; total: number;
   lineTotals: number[];
+  linePcts: number[];       // each line's % off in the DEAR file (its offer and the discount together)
 };
 export function discountPct(goods: number, d: Discount): number {
   if (!d || !(d.value > 0) || !(goods > 0)) return 0;
@@ -31,15 +34,17 @@ export function discountPct(goods: number, d: Discount): number {
 }
 export function totals(t: TotalsIn): Totals {
   const goods = round2(t.lines.reduce((s, l) => s + l.qty * l.price, 0));
-  const linePct = discountPct(goods, t.discount);
-  const lineTotals = t.lines.map(l => round2(l.qty * l.price * (1 - linePct / 100)));
+  const offerBase = round2(t.lines.reduce((s, l) => s + round2(l.qty * l.price * (1 - (l.pct || 0) / 100)), 0));
+  const linePct = discountPct(offerBase, t.discount);   // the manager's discount works on what is left after the offers
+  const linePcts = t.lines.map(l => ((l.pct || 0) >= 100 ? 100 : combinePct(l.pct || 0, linePct)));
+  const lineTotals = t.lines.map((l, i) => round2(l.qty * l.price * (1 - linePcts[i]! / 100)));
   const goodsAfter = round2(lineTotals.reduce((s, x) => s + x, 0));
   const freight = round2(Math.max(0, t.freight || 0));
   const surchargePct = t.cardPayment && t.surchargePct && t.surchargePct > 0 ? t.surchargePct : 0;
   const surcharge = round2(((goodsAfter + freight) * surchargePct) / 100);
   const exGst = round2(goodsAfter + freight + surcharge);
   const gst = round2(exGst * t.gstRate);
-  return { goods, linePct, discount: round2(goods - goodsAfter), goodsAfter, freight, surcharge, surchargePct, exGst, gst, total: round2(exGst + gst), lineTotals };
+  return { goods, linePct, offerDiscount: round2(goods - offerBase), discount: round2(goods - goodsAfter), goodsAfter, freight, surcharge, surchargePct, exGst, gst, total: round2(exGst + gst), lineTotals, linePcts };
 }
 /** A discount as typed: { kind: 'pct' | 'amount', value }. Blank or 0 = none. */
 export function parseDiscount(kind: unknown, value: unknown, goods: number): Discount {
@@ -83,9 +88,9 @@ export function cleanReference(v: unknown): string {
 }
 const csvCell = (v: string | number) => { const s = String(v); return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
 /** The file DEAR imports into a sale quote (Bulk Update Sale Quote): SKU, Name, Comment, Quantity, Price, Discount (%). */
-export function dearCsv(lines: { sku: string; name: string; comment?: string | null; qty: number; price: number }[], linePct: number, charges: { sku: string; name: string; amount: number }[] = []): string {
+export function dearCsv(lines: { sku: string; name: string; comment?: string | null; qty: number; price: number; pct?: number }[], linePct: number, charges: { sku: string; name: string; amount: number }[] = []): string {
   const rows = [['SKU', 'Name', 'Comment', 'Quantity', 'Price', 'Discount']];
-  for (const l of lines) rows.push([l.sku, l.name, l.comment ?? '', String(l.qty), String(round2(l.price)), String(linePct)]);
+  for (const l of lines) rows.push([l.sku, l.name, l.comment ?? '', String(l.qty), String(round2(l.price)), String(l.pct ?? linePct)]);
   for (const c of charges) if (c.amount > 0) rows.push([c.sku, c.name, '', '1', String(round2(c.amount)), '0']);
   return rows.map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }
@@ -94,21 +99,23 @@ export function dearCsv(lines: { sku: string; name: string; comment?: string | n
 export type EmailOrder = {
   number: string; kind: 'order' | 'quote'; reference: string; customerPo: string | null; orderDate: string; showName: string; repName: string | null;
   customer: { name: string; isNew: boolean; region: string | null; contact: string | null; email: string | null; phone: string | null; address: string | null; terms: string | null };
-  lines: { sku: string; name: string; qty: number; price: number; lineTotal: number; stock: string }[];
+  lines: { sku: string; name: string; qty: number; price: number; lineTotal: number; stock: string; pct?: number; note?: string | null }[];
   totals: Totals; notes: string | null; version: number; chargesInFile: boolean;
+  dearReference?: string; payBy?: string | null; offersNote?: string[]; freightNote?: string | null;
 };
 export function salesEmail(o: EmailOrder): { subject: string; body: string } {
   const c = o.customer, t = o.totals, what = o.kind === 'quote' ? 'Quote' : 'Order';
   const body = [
     `${o.version > 1 ? 'UPDATED: ' : ''}A trade show ${o.kind} was written in Radar at ${o.showName}. Please enter it in DEAR${o.kind === 'quote' ? ' as a quote' : ''}.`, '',
-    `REFERENCE TO USE: ${o.reference}`, ...(o.customerPo ? [`Customer's PO: ${o.customerPo}`] : []), `Radar ${what.toLowerCase()}: ${o.number}, ${ddmmyyyy(o.orderDate)}, by ${o.repName ?? 'unknown'}`, '',
+    `REFERENCE TO USE: ${o.dearReference ?? o.reference}`, ...(o.dearReference ? [`Radar reference: ${o.reference}`] : []), ...(o.customerPo ? [`Customer's PO: ${o.customerPo}`] : []), `Radar ${what.toLowerCase()}: ${o.number}, ${ddmmyyyy(o.orderDate)}, by ${o.repName ?? 'unknown'}`, '',
     'CUSTOMER' + (c.isNew ? ' (NEW: not in DEAR yet, please set them up with this exact name)' : ''),
     `  ${c.name}${c.region ? ` (${c.region})` : ''}`, ...(c.contact ? [`  Contact: ${c.contact}`] : []), ...(c.email ? [`  Email: ${c.email}`] : []), ...(c.phone ? [`  Phone: ${c.phone}`] : []),
     ...(c.address ? [`  Deliver to: ${c.address}`] : []), ...(c.terms ? [`  Terms: ${c.terms}`] : []), '',
     'PRODUCTS (wholesale ex GST)',
-    ...o.lines.map(l => `  ${l.sku}  ${l.name}  x${l.qty} @ $${money(l.price)}${t.linePct ? ` less ${t.linePct}%` : ''} = $${money(l.lineTotal)}   [${l.stock}]`), '',
-    `Goods: $${money(t.goods)}`, ...(t.linePct ? [`Discount: ${t.linePct}% on every line, -$${money(t.discount)}`] : []), `Freight: $${money(t.freight)}`,
+    ...o.lines.map(l => `  ${l.sku}  ${l.name}  x${l.qty} @ $${money(l.price)}${(l.pct ?? t.linePct) ? ` less ${l.pct ?? t.linePct}%` : ''} = $${money(l.lineTotal)}${l.note ? `  (${l.note})` : ''}   [${l.stock}]`), '',
+    `Goods: $${money(t.goods)}`, ...(t.offerDiscount ? [`Offers: -$${money(t.offerDiscount)}`] : []), ...(t.linePct ? [`Discount: ${t.linePct}% on every line, -$${money(round2(t.discount - (t.offerDiscount || 0)))}`] : []), `Freight: $${money(t.freight)}${o.freightNote ? ` (${o.freightNote})` : ''}`,
     ...(t.surcharge ? [`Card surcharge (${t.surchargePct}%): $${money(t.surcharge)}`] : []), `Total ex GST: $${money(t.exGst)}`, `GST: $${money(t.gst)}`, `TOTAL inc GST: $${money(t.total)}`, '',
+    ...(o.offersNote?.length ? ['OFFERS ON THIS ORDER', ...o.offersNote.map(x => `  ${x}`), ...(o.payBy ? [`  These only hold if the order is paid by ${ddmmyyyy(o.payBy)}.`] : []), ''] : []),
     ...(o.notes ? ['NOTES', o.notes, ''] : []),
     `Attached: ${o.reference.replace(/[^\w\- ]+/g, '_')}.csv, ready to import into the ${o.kind === 'quote' ? 'quote' : 'sale'} in DEAR (Bulk Update Sale Quote).${o.chargesInFile ? '' : ' Add the freight and surcharge in DEAR.'}`,
     'Use the reference above exactly, so Radar can match the DEAR order to this one.',

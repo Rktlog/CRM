@@ -4,6 +4,7 @@
 import { prisma } from './prisma';
 import { sendAlert } from './alerts';
 import { wholesalePrice } from './pricing';
+import { autoFreight, chargeSkus, dearReference, orderPlus, withOffers, writeLines } from './tradeshowOrderPlus';
 import {
   TsError, cleanReference, cleanText, dearCsv, defaultReference, firstFollowUp, followUpsClosed, gstRateFor, holdsStock, incrementProblem, nameKey, orderStage,
   parseDay, parseDiscount, plusDays, parseNewCustomer, phoneKey, QUOTE_STAGE, round2, salesEmail, STAGE_LABEL, stockView, totals, type DearLink, type Discount, type OrderStage,
@@ -33,7 +34,8 @@ const linkedCte = (where = '') => `
       where (o.dear_quote_id is not null and q.id = o.dear_quote_id)
          or (o.dear_quote_id is null and o.status = 'sent' and q.reference is not null and q.sent_at >= o.order_date - 3
              and q.source is distinct from 'rhino-history'
-             and (q.reference ~* ('\\m' || o.number || '\\M') or upper(btrim(q.reference)) = upper(btrim(o.reference))))
+             and (q.reference ~* ('\\m' || o.number || '\\M') or upper(btrim(q.reference)) = upper(btrim(o.reference))
+             or (o.dear_reference is not null and q.account_id = o.account_id and upper(btrim(q.reference)) = upper(btrim(o.dear_reference)))))
       order by upper(coalesce(q.fulfillment_status, '')) in ('VOIDED', 'CREDITED'), q.sent_at desc limit 1
     ) dq on true
   )`;
@@ -175,13 +177,13 @@ async function showRow(id: string): Promise<ShowRow> {
 }
 
 // ---------- orders ----------
-type LineRow = { line_no: number; sku: string; name: string; brand: string | null; qty: number; price: string; comment: string | null };
+type LineRow = { line_no: number; sku: string; name: string; brand: string | null; qty: number; price: string; comment: string | null; pct: number; line_kind: string; offer_id: string | null };
 const discountOf = (o: any): Discount => (o.discount_kind && Number(o.discount_value) > 0 ? { kind: o.discount_kind, value: Number(o.discount_value) } : null);
-function orderTotals(o: any, lines: { qty: number; price: number }[]) {
+function orderTotals(o: any, lines: { qty: number; price: number; pct?: number }[]) {
   return totals({ lines, discount: discountOf(o), freight: Number(o.freight) || 0, cardPayment: !!o.card_payment, surchargePct: num(o.card_surcharge_pct), gstRate: Number(o.gst_rate) });
 }
 async function linesOf(ids: string[]): Promise<Map<string, LineRow[]>> {
-  const rows = ids.length ? await prisma.$queryRaw<(LineRow & { order_id: string })[]>`select order_id, line_no, sku, name, brand, qty, price::text, comment from crm.ts_order_lines where order_id = any(${ids}::uuid[]) order by order_id, line_no` : [];
+  const rows = ids.length ? await prisma.$queryRaw<(LineRow & { order_id: string })[]>`select order_id, line_no, sku, name, brand, qty, price::text, comment, pct::float8 as pct, line_kind, offer_id from crm.ts_order_lines where order_id = any(${ids}::uuid[]) order by order_id, line_no` : [];
   const m = new Map<string, LineRow[]>(); for (const r of rows) m.set(r.order_id, [...(m.get(r.order_id) ?? []), r]); return m;
 }
 async function linkedOrders(where: string, ...params: unknown[]): Promise<Linked[]> {
@@ -205,7 +207,8 @@ export async function startOrder(rep: Rep, b: any): Promise<string> {
       insert into crm.ts_orders (show_id, account_id, new_customer, kind, rep_id, contact_name, contact_email, contact_phone, delivery_address, gst_rate, card_surcharge_pct)
       values (${show.id}::uuid, ${acct.id}::uuid, ${acct.isNew}, ${kind}, ${rep.id}::uuid, ${a.contact_name}, ${a.email}, ${a.phone}, ${a.address}, ${gstRateFor(a.region)}, ${num(show.card_surcharge_pct)})
       returning id, number, order_date`;
-    await prisma.$queryRaw`update crm.ts_orders set reference = ${defaultReference(show.ref_name, day(o!.order_date)!, o!.number)} where id = ${o!.id}::uuid`;
+    const dref = dearReference(show.ref_name, day(o!.order_date)!);   // what sales type in DEAR; Radar's own adds the TS number
+    await prisma.$queryRaw`update crm.ts_orders set dear_reference = ${dref}, reference = ${`${dref} ${o!.number}`} where id = ${o!.id}::uuid`;
     if (acct.isNew) await addSystemLog(o!.id, null, rep.id, 'New customer added at the show.');
     return o!.id;
   });
@@ -220,23 +223,21 @@ export async function saveOrder(rep: Rep, id: unknown, b: any): Promise<void> {
     const field = (k: string, max: number) => (b?.[k] === undefined ? undefined : cleanText(b[k], max));
     if (o.status === 'sent') {   // after it is confirmed, only the reference, the customer's PO and the notes change (then send it again)
       const ref = b?.reference === undefined ? undefined : cleanReference(b.reference);
-      await prisma.$queryRaw`update crm.ts_orders set reference = coalesce(${ref ?? null}, reference), customer_po = case when ${b?.customerPo !== undefined}::boolean then ${field('customerPo', 60) ?? null}::text else customer_po end,
+      await prisma.$queryRaw`update crm.ts_orders set dear_reference = coalesce(${ref ?? null}::text, dear_reference), reference = case when ${ref ?? null}::text is not null then ${ref ?? null}::text || ' ' || number else reference end, customer_po = case when ${b?.customerPo !== undefined}::boolean then ${field('customerPo', 60) ?? null}::text else customer_po end,
         notes = case when ${b?.notes !== undefined}::boolean then ${field('notes', 2000) ?? null}::text else notes end, updated_at = now() where id = ${oid}::uuid`;
-      if (ref && ref !== o.reference) await addSystemLog(oid, null, rep.id, `Reference changed from "${o.reference}" to "${ref}". Send it to sales again so they use the new one.`);
+      if (ref && ref !== (o.dear_reference ?? o.reference)) await addSystemLog(oid, null, rep.id, `Reference changed from "${o.dear_reference ?? o.reference}" to "${ref}". Send it to sales again so they use the new one.`);
       return;
     }
     if (o.status !== 'draft') throw new TsError('A cancelled order cannot be changed.');
     // the lines
-    let lines: { sku: string; qty: number; comment: string | null }[] | undefined;
+    let lines: { sku: string; qty: number; comment: string | null; kind: 'normal' | 'bundle'; offerId: string | null }[] | undefined;
     if (b?.lines !== undefined) {
       if (!Array.isArray(b.lines) || b.lines.length > 300) throw new TsError('Too many lines.');
-      lines = b.lines.map((l: any) => ({ sku: String(l?.sku ?? '').trim(), qty: Number(l?.qty), comment: cleanText(l?.comment, 200) }));
+      lines = b.lines.map((l: any) => ({ sku: String(l?.sku ?? '').trim(), qty: Number(l?.qty), comment: cleanText(l?.comment, 200), kind: l?.kind === 'bundle' ? 'bundle' as const : 'normal' as const, offerId: typeof l?.offerId === 'string' && UUID.test(l.offerId) ? l.offerId : null }));
       for (const l of lines!) if (!l.sku || !Number.isInteger(l.qty) || l.qty < 1 || l.qty > 100000) throw new TsError(`Check the quantity for ${l.sku || 'a line'} (a whole number of 1 or more).`);
       const facts = await stockFacts(lines!.map(l => l.sku), oid);
       const priced = lines!.map(l => { const f = facts.get(l.sku.toUpperCase()); if (!f) throw new TsError(`Radar has no product ${l.sku}.`); if (f.price === null) throw new TsError(`${f.sku} has no wholesale price in DEAR.`); return { ...l, sku: f.sku, name: f.name, brand: f.brand, price: f.price }; });
-      await prisma.$queryRaw`delete from crm.ts_order_lines where order_id = ${oid}::uuid`;
-      if (priced.length) await prisma.$queryRaw`insert into crm.ts_order_lines (order_id, line_no, sku, name, brand, qty, price, comment)
-        select ${oid}::uuid, * from unnest(${priced.map((_, i) => i + 1)}::int[], ${priced.map(l => l.sku)}::text[], ${priced.map(l => l.name)}::text[], ${priced.map(l => l.brand)}::text[], ${priced.map(l => l.qty)}::int[], ${priced.map(l => String(l.price))}::numeric[], ${priced.map(l => l.comment)}::text[])`;
+      await writeLines(oid, await withOffers(o.show_id, priced as any));
     }
     // the discount: managers only
     let dKind: string | null | undefined, dValue: number | null | undefined;
@@ -251,7 +252,7 @@ export async function saveOrder(rep: Rep, id: unknown, b: any): Promise<void> {
     const ref = b?.reference === undefined ? undefined : cleanReference(b.reference);
     const kind = b?.kind === undefined ? undefined : b.kind === 'quote' ? 'quote' : 'order';
     await prisma.$queryRaw`update crm.ts_orders set
-        kind = coalesce(${kind ?? null}::text, kind), reference = coalesce(${ref ?? null}::text, reference), freight = coalesce(${freight ?? null}::numeric, freight),
+        kind = coalesce(${kind ?? null}::text, kind), dear_reference = coalesce(${ref ?? null}::text, dear_reference), reference = case when ${ref ?? null}::text is not null then ${ref ?? null}::text || ' ' || number else reference end, freight = coalesce(${freight ?? null}::numeric, freight),
         discount_kind = case when ${dKind !== undefined}::boolean then ${dKind ?? null}::text else discount_kind end,
         discount_value = case when ${dKind !== undefined}::boolean then ${dValue ?? null}::numeric else discount_value end,
         card_payment = coalesce(${typeof b?.cardPayment === 'boolean' ? b.cardPayment : null}::boolean, card_payment),
@@ -263,6 +264,7 @@ export async function saveOrder(rep: Rep, id: unknown, b: any): Promise<void> {
         delivery_address = case when ${b?.deliveryAddress !== undefined}::boolean then ${field('deliveryAddress', 300) ?? null}::text else delivery_address end,
         updated_at = now()
       where id = ${oid}::uuid`;
+    await autoFreight(oid, { id: rep.id, role: rep.role }, b);   // the team's calculator, or Australia Post for New Zealand, unless the freight was typed in
   });
 }
 
@@ -299,17 +301,18 @@ async function emailSales(rep: Rep, oid: string, d: { alert: typeof sendAlert })
   const show = await showRow(o.show_id);
   const [a] = await prisma.$queryRaw<any[]>`select name, region, payment_terms from crm.accounts where id = ${o.account_id}::uuid`;
   const lines = (await linesOf([oid])).get(oid) ?? [];
-  const t = orderTotals(o, lines.map(l => ({ qty: l.qty, price: Number(l.price) })));
+  const t = orderTotals(o, lines.map(l => ({ qty: l.qty, price: Number(l.price), pct: Number(l.pct) || 0 })));
   const facts = await stockFacts(lines.map(l => l.sku), oid);
-  const ch = CHARGES();
+  const ch = await chargeSkus();
+  const plus = await orderPlus(o, lines, t, stageOf(o));
   const charges = [...(ch.freight ? [{ sku: ch.freight, name: 'Freight', amount: t.freight }] : []), ...(ch.surcharge ? [{ sku: ch.surcharge, name: 'Credit card surcharge', amount: t.surcharge }] : [])];
   const msg = salesEmail({
-    number: o.number, kind: o.kind, reference: o.reference, customerPo: o.customer_po, orderDate: day(o.order_date)!, showName: show.name, repName: o.rep_name,
+    number: o.number, kind: o.kind, reference: o.reference, dearReference: plus.dearReference, customerPo: o.customer_po, orderDate: day(o.order_date)!, showName: show.name, repName: o.rep_name,
     customer: { name: a.name, isNew: o.new_customer, region: a.region, contact: o.contact_name, email: o.contact_email, phone: o.contact_phone, address: o.delivery_address, terms: a.payment_terms },
-    lines: lines.map((l, i) => { const f = facts.get(l.sku.toUpperCase()); return { sku: l.sku, name: l.name, qty: l.qty, price: Number(l.price), lineTotal: t.lineTotals[i]!, stock: f ? stockView(l.qty, f.available, f.pending, f.incoming, f.eta).note : 'not in Radar' }; }),
-    totals: t, notes: o.notes, version: v!.v, chargesInFile: !!(ch.freight || !t.freight) && !!(ch.surcharge || !t.surcharge),
+    lines: lines.map((l, i) => { const f = facts.get(l.sku.toUpperCase()); return { sku: l.sku, name: l.name, qty: l.qty, price: Number(l.price), lineTotal: t.lineTotals[i]!, pct: t.linePcts[i], note: l.line_kind === 'gift' ? 'free bonus' : l.line_kind === 'bundle' ? 'bundle' : null, stock: f ? stockView(l.qty, f.available, f.pending, f.incoming, f.eta).note : 'not in Radar' }; }),
+    totals: t, notes: o.notes, version: v!.v, chargesInFile: !!(ch.freight || !t.freight) && !!(ch.surcharge || !t.surcharge), payBy: plus.payBy, offersNote: plus.applied.map(x => x.text), freightNote: o.freight_note,
   });
-  const csv = dearCsv(lines.map(l => ({ sku: l.sku, name: l.name, comment: l.comment, qty: l.qty, price: Number(l.price) })), t.linePct, charges);
+  const csv = dearCsv(lines.map((l, i) => ({ sku: l.sku, name: l.name, comment: l.comment, qty: l.qty, price: Number(l.price), pct: t.linePcts[i] })), t.linePct, charges);
   const file = `${o.reference.replace(/[^\w\- ]+/g, '_').trim()}.csv`;
   const r = await d.alert('tradeshow_order' as any, msg, { relatedId: `ts|${oid}|v${v!.v}`, attachments: [{ name: file, mime: 'text/csv', data: Buffer.from(csv, 'utf8') }] } as any);
   const why = r.sent ? null : r.reason === 'off' ? 'The "Trade show orders" email list is off in Settings (Email alerts). Switch it on with sales@ in it, then press Send again.' : r.reason;
@@ -359,7 +362,7 @@ export async function getOrder(id: unknown) {
     await noteDearMatch(o);
     const show = await showRow(o.show_id);
     const lines = (await linesOf([oid])).get(oid) ?? [];
-    const t = orderTotals(o, lines.map(l => ({ qty: l.qty, price: Number(l.price) })));
+    const t = orderTotals(o, lines.map(l => ({ qty: l.qty, price: Number(l.price), pct: Number(l.pct) || 0 })));
     const facts = await stockFacts(lines.map(l => l.sku), oid);
     const [a] = await prisma.$queryRawUnsafe<CustomerHit[]>(`select ${CUSTOMER_COLS} from crm.accounts where id = $1::uuid`, o.account_id);
     const stage = stageOf(o);
@@ -368,10 +371,10 @@ export async function getOrder(id: unknown) {
       orderDate: day(o.order_date)!, reference: o.reference, customerPo: o.customer_po, notes: o.notes, repId: o.rep_id, repName: o.rep_name,
       contact: { name: o.contact_name, email: o.contact_email, phone: o.contact_phone, address: o.delivery_address },
       discount: discountOf(o), freight: Number(o.freight), cardPayment: o.card_payment, cardSurchargePct: num(o.card_surcharge_pct), gstRate: Number(o.gst_rate),
-      lines: lines.map((l, i) => { const f = facts.get(l.sku.toUpperCase()); return { lineNo: l.line_no, sku: l.sku, name: l.name, brand: l.brand, qty: l.qty, price: Number(l.price), comment: l.comment, lineTotal: t.lineTotals[i],
+      lines: lines.map((l, i) => { const f = facts.get(l.sku.toUpperCase()); return { lineNo: l.line_no, kind: l.line_kind, offerId: l.offer_id, pct: Number(l.pct) || 0, sku: l.sku, name: l.name, brand: l.brand, qty: l.qty, price: Number(l.price), comment: l.comment, lineTotal: t.lineTotals[i],
         increment: f?.increment ?? null, packNote: incrementProblem(l.qty, f?.increment), stock: f ? stockView(l.qty, f.available, f.pending, f.incoming, f.eta) : null }; }),
       totals: t, dear: o.dear_number ? { number: o.dear_number, status: o.dear_status, id: o.dear_id, linkedByHand: !!o.dear_quote_id } : null,
-      emailedAt: o.emailed_at, emailError: o.email_error, emailVersion: o.email_version, cancelReason: o.cancel_reason,
+      emailedAt: o.emailed_at, emailError: o.email_error, emailVersion: o.email_version, cancelReason: o.cancel_reason, ...(await orderPlus(o, lines, t, stage)),
       log: await logOf({ orderId: oid }), followUps: await followUpsOf({ orderId: oid }), followUpsClosed: followUpsClosed(o.kind, stage),
     };
   });
@@ -527,7 +530,7 @@ export async function listFollowUps(rep: Rep, o: { who?: unknown; showId?: unkno
         const x = oById.get(f.order_id); if (!x) continue;
         const stage = stageOf(x); if (followUpsClosed(x.kind, stage)) continue;
         if (showId && x.show_id !== showId) continue;
-        const t = orderTotals(x, (lines.get(x.id) ?? []).map(l => ({ qty: l.qty, price: Number(l.price) })));
+        const t = orderTotals(x, (lines.get(x.id) ?? []).map(l => ({ qty: l.qty, price: Number(l.price), pct: Number(l.pct) || 0 })));
         out.push({ ...base, kind: x.kind, targetId: x.id, label: x.number, customer: x.customer, region: x.region, show: { id: x.show_id, name: shows.get(x.show_id) ?? '' }, amount: t.total, stage: STAGE_LABEL[stage] });
       } else {
         const x = lById.get(f.lead_id); if (!x || x.status !== 'open') continue;
@@ -542,7 +545,7 @@ export async function listFollowUps(rep: Rep, o: { who?: unknown; showId?: unkno
 // ---------- the shows list and one show ----------
 export async function listShows() {
   return guard(async () => {
-    const shows = await prisma.$queryRaw<ShowRow[]>`select * from crm.ts_shows order by archived, starts_on desc`;
+    const shows = await prisma.$queryRaw<ShowRow[]>`select * from crm.ts_shows where not is_history order by archived, starts_on desc`;
     const counts = await prisma.$queryRaw<{ show_id: string; orders: number; quotes: number; leads: number }[]>`
       select s.id as show_id, (select count(*)::int from crm.ts_orders o where o.show_id = s.id and o.status = 'sent' and o.kind = 'order') as orders,
         (select count(*)::int from crm.ts_orders o where o.show_id = s.id and o.status = 'sent' and o.kind = 'quote') as quotes,
@@ -564,7 +567,7 @@ export async function getShow(id: unknown) {
     const leads = await prisma.$queryRaw<any[]>`select l.*, a.name as customer, a.region, r.name as rep_name from crm.ts_leads l join crm.accounts a on a.id = l.account_id left join crm.reps r on r.id = l.rep_id where l.show_id = ${sid}::uuid order by l.created_at desc`;
     return {
       show: showOut(show),
-      orders: orders.map(o => { const st = stageOf(o), t = orderTotals(o, (lines.get(o.id) ?? []).map(l => ({ qty: l.qty, price: Number(l.price) })));
+      orders: orders.map(o => { const st = stageOf(o), t = orderTotals(o, (lines.get(o.id) ?? []).map(l => ({ qty: l.qty, price: Number(l.price), pct: Number(l.pct) || 0 })));
         return { id: o.id, number: o.number, kind: o.kind, status: o.status, stage: st, stageLabel: STAGE_LABEL[st], customer: o.customer, region: o.region, newCustomer: o.new_customer, orderDate: day(o.order_date)!, rep: o.rep_name,
           reference: o.reference, exGst: t.goodsAfter, total: t.total, lines: (lines.get(o.id) ?? []).length, dear: o.dear_number, emailError: o.email_error, nextFollowUp: followUpsClosed(o.kind, st) ? null : nextFu('order_id', o.id) }; }),
       leads: leads.map(l => ({ id: l.id, customer: l.customer, region: l.region, contact: l.contact_name, brands: l.brands, status: l.status, lostReason: l.lost_reason, takenOn: day(l.taken_on)!, rep: l.rep_name, newAccount: l.new_account,
@@ -576,7 +579,7 @@ export async function getShow(id: unknown) {
 /** What the show brought in. Values are goods ex GST after discount (no freight, surcharge or GST), the same basis as Sales Data. */
 async function showResults(sid: string, show: ShowRow, orders: Linked[], lines: Map<string, LineRow[]>) {
   const live = orders.filter(o => o.status === 'sent');
-  const val = (o: Linked) => orderTotals(o, (lines.get(o.id) ?? []).map(l => ({ qty: l.qty, price: Number(l.price) })));
+  const val = (o: Linked) => orderTotals(o, (lines.get(o.id) ?? []).map(l => ({ qty: l.qty, price: Number(l.price), pct: Number(l.pct) || 0 })));
   const ord = live.filter(o => o.kind === 'order'), quo = live.filter(o => o.kind === 'quote');
   const sum = (a: Linked[]) => round2(a.reduce((s, o) => s + val(o).goodsAfter, 0));
   // new customers: made at the show, or with no real order before the show
@@ -650,11 +653,11 @@ export async function exportShow(id: unknown) {
       ['Leads taken', r.leads.taken], ['Leads won', r.leads.won], ['Leads lost', r.leads.lost], ['Lead win rate', pctOf(r.leads.winRate)], ['Sales from won leads', r.leads.wonSales],
       ...r.byRep.map((x): [string, string] => [`Rep: ${x.name}`, `${x.orders} orders, $${x.value.toFixed(2)}`]), ...r.byBrand.map((x): [string, number] => [`Brand: ${x.name}`, x.value]),
     ];
-    const ordersSheet = orders.map(o => { const ls = lines.get(o.id) ?? [], t = orderTotals(o, ls.map(l => ({ qty: l.qty, price: Number(l.price) })));
+    const ordersSheet = orders.map(o => { const ls = lines.get(o.id) ?? [], t = orderTotals(o, ls.map(l => ({ qty: l.qty, price: Number(l.price), pct: Number(l.pct) || 0 })));
       return { Number: o.number, Type: o.kind === 'quote' ? 'Quote' : 'Order', Status: o.status === 'cancelled' ? 'Cancelled' : o.status === 'draft' ? 'Draft' : STAGE_LABEL[stageOf(o)], 'DEAR number': o.dear_number ?? '', Reference: o.reference, "Customer PO": o.customer_po ?? '',
         Customer: o.customer, State: o.region, 'New customer': o.new_customer ? 'Yes' : '', Contact: o.contact_name ?? '', Email: o.contact_email ?? '', Phone: o.contact_phone ?? '', 'Delivery address': o.delivery_address ?? '', Date: day(o.order_date), Rep: o.rep_name ?? '',
         'Goods ex GST': t.goods, 'Discount %': t.linePct, Discount: t.discount, Freight: t.freight, 'Card surcharge': t.surcharge, 'Total ex GST': t.exGst, GST: t.gst, 'Total inc GST': t.total, Notes: o.notes ?? '', 'Emailed to sales': stamp(o.emailed_at) }; });
-    const linesSheet = orders.flatMap(o => { const ls = lines.get(o.id) ?? [], t = orderTotals(o, ls.map(l => ({ qty: l.qty, price: Number(l.price) })));
+    const linesSheet = orders.flatMap(o => { const ls = lines.get(o.id) ?? [], t = orderTotals(o, ls.map(l => ({ qty: l.qty, price: Number(l.price), pct: Number(l.pct) || 0 })));
       return ls.map((l, i) => ({ Number: o.number, Type: o.kind === 'quote' ? 'Quote' : 'Order', Customer: o.customer, SKU: l.sku, Product: l.name, Brand: l.brand ?? '', Qty: l.qty, 'Price ex GST': Number(l.price), 'Discount %': t.linePct, 'Line ex GST': t.lineTotals[i], Comment: l.comment ?? '' })); });
     const productsSheet = r.products.map(p => ({ SKU: p.sku, Product: p.name, Units: p.units, 'Value ex GST': p.value, 'Free to sell now': p.free ?? '', 'Next incoming': p.incoming ? `${p.incoming.qty}${p.incoming.date ? ` due ${p.incoming.date}` : ''}${p.incoming.po ? ` (${p.incoming.po})` : ''}` : '' }));
     const leadsSheet = leadRows.map(l => ({ Customer: l.customer, State: l.region, 'New account': l.new_account ? 'Yes' : '', Contact: l.contact_name ?? '', Email: l.contact_email ?? '', Phone: l.contact_phone ?? '', Brands: l.brands ?? '', Notes: l.notes ?? '',
@@ -668,4 +671,4 @@ export async function exportShow(id: unknown) {
   });
 }
 export async function repsList() { return prisma.$queryRaw<{ id: string; name: string }[]>`select id, name from crm.reps order by name`; }
-export { QUOTE_STAGE };
+export { QUOTE_STAGE, linkedOrders, linesOf, orderTotals, stageOf, addSystemLog };

@@ -44,7 +44,7 @@ export default function TradeShows() {
   const upcoming = (shows ?? []).filter(s => !s.archived), closed = (shows ?? []).filter(s => s.archived);
   return (
     <>
-      <h1>Trade Shows</h1>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, flexWrap: 'wrap' }}><h1 style={{ margin: 0 }}>Trade Shows</h1><Link to="/trade-shows/compare">Compare shows</Link></div>
       <div className="acct-region" style={{ marginBottom: 14, maxWidth: 700 }}>Write orders and take leads at a show. Each order is emailed to sales with the file DEAR imports, and every order and lead gets a follow-up a week later.</div>
       {err && <div className="save-msg err" role="alert">{err}</div>}
       <div className="section">

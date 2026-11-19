@@ -1,3 +1,4 @@
+import type { OrderPlus } from './tsExtra';
 // Trade shows: the shapes the pages use, and small helpers.
 export type Show = { id: string; name: string; refName: string; startsOn: string; endsOn: string; venue: string | null; stand: string | null; staff: string | null; notes: string | null; target: number | null;
   costs: { stand: number | null; travel: number | null; samples: number | null; other: number | null }; cardSurchargePct: number | null; archived: boolean; orders?: number; quotes?: number; leads?: number };
@@ -5,7 +6,7 @@ export type Customer = { id: string; name: string; region: string; contact: stri
 export type Incoming = { qty: number; date: string | null; po: string | null } | null;
 export type Product = { sku: string; name: string; brand: string | null; price: number | null; increment: number | null; image: string | null; status: string | null; available: number; pending: number; free: number; incoming: Incoming; eta: string | null };
 export type Stock = { available: number; pending: number; free: number; canShip: number; backorder: number; incoming: Incoming; eta: string | null; note: string };
-export type Totals = { goods: number; linePct: number; discount: number; goodsAfter: number; freight: number; surcharge: number; surchargePct: number; exGst: number; gst: number; total: number; lineTotals: number[] };
+export type Totals = { goods: number; linePct: number; offerDiscount: number; linePcts: number[]; discount: number; goodsAfter: number; freight: number; surcharge: number; surchargePct: number; exGst: number; gst: number; total: number; lineTotals: number[] };
 export type LogEntry = { id: string; kind: 'call' | 'email' | 'visit' | 'note' | 'system'; note: string; at: string; by: string | null };
 export type FollowUp = { id: string; dueOn: string; who: { id: string; name: string } | null; doneOn: string | null; doneBy: string | null; doneNote: string | null };
 export type Order = {
@@ -13,10 +14,10 @@ export type Order = {
   orderDate: string; reference: string; customerPo: string | null; notes: string | null; repId: string | null; repName: string | null;
   contact: { name: string | null; email: string | null; phone: string | null; address: string | null };
   discount: { kind: 'pct' | 'amount'; value: number } | null; freight: number; cardPayment: boolean; cardSurchargePct: number | null; gstRate: number;
-  lines: { lineNo: number; sku: string; name: string; brand: string | null; qty: number; price: number; comment: string | null; lineTotal: number; increment: number | null; packNote: string | null; stock: Stock | null }[];
+  lines: { lineNo: number; kind: 'normal' | 'bundle' | 'gift'; offerId: string | null; pct: number; sku: string; name: string; brand: string | null; qty: number; price: number; comment: string | null; lineTotal: number; increment: number | null; packNote: string | null; stock: Stock | null }[];
   totals: Totals; dear: { number: string; status: string | null; id: string; linkedByHand: boolean } | null;
   emailedAt: string | null; emailError: string | null; emailVersion: number; cancelReason: string | null; log: LogEntry[]; followUps: FollowUp[]; followUpsClosed: boolean;
-};
+} & OrderPlus;
 export type Lead = { id: string; show: Show; customer: Customer; newAccount: boolean; contact: { name: string | null; email: string | null; phone: string | null }; brands: string | null; notes: string | null;
   status: 'open' | 'won' | 'lost'; lostReason: string | null; takenOn: string; repName: string | null; log: LogEntry[]; followUps: FollowUp[]; followUpsClosed: boolean };
 export type FollowUpItem = { id: string; dueOn: string; overdue: boolean; who: { id: string; name: string } | null; kind: 'order' | 'quote' | 'lead'; targetId: string; label: string; customer: string; region: string | null; show: { id: string; name: string }; amount: number | null; stage: string };

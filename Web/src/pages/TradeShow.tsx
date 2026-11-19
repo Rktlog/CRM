@@ -5,6 +5,12 @@ import { useMe } from '../lib/useMe';
 import TsShowForm from '../components/TsShowForm';
 import TsCustomerPicker, { type Picked } from '../components/TsCustomerPicker';
 import { FollowUpTable } from './TradeShows';
+import TsOffers from '../components/TsOffers';
+import TsQueue from '../components/TsQueue';
+import TsAppointments from '../components/TsAppointments';
+import TsChecklist from '../components/TsChecklist';
+import TsFeedback from '../components/TsFeedback';
+import TsAsk from '../components/TsAsk';
 import { $, errMsg, pct, postFull, shortDay, STAGE_TONE, type Customer, type FollowUpItem, type ShowPage } from '../lib/tradeshow';
 
 // One show: write an order or quote, take a lead, see its orders, leads, follow-ups and results.
@@ -12,7 +18,7 @@ const th: CSSProperties = { textAlign: 'left', fontSize: 13, color: 'var(--muted
 const td: CSSProperties = { padding: '9px 10px', borderBottom: '1px solid var(--line)', fontSize: 14, verticalAlign: 'top' };
 const num: CSSProperties = { ...td, textAlign: 'right', whiteSpace: 'nowrap' };
 const field: CSSProperties = { width: '100%', padding: '7px 10px', border: '1px solid var(--line)', borderRadius: 3, font: 'inherit', fontSize: 15 };
-type Tab = 'orders' | 'leads' | 'followups' | 'results';
+type Tab = 'orders' | 'leads' | 'followups' | 'results' | 'queue' | 'offers' | 'appointments' | 'checklist' | 'feedback' | 'ask';
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return <div className="ledger-stat" style={{ minWidth: 150 }}><div className="label">{label}</div><div className="val" style={{ fontSize: 20 }}>{value}</div>{sub && <div className="acct-region" style={{ fontSize: 12.5, marginTop: 4 }}>{sub}</div>}</div>;
@@ -61,7 +67,7 @@ export default function TradeShow() {
       <h1 style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>{s.name}{s.archived && <span className="pill neutral">Closed</span>}</h1>
       <div className="acct-region" style={{ marginBottom: 12 }}>{shortDay(s.startsOn)}{s.endsOn !== s.startsOn ? ` to ${shortDay(s.endsOn)}` : ''}{s.venue ? ` · ${s.venue}` : ''}{s.stand ? ` · stand ${s.stand}` : ''}{s.staff ? ` · ${s.staff}` : ''} · references start "{s.refName}"
         {isManager && !editing && <> · <button type="button" className="link-btn" onClick={() => setEditing(true)}>Edit</button></>}
-        {' · '}<button type="button" className="link-btn" disabled={exporting} onClick={exportAll}>{exporting ? 'Preparing…' : 'Export to Excel'}</button></div>
+        {' · '}<Link to="/trade-shows/compare">Compare shows</Link>{' · '}<button type="button" className="link-btn" disabled={exporting} onClick={exportAll}>{exporting ? 'Preparing…' : 'Export to Excel'}</button></div>
       {editing && <TsShowForm show={s} onSaved={() => { setEditing(false); load(); }} onCancel={() => setEditing(false)} />}
 
       {!s.archived && !starting && (
@@ -86,7 +92,7 @@ export default function TradeShow() {
       )}
 
       <div className="tab-bar">
-        {(['orders', 'leads', 'followups', 'results'] as Tab[]).map(t => <button key={t} type="button" className={`tab${tab === t ? ' active' : ''}`} onClick={() => setTab(t)}>{t === 'orders' ? `Orders and quotes (${d.orders.length})` : t === 'leads' ? `Leads (${d.leads.length})` : t === 'followups' ? 'Follow-ups' : 'Results'}</button>)}
+        {(['orders', 'leads', 'followups', 'results', 'queue', 'offers', 'appointments', 'checklist', 'feedback', 'ask'] as Tab[]).map(t => <button key={t} type="button" className={`tab${tab === t ? ' active' : ''}`} onClick={() => setTab(t)}>{t === 'orders' ? `Orders and quotes (${d.orders.length})` : t === 'leads' ? `Leads (${d.leads.length})` : t === 'followups' ? 'Follow-ups' : t === 'queue' ? 'Payments and DEAR' : t === 'offers' ? 'Offers' : t === 'appointments' ? 'Appointments' : t === 'checklist' ? 'Checklist' : t === 'feedback' ? 'Feedback' : t === 'ask' ? 'Ask Claude' : 'Results'}</button>)}
       </div>
 
       {tab === 'orders' && (d.orders.length === 0 ? <div className="empty-state">No orders yet.</div> : (
@@ -124,6 +130,13 @@ export default function TradeShow() {
       ))}
 
       {tab === 'followups' && (fu === null ? <div className="acct-region">Loading…</div> : <FollowUpTable items={fu} showShow={false} />)}
+
+      {tab === 'queue' && <TsQueue showId={id} />}
+      {tab === 'offers' && <TsOffers showId={id} isManager={isManager} />}
+      {tab === 'appointments' && <TsAppointments showId={id} />}
+      {tab === 'checklist' && <TsChecklist showId={id} isManager={isManager} />}
+      {tab === 'feedback' && <TsFeedback showId={id} />}
+      {tab === 'ask' && <TsAsk showId={id} />}
 
       {tab === 'results' && (
         <>
