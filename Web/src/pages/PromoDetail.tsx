@@ -2,9 +2,10 @@ import { CSSProperties, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { apiDownload, apiGet } from '../lib/api';
 
-// One promo: every order that used it, with a search and an Excel download.
+// One promo: the customers it was given to (with what they have left), and every order that used it, with a search and an Excel download.
 type Order = { id: string; number: string; date: string; accountId: string; customer: string; region: string; qty: number; value: number; status: string; by: string };
-type Page = { promo: { id: string; name: string; startsOn: string | null; endsOn: string | null; active: boolean }; orders: Order[]; totals: { orders: number; units: number; value: number } };
+type Customer = { accountId: string; customer: string; region: string; given: number | null; used: number; left: number | null };
+type Page = { promo: { id: string; name: string; startsOn: string | null; endsOn: string | null; active: boolean }; orders: Order[]; customers: Customer[]; totals: { orders: number; units: number; value: number } };
 const th: CSSProperties = { textAlign: 'left', fontSize: 13, color: 'var(--muted)', fontWeight: 500, padding: '8px 10px', borderBottom: '1px solid var(--line)', whiteSpace: 'nowrap' };
 const td: CSSProperties = { padding: '9px 10px', borderBottom: '1px solid var(--line)', fontSize: 14, verticalAlign: 'top' };
 const money = (n: number) => n.toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
@@ -42,8 +43,28 @@ export default function PromoDetail() {
       <div className="acct-region" style={{ marginBottom: 12 }}>{p.startsOn || p.endsOn ? `${p.startsOn ? dayText(p.startsOn) : ''}${p.endsOn ? ` to ${dayText(p.endsOn)}` : ''} · ` : ''}
         <button type="button" className="link-btn" disabled={exporting} onClick={exportAll}>{exporting ? 'Preparing…' : 'Export to Excel'}</button></div>
       <div className="ledger-stats" style={{ flexWrap: 'wrap' }}>
-        <Stat label="Orders" value={String(d.totals.orders)} /><Stat label="Units redeemed" value={String(d.totals.units)} /><Stat label="Order value (ex GST)" value={money(d.totals.value)} />
+        <Stat label="Customers given it" value={String(d.customers.length)} /><Stat label="Orders" value={String(d.totals.orders)} /><Stat label="Units redeemed" value={String(d.totals.units)} /><Stat label="Order value (ex GST)" value={money(d.totals.value)} />
       </div>
+      {d.customers.length > 0 && (
+        <>
+          <h3 style={{ margin: '18px 0 8px' }}>Customers given this promo</h3>
+          <div style={{ overflowX: 'auto', border: '1px solid var(--line)', borderRadius: 4, background: 'var(--panel)' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr><th style={th}>Shop</th><th style={{ ...th, textAlign: 'right' }}>Given</th><th style={{ ...th, textAlign: 'right' }}>Allocated</th><th style={{ ...th, textAlign: 'right' }}>Left</th><th style={th}></th></tr></thead>
+              <tbody>{d.customers.map(c => (
+                <tr key={c.accountId}>
+                  <td style={td}><Link to={`/accounts/${c.accountId}`}>{c.customer}</Link> <span className="acct-region">{c.region}</span></td>
+                  <td style={{ ...td, textAlign: 'right' }}>{c.given ?? 'No set number'}</td>
+                  <td style={{ ...td, textAlign: 'right' }}>{c.used}</td>
+                  <td style={{ ...td, textAlign: 'right' }}>{c.left ?? ''}</td>
+                  <td style={td}>{c.used === 0 && <span className="pill amber">Not used yet</span>}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          <h3 style={{ margin: '18px 0 0' }}>Orders that used it</h3>
+        </>
+      )}
       <div style={{ margin: '14px 0' }}><input value={q} onChange={e => setQ(e.target.value)} placeholder="Search order, shop or state" aria-label="Search" style={{ width: '100%', maxWidth: 360, padding: '7px 10px', border: '1px solid var(--line)', borderRadius: 3, font: 'inherit', fontSize: 15 }} /></div>
       {d.orders.length === 0 ? <div className="empty-state">No order has used this promo yet.</div> : shown.length === 0 ? <div className="empty-state">Nothing matches that search.</div> : (
         <div style={{ overflowX: 'auto', border: '1px solid var(--line)', borderRadius: 4, background: 'var(--panel)' }}>

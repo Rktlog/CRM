@@ -7,6 +7,7 @@ import { apiGet, apiPost, apiPatch, apiDelete, apiDownload } from '../lib/api';
 import { orderStatusPills, stageTag, paymentTag } from '../lib/orderStatus';
 import PriceListModal from '../components/PriceListModal';
 import CreditReservations from '../components/CreditReservations';
+import AccountPromos from '../components/AccountPromos';
 import AccountEmails from '../components/marketing/AccountEmails';
 import { AccountDetail as AccountDetailType, STAGE_LABELS, fmtMoney, fmtDate, fmtDateWithYear, daysBetween, flagFor, isHistoryOrder, isOwingOrder, amountOwing, fmtDuration } from '../lib/types';
 import { pickCurrentOrder } from '../lib/currentOrder';
@@ -286,6 +287,7 @@ export default function AccountDetail() {
 
           {/* Credit and reservations: what the team has set aside, on both accounts */}
           <CreditReservations accountId={account.id} accountName={account.name} />
+          <AccountPromos accountId={account.id} />
           <AccountEmails accountId={account.id} />
               <EmailButton target={{ kind: 'account', accountId: account.id }} name={account.name} defaultTo={account.email} onSent={load} />
               <AccountGmail accountId={account.id} />

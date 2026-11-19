@@ -4,7 +4,7 @@ import { apiGet, apiPost } from '../lib/api';
 import { useMe } from '../lib/useMe';
 
 // Promos: the promos the sales team gives. Managers add, change and turn them off here; everyone sees how many orders used each one and can open its orders.
-type Promo = { id: string; name: string; matchText: string | null; startsOn: string | null; endsOn: string | null; active: boolean; orders: number; units: number };
+type Promo = { id: string; name: string; matchText: string | null; startsOn: string | null; endsOn: string | null; active: boolean; orders: number; units: number; customers: number };
 const th: CSSProperties = { textAlign: 'left', fontSize: 13, color: 'var(--muted)', fontWeight: 500, padding: '8px 10px', borderBottom: '1px solid var(--line)', whiteSpace: 'nowrap' };
 const td: CSSProperties = { padding: '9px 10px', borderBottom: '1px solid var(--line)', fontSize: 14, verticalAlign: 'top' };
 const field: CSSProperties = { width: '100%', padding: '7px 10px', border: '1px solid var(--line)', borderRadius: 3, font: 'inherit', fontSize: 15 };
@@ -42,7 +42,7 @@ export default function Promos() {
   return (
     <>
       <h1>Promos</h1>
-      <div className="acct-region" style={{ marginBottom: 14 }}>The promos the team gives. Tick the ones an order used in the box on that order. Open a promo to see every order that used it.</div>
+      <div className="acct-region" style={{ marginBottom: 14 }}>The promos the team gives. Give a promo to a customer in the Promos box on the customer's page, and allocate it there to the order it was used on. Open a promo to see every customer given it and every order that used it.</div>
       {err && <div className="save-msg err" role="alert">{err}</div>}
 
       {isManager && !form && <div style={{ marginBottom: 16 }}><button type="button" className="btn" onClick={() => { setForm({ id: null, v: blank }); setFormErr(null); }}>Add a promo</button></div>}
@@ -69,17 +69,18 @@ export default function Promos() {
       {promos === null ? <div className="acct-region">Loading…</div> : promos.length === 0 ? <div className="empty-state">No promos yet.{isManager ? ' Add the first one above.' : ''}</div> : (
         <div style={{ overflowX: 'auto', border: '1px solid var(--line)', borderRadius: 4, background: 'var(--panel)' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><th style={th}>Promo</th><th style={th}>Dates</th><th style={{ ...th, textAlign: 'right' }}>Orders</th><th style={{ ...th, textAlign: 'right' }}>Units</th><th style={th}>Status</th>{isManager && <th style={th}></th>}</tr></thead>
+            <thead><tr><th style={th}>Promo</th><th style={th}>Dates</th><th style={{ ...th, textAlign: 'right' }}>Customers</th><th style={{ ...th, textAlign: 'right' }}>Orders</th><th style={{ ...th, textAlign: 'right' }}>Units</th><th style={th}>Status</th>{isManager && <th style={th}></th>}</tr></thead>
             <tbody>{promos.map(p => (
               <tr key={p.id} style={{ opacity: p.active ? 1 : 0.65 }}>
                 <td style={td}><Link to={`/promos/${p.id}`}><b>{p.name}</b></Link></td>
                 <td style={td}>{p.startsOn || p.endsOn ? `${dayText(p.startsOn)}${p.endsOn ? ` to ${dayText(p.endsOn)}` : ''}` : ''}</td>
+                <td style={{ ...td, textAlign: 'right' }}>{p.customers}</td>
                 <td style={{ ...td, textAlign: 'right' }}>{p.orders}</td>
                 <td style={{ ...td, textAlign: 'right' }}>{p.units}</td>
                 <td style={td}><span className={`pill ${p.active ? 'teal' : 'neutral'}`}>{p.active ? 'On' : 'Off'}</span></td>
                 {isManager && <td style={{ ...td, whiteSpace: 'nowrap' }}>
                   <button type="button" className="link-btn" onClick={() => { setForm({ id: p.id, v: { name: p.name, matchText: p.matchText ?? '', startsOn: p.startsOn ?? '', endsOn: p.endsOn ?? '' } }); setFormErr(null); }}>Edit</button>{' · '}
-                  <button type="button" className="link-btn" onClick={() => flip(p)}>{p.active ? 'Turn off' : 'Turn on'}</button>{p.orders === 0 && <>{' · '}<button type="button" className="link-btn" onClick={() => remove(p)}>Delete</button></>}
+                  <button type="button" className="link-btn" onClick={() => flip(p)}>{p.active ? 'Turn off' : 'Turn on'}</button>{p.orders === 0 && p.customers === 0 && <>{' · '}<button type="button" className="link-btn" onClick={() => remove(p)}>Delete</button></>}
                 </td>}
               </tr>
             ))}</tbody>

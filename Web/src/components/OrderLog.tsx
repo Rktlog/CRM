@@ -52,7 +52,7 @@ export default function OrderLog({ orderId, accountId, accountName, onChange }: 
       <h3>Team log for this order</h3>
       <div className="acct-region" style={{ marginBottom: 10 }}>Log a call, email, visit or remark about this order, such as chasing payment, a follow-up or any comment or feedback. Everyone who can see this account sees it, and each one also shows in the account's activity log.</div>
 
-      <OrderPromos orderId={orderId} onChange={onChange} />
+      <OrderPromos orderId={orderId} accountId={accountId} />
 
       <form onSubmit={add}>
         <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }} role="group" aria-label="Kind of log">
