@@ -98,10 +98,14 @@ promosRouter.get('/account/:accountId', async (req, res) => {
       where g.id is not null or exists (select 1 from alloc a where a.promo_id = p.id)
       order by p.active desc, p.name`,
     prisma.$queryRaw<any[]>`
-      select id::text as id, number, (((sent_at at time zone 'UTC') at time zone 'Australia/Melbourne')::date)::text as date, coalesce(fulfillment_status, '') as status
+      select id::text as id, number, (((sent_at at time zone 'UTC') at time zone 'Australia/Melbourne')::date)::text as date,
+             -- An old (Q) order keeps the status it had when it was imported, which means nothing today, so show none.
+             case when source = 'rhino-history' or number like 'Q%' then '' else coalesce(fulfillment_status, '') end as status
       from crm.quotes
-      where account_id = ${accountId}::uuid and source <> 'rhino-history' and number not like 'Q%'
-      order by sent_at desc, number desc limit 100`,
+      -- Live orders, and old (Q) orders from 1 June 2024 on, so a promo can be given to last financial year's orders too.
+      where account_id = ${accountId}::uuid
+        and ((source <> 'rhino-history' and number not like 'Q%') or sent_at >= '2024-06-01')
+      order by sent_at desc, number desc limit 300`,
     prisma.$queryRaw<any[]>`
       select p.id::text as id, p.name from crm.promos p
       where p.active
