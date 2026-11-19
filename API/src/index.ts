@@ -105,8 +105,8 @@ app.use('/ai', requireAuth, aiRouter);
 app.use('/ordering', requireAuth, orderingRouter);   // the Ordering page (managers): what to order, from the database
 app.use('/mkt', requireAuth, marketingDashboardRouter);   // the marketing dashboard (managers only)
 app.use('/liewood', requireAuth, liewoodRouter);   // Liewood orders against their DEAR purchase orders
-app.use('/promos', requireAuth, promosRouter);   // promos: the list, the tick boxes on orders, and the orders that used each one
-app.use('/tradeshow', requireAuth, tradeshowExtraRouter);   // trade shows part 2: offers, freight rates, payments, appointments, checklist, feedback, comparison, Excel reader, Ask Claude
+app.use('/promos', requireAuth, promosRouter);   // promos: the list, the promos given to each customer and allocated to their orders, and the orders that used each one
+app.use('/tradeshow', requireAuth, tradeshowExtraRouter);   // trade shows part 2: offers, freight rates, payments, appointments, checklist, feedback, history, comparison, Ask Claude (before tradeshowRouter)
 app.use('/tradeshow', requireAuth, tradeshowRouter);   // trade shows: orders, leads, follow-ups
 app.use('/dropbox/callback', dropboxCallbackRouter);   // Dropbox sends the manager back here: no login, so it must come before /dropbox
 app.use('/dropbox', requireAuth, dropboxRouter);   // the Dropbox connection and customer folders (managers)
