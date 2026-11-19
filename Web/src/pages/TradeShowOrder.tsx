@@ -5,6 +5,9 @@ import { useMe } from '../lib/useMe';
 import TsLogFollowUps from '../components/TsLogFollowUps';
 import { $, errMsg, shortDay, STAGE_TONE, type Incoming, type Order, type Product } from '../lib/tradeshow';
 import { liveStock as stockFor, liveTotals, packProblem } from '../lib/tsLive';
+import { applyOffers, freightFor, type Offer } from '../lib/tsOffers';
+import { PAY_TONE } from '../lib/tsExtra';
+import { FreightPanel, OffersPanel } from '../components/TsOrderOffers';
 
 // A trade show order or quote. While it is being written: search products (stock free to sell, and what is coming when it is short),
 // quantities, discount (managers), freight, card surcharge, totals. Confirm sends it to sales@ with the DEAR file. After that: the reference
@@ -13,7 +16,7 @@ const th: CSSProperties = { textAlign: 'left', fontSize: 13, color: 'var(--muted
 const td: CSSProperties = { padding: '8px', borderBottom: '1px solid var(--line)', fontSize: 14, verticalAlign: 'top' };
 const num: CSSProperties = { ...td, textAlign: 'right', whiteSpace: 'nowrap' };
 const field: CSSProperties = { padding: '7px 10px', border: '1px solid var(--line)', borderRadius: 3, font: 'inherit', fontSize: 15 };
-type Line = { sku: string; name: string; qty: number; comment: string; price: number; increment: number | null; available: number; pending: number; incoming: Incoming; eta: string | null };
+type Line = { sku: string; name: string; brand: string | null; kind: 'normal' | 'bundle'; offerId: string | null; qty: number; comment: string; price: number; increment: number | null; available: number; pending: number; incoming: Incoming; eta: string | null };
 
 function stockText(p: Pick<Product, 'free' | 'incoming' | 'eta'>) {
   const coming = p.incoming ? `${p.incoming.qty} coming${p.incoming.date ? ` ${p.incoming.date}` : ''}` : p.eta ? `ETA ${p.eta}` : '';
@@ -36,12 +39,15 @@ export default function TradeShowOrder() {
   const [notes, setNotes] = useState('');
   const [dearNo, setDearNo] = useState('');
   const [busy, setBusy] = useState(false);
+  const [fr, setFr] = useState({ regionType: 'Metro', largeItems: false, pantone: false });
+  const [frAuto, setFrAuto] = useState(true);   // freight is worked out by Radar until someone types it in
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const latest = useRef(0);
 
   const show = useCallback((x: Order) => {
-    setO(x); setLines(x.lines.map(l => ({ sku: l.sku, name: l.name, qty: l.qty, comment: l.comment ?? '', price: l.price, increment: l.increment, available: l.stock?.available ?? 0, pending: l.stock?.pending ?? 0, incoming: l.stock?.incoming ?? null, eta: l.stock?.eta ?? null }))); setDirty(false);
-    setDisc({ kind: x.discount?.kind ?? 'pct', value: x.discount ? String(x.discount.value) : '' }); setFreight(x.freight ? String(x.freight) : ''); setRef(x.reference); setPo(x.customerPo ?? ''); setNotes(x.notes ?? '');
+    setO(x); setLines(x.lines.filter(l => l.kind !== 'gift').map(l => ({ sku: l.sku, name: l.name, brand: l.brand, kind: l.kind === 'bundle' ? 'bundle' as const : 'normal' as const, offerId: l.offerId, qty: l.qty, comment: l.comment ?? '', price: l.price, increment: l.increment, available: l.stock?.available ?? 0, pending: l.stock?.pending ?? 0, incoming: l.stock?.incoming ?? null, eta: l.stock?.eta ?? null }))); setDirty(false);
+    setDisc({ kind: x.discount?.kind ?? 'pct', value: x.discount ? String(x.discount.value) : '' }); setFreight(x.freight ? String(x.freight) : ''); setRef(x.dearReference); setPo(x.customerPo ?? ''); setNotes(x.notes ?? '');
+    setFr({ regionType: x.freightInfo.regionType, largeItems: x.freightInfo.largeItems, pantone: x.freightInfo.pantone }); setFrAuto(!x.freightInfo.manual);
   }, []);
   const load = useCallback(() => { apiGet(`/tradeshow/orders/${id}`, { fresh: true }).then((d: { order: Order }) => { show(d.order); setErr(null); }).catch(e => setErr(errMsg(e))); }, [id, show]);
   useEffect(() => { load(); }, [load]);
@@ -58,7 +64,8 @@ export default function TradeShowOrder() {
     try { const r = await f(); if (r?.order) show(r.order); else load(); if (okText) setMsg({ ok: true, text: okText }); return r; }
     catch (e) { setMsg({ ok: false, text: errMsg(e) }); } finally { setBusy(false); }
   }
-  const body = () => ({ lines: lines.map(l => ({ sku: l.sku, qty: l.qty, comment: l.comment })), freight: freight || 0, notes, customerPo: po, reference: ref,
+  const body = () => ({ lines: lines.map(l => ({ sku: l.sku, qty: l.qty, comment: l.comment, kind: l.kind, offerId: l.offerId })), freight: freight || 0, notes, customerPo: po, reference: ref,
+    regionType: fr.regionType, largeItems: fr.largeItems, pantone: fr.pantone, freightEdited: !frAuto,
     ...(isManager ? { discount: disc.value ? { kind: disc.kind, value: disc.value } : null } : {}) });
   const save = (extra: object = {}) => act(() => apiPatch(`/tradeshow/orders/${id}`, { ...body(), ...extra }), 'Saved.');
   async function confirm() {
@@ -67,15 +74,32 @@ export default function TradeShowOrder() {
     if (r) setMsg(r.emailed ? { ok: true, text: `Confirmed and emailed to sales with the DEAR file. Reference: ${r.order.reference}` } : { ok: false, text: `Confirmed, but not emailed: ${r.reason}` });
   }
   function add(p: Product) {
-    setLines(ls => { const i = ls.findIndex(l => l.sku === p.sku); const step = p.increment && p.increment > 1 ? p.increment : 1; return i >= 0 ? ls.map((l, j) => (j === i ? { ...l, qty: l.qty + step } : l)) : [...ls, { sku: p.sku, name: p.name, qty: step, comment: '', price: p.price ?? 0, increment: p.increment, available: p.available, pending: p.pending, incoming: p.incoming, eta: p.eta }]; });
+    setLines(ls => { const i = ls.findIndex(l => l.sku === p.sku && l.kind === 'normal'); const step = p.increment && p.increment > 1 ? p.increment : 1; return i >= 0 ? ls.map((l, j) => (j === i ? { ...l, qty: l.qty + step } : l)) : [...ls, { sku: p.sku, name: p.name, brand: p.brand, kind: 'normal' as const, offerId: null, qty: step, comment: '', price: p.price ?? 0, increment: p.increment, available: p.available, pending: p.pending, incoming: p.incoming, eta: p.eta }]; });
     setDirty(true); setQ(''); setHits([]);
+  }
+  /** A bundle goes in as its own lines, marked with the offer, so the pack price works out however many packs are added. */
+  async function addBundle(b: Offer, packs: number) {
+    const got: Line[] = [];
+    for (const it of b.items) {
+      let p: Product | undefined;
+      try { const d: { products: Product[] } = await apiGet(`/tradeshow/products?q=${encodeURIComponent(it.sku)}`); p = d.products.find(x => x.sku.toUpperCase() === it.sku.toUpperCase()); } catch { /* the offer's own details do */ }
+      got.push({ sku: it.sku, name: p?.name ?? it.name ?? it.sku, brand: p?.brand ?? it.brand ?? null, kind: 'bundle', offerId: b.id, qty: it.qty * packs, comment: '', price: p?.price ?? it.price ?? 0, increment: p?.increment ?? null, available: p?.available ?? 0, pending: p?.pending ?? 0, incoming: p?.incoming ?? null, eta: p?.eta ?? null });
+    }
+    setLines(ls => { const next = [...ls]; for (const g of got) { const i = next.findIndex(l => l.kind === 'bundle' && l.offerId === b.id && l.sku.toUpperCase() === g.sku.toUpperCase()); if (i >= 0) next[i] = { ...next[i]!, qty: next[i]!.qty + g.qty }; else next.push(g); } return next; });
+    setDirty(true);
   }
 
   if (err) return <><p><Link to="/trade-shows">← Trade Shows</Link></p><div className="save-msg err" role="alert">{err}</div></>;
   if (!o) return <div className="acct-region">Loading…</div>;
   const draft = o.status === 'draft', t = o.totals, mine = isManager || o.repId === me?.id;
   const liveDisc = isManager ? (disc.value && Number(disc.value) > 0 ? { kind: disc.kind, value: Number(disc.value) } : null) : o.discount;
-  const live = liveTotals({ lines, discount: draft ? liveDisc : o.discount, freight: draft ? Number(freight) || 0 : o.freight, cardPayment: o.cardPayment, surchargePct: o.cardSurchargePct, gstRate: o.gstRate });
+  // offers: worked out on the page as products are added (the server works them again on Save); freight: the team's calculator, until someone types it in
+  const A = draft ? applyOffers(lines.map(l => ({ sku: l.sku, name: l.name, brand: l.brand, qty: l.qty, price: l.price, comment: l.comment, kind: l.kind, offerId: l.offerId })), o.offers) : null;
+  const fi = o.freightInfo, overseas = ['NZ', 'INTL'].includes(String(fi.state ?? '').toUpperCase());
+  const base = liveTotals({ lines: A ? A.lines : [], discount: liveDisc, freight: 0, cardPayment: false, surchargePct: null, gstRate: o.gstRate });
+  const calc = draft && frAuto && !overseas ? freightFor(fi.cfg, { state: fi.state, region: fr.regionType, orderIncGst: base.goodsAfter * (1 + o.gstRate), large: fr.largeItems, pantone: fr.pantone }) : null;
+  const freightShown = calc && calc.amount !== null ? String(calc.amount) : freight;
+  const live = liveTotals({ lines: A ? A.lines : [], discount: draft ? liveDisc : o.discount, freight: draft ? Number(freightShown) || 0 : o.freight, cardPayment: o.cardPayment, surchargePct: o.cardSurchargePct, gstRate: o.gstRate });
   const tt = draft ? live : t;   // while drafting, the page's own sums (the server works them again on Save); after that, the saved ones
   const liveStock = draft || o.stage === 'sent' || o.stage === 'in_dear_quote';   // once DEAR has the order, its own stock view is what counts
   return (
@@ -83,6 +107,12 @@ export default function TradeShowOrder() {
       <p style={{ margin: '0 0 6px' }}><Link to={`/trade-shows/${o.show.id}`}>← {o.show.name}</Link></p>
       <h1 style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>{o.kind === 'quote' ? 'Quote' : 'Order'} {o.number}
         <span className={`pill ${STAGE_TONE[o.stage] ?? 'neutral'}`}>{o.stageLabel}{o.dear ? ` ${o.dear.number}` : ''}</span></h1>
+      {o.status === 'sent' && (
+        <div style={{ marginBottom: 8, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span className={`pill ${PAY_TONE[o.payment.status]}`}>{o.payment.label}</span>
+          {o.payBy && <span style={{ fontSize: 13.5, color: o.payByOverdue && o.payment.status !== 'paid' ? 'var(--rust)' : undefined }}>Offers hold if paid by {shortDay(o.payBy)}{o.payByOverdue && o.payment.status !== 'paid' ? ' (passed)' : ''}</span>}
+        </div>
+      )}
       <div className="acct-region" style={{ marginBottom: 14 }}>{shortDay(o.orderDate)} · by {o.repName ?? 'unknown'}{o.cancelReason ? ` · cancelled: ${o.cancelReason}` : ''}</div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16, marginBottom: 16 }}>
@@ -95,11 +125,12 @@ export default function TradeShowOrder() {
           <div className="panel-title">Reference for DEAR</div>
           <input style={{ ...field, width: '100%' }} value={ref} disabled={!mine || o.status === 'cancelled'} onChange={e => { setRef(e.target.value); setDirty(true); }} />
           <div style={{ fontSize: 13, marginTop: 8 }}>Customer's PO number (optional)</div><input style={{ ...field, width: '100%', marginTop: 4 }} placeholder="e.g. 4471" value={po} disabled={!mine || o.status === 'cancelled'} onChange={e => { setPo(e.target.value); setDirty(true); }} />
-          <div className="acct-region" style={{ fontSize: 12.5, marginTop: 6 }}>Keep {o.number} in it, so Radar finds the DEAR order. If the customer needs their own reference, add it.</div>
-          {!draft && o.status === 'sent' && mine && (dirty || ref !== o.reference || po !== (o.customerPo ?? '')) && <button type="button" className="btn secondary" style={{ marginTop: 8 }} disabled={busy} onClick={() => save({ lines: undefined, discount: undefined, freight: undefined })}>Save changes</button>}
+          <div className="acct-region" style={{ fontSize: 12.5, marginTop: 6 }}>This is the reference on the DEAR order (show name and date). Radar's own number, {o.number}, is kept with it as {o.reference}. If the customer needs their own reference, add their PO.</div>
+          {!draft && o.status === 'sent' && mine && (dirty || ref !== o.dearReference || po !== (o.customerPo ?? '')) && <button type="button" className="btn secondary" style={{ marginTop: 8 }} disabled={busy} onClick={() => save({ lines: undefined, discount: undefined, freight: undefined })}>Save changes</button>}
         </div>
       </div>
 
+      <OffersPanel offers={o.offers} applied={A ? A.applied : o.applied} prompts={A ? A.prompts : o.prompts} payBy={A ? A.payBy : o.payBy} payByOverdue={o.payByOverdue} canEdit={draft && !!mine} onAddBundle={addBundle} />
       {draft && mine && (
         <div className="section" style={{ marginBottom: 14 }}>
           <input style={{ ...field, width: '100%', maxWidth: 640, fontSize: 16 }} placeholder="Add a product: SKU, name, barcode or brand" value={q} onChange={e => setQ(e.target.value)} />
@@ -118,19 +149,25 @@ export default function TradeShowOrder() {
 
       <div style={{ overflowX: 'auto', border: '1px solid var(--line)', borderRadius: 4, background: 'var(--panel)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr><th style={th}>Product</th><th style={{ ...th, textAlign: 'right' }}>Qty</th><th style={{ ...th, textAlign: 'right' }}>Price ex GST</th><th style={{ ...th, textAlign: 'right' }}>Line ex GST</th><th style={th}>Stock</th>{draft && mine && <th style={th} />}</tr></thead>
+          <thead><tr><th style={th}>Product</th><th style={{ ...th, textAlign: 'right' }}>Qty</th><th style={{ ...th, textAlign: 'right' }}>Price ex GST</th><th style={{ ...th, textAlign: 'right' }}>Off</th><th style={{ ...th, textAlign: 'right' }}>Line ex GST</th><th style={th}>Stock</th>{draft && mine && <th style={th} />}</tr></thead>
           <tbody>
-            {lines.map((l, i) => { const st = draft ? stockFor(l.qty, l.available, l.pending, l.incoming, l.eta) : o.lines[i]?.stock ?? null; const pack = packProblem(l.qty, l.increment); const lineTot = draft ? live.lineTotals[i] ?? 0 : o.lines[i]?.lineTotal ?? 0; return (
-              <tr key={l.sku}>
-                <td style={td}><b>{l.name}</b><div className="acct-region" style={{ fontSize: 12.5 }}>{l.sku}{pack ? <span style={{ color: 'var(--amber)' }}> · {pack}</span> : ''}</div>
-                  {draft && mine ? <input style={{ ...field, fontSize: 13, padding: '3px 6px', marginTop: 4, width: '100%' }} placeholder="Comment for DEAR (optional)" value={l.comment} onChange={e => { setLines(ls => ls.map((x, j) => (j === i ? { ...x, comment: e.target.value } : x))); setDirty(true); }} /> : l.comment && <div style={{ fontSize: 12.5 }}>{l.comment}</div>}</td>
-                <td style={num}>{draft && mine ? <input inputMode="numeric" style={{ ...field, width: 70, textAlign: 'right' }} value={l.qty} onChange={e => { const n = Math.max(0, Math.floor(Number(e.target.value) || 0)); setLines(ls => ls.map((x, j) => (j === i ? { ...x, qty: n } : x))); setDirty(true); }} /> : l.qty}</td>
-                <td style={num}>{$(l.price)}</td>
-                <td style={num}>{$(lineTot)}</td>
-                <td style={{ ...td, fontSize: 13, color: liveStock && st && st.backorder > 0 ? 'var(--rust)' : undefined }}>{st && liveStock ? st.note : !liveStock ? <span className="acct-region">In DEAR</span> : ''}</td>
-                {draft && mine && <td style={td}><button type="button" className="link-btn" onClick={() => { setLines(ls => ls.filter((_, j) => j !== i)); setDirty(true); }}>Remove</button></td>}
-              </tr>
-            ); })}
+            {(draft ? A!.lines : o.lines).map((l: any, i: number) => {
+              const gift = l.kind === 'gift', edit = draft && mine && !gift, src = lines[i];
+              const st = gift ? null : draft ? (src ? stockFor(src.qty, src.available, src.pending, src.incoming, src.eta) : null) : o.lines[i]?.stock ?? null;
+              const offer = o.offers.find(x => x.id === l.offerId), pack = src ? packProblem(src.qty, src.increment) : null, off = tt.linePcts[i] ?? 0;
+              return (
+                <tr key={`${l.kind}-${l.sku}-${i}`} style={gift ? { background: 'var(--bg-soft, rgba(0,0,0,0.03))' } : undefined}>
+                  <td style={td}><b>{l.name}</b><div className="acct-region" style={{ fontSize: 12.5 }}>{l.sku}{pack ? <span style={{ color: 'var(--amber)' }}> · {pack}</span> : ''}{gift ? ` · free with ${offer?.name ?? 'an offer'}` : l.kind === 'bundle' ? ` · pack: ${offer?.name ?? 'bundle'}` : ''}</div>
+                    {edit && src ? <input style={{ ...field, fontSize: 13, padding: '3px 6px', marginTop: 4, width: '100%' }} placeholder="Comment for DEAR (optional)" value={src.comment} onChange={e => { setLines(ls => ls.map((x, j) => (j === i ? { ...x, comment: e.target.value } : x))); setDirty(true); }} /> : !gift && l.comment && <div style={{ fontSize: 12.5 }}>{l.comment}</div>}</td>
+                  <td style={num}>{edit && src ? <input inputMode="numeric" style={{ ...field, width: 70, textAlign: 'right' }} value={src.qty} onChange={e => { const n = Math.max(0, Math.floor(Number(e.target.value) || 0)); setLines(ls => ls.map((x, j) => (j === i ? { ...x, qty: n } : x))); setDirty(true); }} /> : l.qty}</td>
+                  <td style={num}>{$(l.price)}</td>
+                  <td style={num}>{off > 0 ? `${off}%` : ''}</td>
+                  <td style={num}>{$(tt.lineTotals[i] ?? 0)}</td>
+                  <td style={{ ...td, fontSize: 13, color: liveStock && st && st.backorder > 0 ? 'var(--rust)' : undefined }}>{gift ? '' : st && liveStock ? st.note : !liveStock ? <span className="acct-region">In DEAR</span> : ''}</td>
+                  {draft && mine && <td style={td}>{edit && <button type="button" className="link-btn" onClick={() => { setLines(ls => ls.filter((_, j) => j !== i)); setDirty(true); }}>Remove</button>}</td>}
+                </tr>
+              );
+            })}
             {!lines.length && <tr><td style={td} colSpan={6}><span className="acct-region">No products yet.</span></td></tr>}
           </tbody>
         </table>
@@ -146,7 +183,11 @@ export default function TradeShowOrder() {
               <input inputMode="decimal" style={{ ...field, width: 100 }} value={disc.value} disabled={!draft || !isManager} onChange={e => { setDisc({ ...disc, value: e.target.value }); setDirty(true); }} />
               {!isManager && draft && <span className="acct-region" style={{ fontSize: 12.5 }}>Managers give discounts</span>}
             </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span style={{ fontSize: 13, width: 70 }}>Freight</span><input inputMode="decimal" style={{ ...field, width: 120 }} value={freight} placeholder="0.00" disabled={!draft || !mine} onChange={e => { setFreight(e.target.value); setDirty(true); }} /><span className="acct-region" style={{ fontSize: 12.5 }}>ex GST</span></div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span style={{ fontSize: 13, width: 70 }}>Freight</span><input inputMode="decimal" style={{ ...field, width: 120 }} value={freightShown} placeholder="0.00" disabled={!draft || !mine} onChange={e => { setFreight(e.target.value); setFrAuto(false); setDirty(true); }} /><span className="acct-region" style={{ fontSize: 12.5 }}>ex GST</span></div>
+            {draft && mine && <FreightPanel state={fi.state} regionType={fr.regionType} largeItems={fr.largeItems} pantone={fr.pantone} manual={!frAuto} note={calc ? calc.note : fi.note} cfg={fi.cfg} canEdit={!busy}
+              onChange={p => { setFr(f => ({ ...f, ...p })); setDirty(true); }}
+              onReset={() => { setFrAuto(true); act(() => apiPatch(`/tradeshow/orders/${id}`, { ...body(), freightEdited: false, freightReset: true }), 'Freight worked out again.'); }}
+              onQuoteNz={() => act(() => apiPatch(`/tradeshow/orders/${id}`, { ...body(), freightEdited: false, freightReset: true, freightNz: true }), 'Australia Post price added.')} />}
             <label style={{ fontSize: 14, display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={o.cardPayment} disabled={!draft || !mine || busy} onChange={e => save({ cardPayment: e.target.checked })} /> Paying by card{o.cardSurchargePct ? ` (${o.cardSurchargePct}% surcharge)` : ' (no surcharge set for this show)'}</label>
             <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>Notes for sales<textarea style={{ ...field, minHeight: 54 }} value={notes} disabled={!mine || o.status === 'cancelled'} onChange={e => { setNotes(e.target.value); setDirty(true); }} /></label>
           </div>
@@ -154,7 +195,8 @@ export default function TradeShowOrder() {
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="panel-title">Total</div>
           <div className="kv"><span>Goods (wholesale ex GST)</span><span className="num">{$(tt.goods)}</span></div>
-          {tt.linePct > 0 && <div className="kv"><span>Discount {tt.linePct}%</span><span className="num">-{$(tt.discount)}</span></div>}
+          {tt.offerDiscount > 0 && <div className="kv"><span>Offers</span><span className="num">-{$(tt.offerDiscount)}</span></div>}
+          {tt.linePct > 0 && <div className="kv"><span>Discount {tt.linePct}%</span><span className="num">-{$(Math.round((tt.discount - tt.offerDiscount) * 100) / 100)}</span></div>}
           <div className="kv"><span>Freight</span><span className="num">{$(tt.freight)}</span></div>
           {tt.surcharge > 0 && <div className="kv"><span>Card surcharge {tt.surchargePct}%</span><span className="num">{$(tt.surcharge)}</span></div>}
           <div className="kv"><span>Total ex GST</span><span className="num">{$(tt.exGst)}</span></div>
