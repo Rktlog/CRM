@@ -12,6 +12,7 @@ const toCents = (n: number) => Math.round(n * 100) / 100;
 // worked out exactly like a credit note on an order. Product lines after discount, ex GST, ex freight and ex card surcharge; an order-level discount is a
 // NEGATIVE additional charge and comes off the goods; positive charges (freight, surcharge) stay out. GST-inclusive prices have their GST taken out.
 const isChargeLine = (l: any) => /surcharge|freight/i.test(`${l?.SKU ?? ''} ${l?.Name ?? ''}`);
+const isRrCredit = (c: any) => /^\s*rr credit/i.test(String(c?.Description ?? c?.Name ?? ''));   // a sales credit, not freight: counts as goods
 function isTaxInclusive(doc: any): boolean {
   if (typeof doc?.TaxInclusive === 'boolean') return doc.TaxInclusive;
   const lines = addUp(arr(doc?.Lines), l => l.Total);
@@ -21,11 +22,11 @@ function isTaxInclusive(doc: any): boolean {
 const exTax = (row: any, inclusive: boolean) => (Number(row?.Total) || 0) - (inclusive ? Number(row?.Tax) || 0 : 0);
 export function docGoods(doc: any): number {
   const inc = isTaxInclusive(doc);
-  return toCents(addUp(arr(doc?.Lines).filter((l: any) => !isChargeLine(l)), l => exTax(l, inc)) + addUp(arr(doc?.AdditionalCharges).filter((c: any) => Number(c.Total) < 0), c => exTax(c, inc)));
+  return toCents(addUp(arr(doc?.Lines).filter((l: any) => !isChargeLine(l)), l => exTax(l, inc)) + addUp(arr(doc?.AdditionalCharges).filter((c: any) => Number(c.Total) < 0 || isRrCredit(c)), c => exTax(c, inc)));
 }
 export function docCharges(doc: any): number {
   const inc = isTaxInclusive(doc);
-  return toCents(addUp(arr(doc?.AdditionalCharges).filter((c: any) => Number(c.Total) >= 0), c => exTax(c, inc)) + addUp(arr(doc?.Lines).filter(isChargeLine), l => exTax(l, inc)));
+  return toCents(addUp(arr(doc?.AdditionalCharges).filter((c: any) => Number(c.Total) >= 0 && !isRrCredit(c)), c => exTax(c, inc)) + addUp(arr(doc?.Lines).filter(isChargeLine), l => exTax(l, inc)));
 }
 
 // DEAR sends dates with no time zone ("2026-07-29T00:00:00"): they are Melbourne calendar days. Take the day exactly as written, never through new Date().
