@@ -19,7 +19,11 @@ export type SaleSource = { source?: string | null; number: string; paid: boolean
 export type SaleRow<T> = T & { amount: number; sentAt: Date; invoiceNumber?: string; invoicePaid?: boolean; isCredit?: boolean };
 
 export function asSales<T extends SaleSource>(q: T): SaleRow<T>[] {
-  if (isHistoryOrder(q)) return q.paid ? [q] : [];
+  // An old (Q) order is one lump on its order date, unless it has been given its real invoice list from the old DEAR
+  // (the old-dear-history load). Then it counts invoice by invoice, in each invoice's own month, like every other order.
+  const hasInvoiceList = (Array.isArray(q.invoices) ? q.invoices : [])
+    .some((i: any) => i?.date && String(i.status ?? '').toUpperCase() !== 'VOIDED');
+  if (isHistoryOrder(q) && !hasInvoiceList) return q.paid ? [q] : [];
   const status = (q.fulfillmentStatus ?? '').toUpperCase();
   if (NOT_A_SALE.includes(status)) return [];
   const orderGoods = q.goodsTotal ?? q.amount - (q.taxTotal ?? 0);
