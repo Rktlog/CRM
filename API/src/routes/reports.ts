@@ -153,12 +153,27 @@ reportsRouter.get('/sales', async (req, res) => {
   // accounts: real transactions, but they don't count toward performance.
   const regionParam = req.query.region as string | undefined;
   const scope = await salesScope(req, regionParam ? regionParam.split(',') : undefined);
+  // The same filters as the Sales Data page, so this chart and the Monthly invoiced total show the same sales for the same choices:
+  // ?repId= (managers only) and ?category=Pharmacy|Toy ("Uncategorized" = none set).
+  const requestedRepId = req.query.repId as string | undefined;
+  const effectiveRepId = scope.repId ?? (req.rep!.role === 'manager' ? requestedRepId || undefined : undefined);
+  const picked = typeof req.query.category === 'string' && req.query.category
+    ? req.query.category.split('|').map(c => c.trim()).filter(Boolean)
+    : [];
+  const named = picked.filter(c => c !== 'Uncategorized');
+  const withNone = picked.includes('Uncategorized');
   const accounts = await prisma.account.findMany({
     where: {
       misc: false,
       ...(scope.regions ? { region: { in: scope.regions } } : {}),
       ...(scope.hidden.length ? { id: { notIn: scope.hidden } } : {}),
-      ...(scope.repId ? { repId: scope.repId } : {}),
+      ...(effectiveRepId ? { repId: effectiveRepId } : {}),
+      ...(picked.length
+        ? { OR: [
+            ...(named.length ? [{ category: { in: named } }] : []),
+            ...(withNone ? [{ category: null }, { category: '' }] : []),
+          ] }
+        : {}),
     },
     select: { id: true },
   });
@@ -166,21 +181,28 @@ reportsRouter.get('/sales', async (req, res) => {
 
   // Same definition as Sales Data: each tax invoice, on its own date, goods ex GST.
   const standaloneCredits = await creditSalesFor(accountIds);   // credit notes that are on no order, as negative sales
+  const inWindow = [
+    // first invoiced up to a year before the window (a later invoice of an
+    // earlier order can fall inside it), or (history) ordered in it
+    { invoiceDate: { gte: new Date(previousStart.getTime() - 365 * 86400000), lt: currentEnd } },
+    { invoiceDate: null, sentAt: { gte: previousStart, lt: currentEnd } },
+    { source: 'rhino-history', sentAt: { gte: previousStart, lt: currentEnd } },
+  ];
+  const saleFields = { amount: true, sentAt: true, source: true, number: true, paid: true, invoiceDate: true,
+                       fulfillmentStatus: true, goodsTotal: true, taxTotal: true, invoices: true, creditNotes: true };
+  // Marketing and warranty (orders with a misc type, and accounts marked misc) count in the company-wide figures only, exactly as on the Sales Data
+  // page: when no state, rep or category is picked. Without this the chart was lower than Monthly invoiced total by their amount.
+  const overall = !scope.regions && !effectiveRepId && !picked.length;
+  const miscSales = overall
+    ? [...salesOf(await prisma.quote.findMany({
+        where: { AND: [{ OR: [{ miscType: { not: null } }, { account: { misc: true } }] }, { OR: inWindow }], ...(scope.hidden.length ? { accountId: { notIn: scope.hidden } } : {}) },
+        select: saleFields,
+      })), ...((await creditSalesMisc(scope.hidden)) as unknown as { amount: number; sentAt: Date }[])]
+    : [];
   const quotes: { amount: number; sentAt: Date }[] = [...salesOf(await prisma.quote.findMany({
-    where: {
-      accountId: { in: accountIds },
-      miscType: null,
-      // first invoiced up to a year before the window (a later invoice of an
-      // earlier order can fall inside it), or (history) ordered in it
-      OR: [
-        { invoiceDate: { gte: new Date(previousStart.getTime() - 365 * 86400000), lt: currentEnd } },
-        { invoiceDate: null, sentAt: { gte: previousStart, lt: currentEnd } },
-        { source: 'rhino-history', sentAt: { gte: previousStart, lt: currentEnd } },
-      ],
-    },
-    select: { amount: true, sentAt: true, source: true, number: true, paid: true, invoiceDate: true,
-              fulfillmentStatus: true, goodsTotal: true, taxTotal: true, invoices: true, creditNotes: true },
-  })), ...standaloneCredits].filter(q => q.sentAt >= previousStart && q.sentAt < currentEnd);
+    where: { accountId: { in: accountIds }, miscType: null, OR: inWindow },
+    select: saleFields,
+  })), ...standaloneCredits, ...miscSales].filter(q => q.sentAt >= previousStart && q.sentAt < currentEnd);
 
   const currentQuotes = quotes.filter(q => q.sentAt >= currentStart && q.sentAt < currentEnd);
   const previousQuotes = quotes.filter(q => q.sentAt >= previousStart && q.sentAt < previousEnd);

@@ -202,7 +202,7 @@ export default function SalesData() {
 
           <div className="ledger-section-head"><h2>Compare periods</h2></div>
           <div className="ledger-chart">
-            <SalesComparisonCard region={activeGroup?.regions?.join(',')} />
+            <SalesComparisonCard region={activeGroup?.regions?.join(',')} repId={isManager && repId ? repId : undefined} category={categoryParam || undefined} />
           </div>
 
           <hr className="ledger-rule" />
