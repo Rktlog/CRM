@@ -269,11 +269,11 @@ const DATASETS: Dataset[] = [
   {
     key: 'incoming_stock',
     blurb: 'Stock on order: purchase order lines still to arrive, with the date they are required and whether they are late.',
-    args: 'brand, search (SKU, product name or PO number), lateOnly (true)',
+    args: 'brand, search (SKU, product name, PO number or supplier), lateOnly (true)',
     async run(ctx, a) {
       const brand = text(a.brand) ? `%${text(a.brand)}%` : null, q = text(a.search) ? `%${text(a.search)}%` : null;
-      const rows = await prisma.$queryRaw<{ po: string | null; status: string | null; receiving: string | null; required_by: Date | null; sku: string; product: string | null; brand: string | null; ordered: number; received: number; outstanding: number }[]>`
-        select p.number as po, p.status, p.receiving_status as receiving, p.required_by, l.sku, pr.name as product, pr.brand,
+      const rows = await prisma.$queryRaw<{ po: string | null; supplier: string | null; order_date: Date | null; status: string | null; receiving: string | null; required_by: Date | null; sku: string; product: string | null; brand: string | null; ordered: number; received: number; outstanding: number }[]>`
+        select p.number as po, p.supplier, p.order_date, p.status, p.receiving_status as receiving, p.required_by, l.sku, pr.name as product, pr.brand,
                l.quantity_ordered::float8 as ordered, l.quantity_received::float8 as received,
                greatest(l.quantity_ordered - l.quantity_received, 0)::float8 as outstanding
         from crm.purchase_lines l
@@ -283,12 +283,74 @@ const DATASETS: Dataset[] = [
           and not (upper(coalesce(p.receiving_status, '')) like '%FULLY RECEIVED%' or upper(coalesce(p.status, '')) like 'COMPLETED%' or upper(coalesce(p.status, '')) = 'RECEIVED')
           and l.quantity_ordered - l.quantity_received > 0
           and (${brand}::text is null or pr.brand ilike ${brand}::text)
-          and (${q}::text is null or l.sku ilike ${q}::text or pr.name ilike ${q}::text or p.number ilike ${q}::text)
+          and (${q}::text is null or l.sku ilike ${q}::text or pr.name ilike ${q}::text or p.number ilike ${q}::text or p.supplier ilike ${q}::text)
         order by p.required_by nulls last, p.number, l.sku
         limit 5000`;
-      let out = rows.map(r => ({ po: r.po, sku: r.sku, product: r.product, brand: r.brand, ordered: r.ordered, received: r.received, outstanding: r.outstanding, requiredBy: day(r.required_by), late: r.required_by && day(r.required_by)! < ctx.today ? 'Late' : r.required_by ? 'On time' : 'No date', status: r.status }));
+      let out = rows.map(r => ({ po: r.po, supplier: r.supplier, orderDate: day(r.order_date), sku: r.sku, product: r.product, brand: r.brand, ordered: r.ordered, received: r.received, outstanding: r.outstanding, requiredBy: day(r.required_by), late: r.required_by && day(r.required_by)! < ctx.today ? 'Late' : r.required_by ? 'On time' : 'No date', status: r.status }));
       if (a.lateOnly === true) out = out.filter(r => r.late === 'Late');
-      return { columns: cols('po:PO', 'sku:SKU', 'product:Product', 'brand:Brand', 'ordered:Ordered', 'received:Received', 'outstanding:Outstanding', 'requiredBy:Required by', 'late:Timing', 'status:PO status'), rows: out, summary: { lines: out.length, unitsOutstanding: out.reduce((s, r) => s + r.outstanding, 0), lateLines: out.filter(r => r.late === 'Late').length, pos: new Set(out.map(r => r.po)).size } };
+      return { columns: cols('po:PO', 'supplier:Supplier', 'orderDate:Ordered on', 'sku:SKU', 'product:Product', 'brand:Brand', 'ordered:Ordered', 'received:Received', 'outstanding:Outstanding', 'requiredBy:Required by', 'late:Timing', 'status:PO status'), rows: out, summary: { lines: out.length, unitsOutstanding: out.reduce((s, r) => s + r.outstanding, 0), lateLines: out.filter(r => r.late === 'Late').length, pos: new Set(out.map(r => r.po)).size } };
+    },
+  },
+  {
+    key: 'purchase_history',
+    blurb: 'Purchase order history, including finished and old orders (from 2021), by supplier, product or date. Shows what was ordered, from whom, when, and when it arrived. Never shows costs: those are for managers only and are not available here. Voided and draft purchase orders are left out unless includeVoided is true.',
+    args: 'by (po | line | supplier | year; default po), supplier, brand, search (SKU, product name or PO number), from and to (order dates, YYYY-MM-DD), includeVoided (true). "po" is one row per purchase order, "line" one row per product on it, "supplier" one row per supplier with its first and latest PO and average days to deliver, "year" one row per supplier and year with the PO and unit counts.',
+    async run(_ctx, a) {
+      const by = ['po', 'line', 'supplier', 'year'].includes(lc(a.by)) ? lc(a.by) : 'po';
+      const supplier = text(a.supplier) ? `%${text(a.supplier)}%` : null, brand = text(a.brand) ? `%${text(a.brand)}%` : null, q = text(a.search) ? `%${text(a.search)}%` : null;
+      if (a.from != null && !isDay(a.from)) throw new DataError('from must be a date like 2024-01-31');
+      if (a.to != null && !isDay(a.to)) throw new DataError('to must be a date like 2024-01-31');
+      const from = a.from ?? null, to = a.to ?? null;
+      // Costs are deliberately not read here: crm.purchase_costs is for managers only.
+      const rows = await prisma.$queryRaw<{ po: string; supplier: string | null; order_date: Date | null; status: string | null; receiving: string | null; sku: string; product: string | null; brand: string | null; ordered: number; received: number; last_received: Date | null }[]>`
+        select p.number as po, p.supplier, p.order_date, p.status, p.receiving_status as receiving, l.sku, pr.name as product, pr.brand,
+               l.quantity_ordered::float8 as ordered, l.quantity_received::float8 as received, coalesce(l.last_received_at, rc.last_at) as last_received
+        from crm.purchase_lines l
+        join crm.purchases p on p.id = l.purchase_id
+        left join crm.products pr on pr.sku = l.sku
+        left join (select purchase_id, sku, max(received_at) as last_at from crm.purchase_receipts group by purchase_id, sku) rc on rc.purchase_id = l.purchase_id and rc.sku = l.sku
+        where (${a.includeVoided === true}::boolean or upper(coalesce(p.status, '')) not in ('VOIDED', 'DRAFT'))
+          and (${supplier}::text is null or p.supplier ilike ${supplier}::text)
+          and (${brand}::text is null or pr.brand ilike ${brand}::text)
+          and (${q}::text is null or l.sku ilike ${q}::text or pr.name ilike ${q}::text or l.product_name ilike ${q}::text or p.number ilike ${q}::text)
+          and (${from}::date is null or p.order_date::date >= ${from}::date)
+          and (${to}::date is null or p.order_date::date <= ${to}::date)
+        order by p.order_date, p.number, l.sku
+        limit 20000`;
+      const days = (a1: Date | null, b1: Date | null) => (a1 && b1 ? Math.round((new Date(b1).getTime() - new Date(a1).getTime()) / 86400000) : null);
+      const finished = (r: { status: string | null; receiving: string | null }) => /FULLY RECEIVED/i.test(r.receiving ?? '') || /^(COMPLETED|RECEIVED)/i.test(r.status ?? '');
+      type Po = { po: string; supplier: string | null; orderDate: Date | null; status: string | null; lines: number; ordered: number; received: number; last: Date | null; first: Date | null; finished: boolean };
+      const pos = new Map<string, Po>();
+      for (const r of rows) {
+        const p = pos.get(r.po) ?? { po: r.po, supplier: r.supplier, orderDate: r.order_date, status: r.status, lines: 0, ordered: 0, received: 0, last: null, first: null, finished: finished(r) };
+        p.lines += 1; p.ordered += r.ordered; p.received += r.received;
+        if (r.last_received) { const d = new Date(r.last_received); if (!p.last || d > p.last) p.last = d; if (!p.first || d < p.first) p.first = d; }
+        pos.set(r.po, p);
+      }
+      const poList = [...pos.values()];
+      const avg = (xs: number[]) => (xs.length ? Math.round(xs.reduce((m, x) => m + x, 0) / xs.length) : null);
+      const deliverDays = (list: Po[]) => list.filter(p => p.finished).map(p => days(p.orderDate, p.last)).filter((d): d is number => d != null && d >= 0);
+      const overall = { pos: poList.length, lines: rows.length, unitsOrdered: rows.reduce((m, r) => m + r.ordered, 0), unitsReceived: rows.reduce((m, r) => m + r.received, 0), avgDaysToDeliver: avg(deliverDays(poList)),
+        firstOrder: day(poList.map(p => p.orderDate).filter((d): d is Date => !!d).sort((x, y) => +x - +y)[0] ?? null), latestOrder: day(poList.map(p => p.orderDate).filter((d): d is Date => !!d).sort((x, y) => +y - +x)[0] ?? null) };
+      if (by === 'line') {
+        const out = rows.map(r => ({ po: r.po, orderDate: day(r.order_date), supplier: r.supplier, sku: r.sku, product: r.product, brand: r.brand, ordered: r.ordered, received: r.received, lastReceived: day(r.last_received), status: r.status }));
+        return { columns: cols('po:PO', 'orderDate:Ordered on', 'supplier:Supplier', 'sku:SKU', 'product:Product', 'brand:Brand', 'ordered:Ordered', 'received:Received', 'lastReceived:Last received', 'status:PO status'), rows: out, summary: overall };
+      }
+      if (by === 'supplier') {
+        const g = new Map<string, Po[]>(); for (const p of poList) { const k = p.supplier ?? 'Unknown'; g.set(k, [...(g.get(k) ?? []), p]); }
+        const out = [...g.entries()].map(([k, l]) => { const ds = l.map(p => p.orderDate).filter((d): d is Date => !!d).sort((x, y) => +x - +y);
+          return { supplier: k, pos: l.length, firstPo: day(ds[0] ?? null), latestPo: day(ds[ds.length - 1] ?? null), unitsOrdered: l.reduce((m, p) => m + p.ordered, 0), unitsReceived: l.reduce((m, p) => m + p.received, 0), avgDaysToDeliver: avg(deliverDays(l)) }; })
+          .sort((x, y) => y.pos - x.pos);
+        return { columns: cols('supplier:Supplier', 'pos:POs', 'firstPo:First PO', 'latestPo:Latest PO', 'unitsOrdered:Units ordered', 'unitsReceived:Units received', 'avgDaysToDeliver:Avg days to deliver'), rows: out, summary: { ...overall, suppliers: out.length } };
+      }
+      if (by === 'year') {
+        const g = new Map<string, Po[]>(); for (const p of poList) { const k = `${p.orderDate ? new Date(p.orderDate).getUTCFullYear() : 'Unknown'}|${p.supplier ?? 'Unknown'}`; g.set(k, [...(g.get(k) ?? []), p]); }
+        const out = [...g.entries()].map(([k, l]) => { const [year, sup] = k.split('|'); return { year, supplier: sup, pos: l.length, unitsOrdered: l.reduce((m, p) => m + p.ordered, 0), unitsReceived: l.reduce((m, p) => m + p.received, 0), avgDaysToDeliver: avg(deliverDays(l)) }; })
+          .sort((x, y) => x.year.localeCompare(y.year) || y.pos - x.pos);
+        return { columns: cols('year:Year', 'supplier:Supplier', 'pos:POs', 'unitsOrdered:Units ordered', 'unitsReceived:Units received', 'avgDaysToDeliver:Avg days to deliver'), rows: out, summary: overall };
+      }
+      const out = poList.map(p => ({ po: p.po, orderDate: day(p.orderDate), supplier: p.supplier, status: p.status, lines: p.lines, unitsOrdered: p.ordered, unitsReceived: p.received, firstReceived: day(p.first), lastReceived: day(p.last), daysToLastReceipt: p.finished ? days(p.orderDate, p.last) : null }));
+      return { columns: cols('po:PO', 'orderDate:Ordered on', 'supplier:Supplier', 'status:Status', 'lines:Lines', 'unitsOrdered:Units ordered', 'unitsReceived:Units received', 'firstReceived:First received', 'lastReceived:Last received', 'daysToLastReceipt:Days to last receipt'), rows: out, summary: overall };
     },
   },
   {
