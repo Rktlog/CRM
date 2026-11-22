@@ -14,6 +14,7 @@ import MarketingDashboard from './pages/MarketingDashboard';
 import MarketingFocus from './pages/MarketingFocus';
 import Planner from './pages/Planner';
 import Reports from './pages/Reports';
+import Ellen from './pages/Ellen';
 import ReportBuilder from './pages/ReportBuilder';
 import Misc from './pages/Misc';
 import ProductSearch from './pages/ProductSearch';
@@ -73,6 +74,7 @@ function Routed() {
         <Route path="accounts/:id" element={<AccountDetail />} />
         <Route path="council/:name" element={<CouncilStores />} />
         <Route path="sales-data" element={<SalesData />} />
+        <Route path="ellen" element={<Ellen />} />
         <Route path="reports" element={<Reports />} />
         <Route path="reports/builder" element={<ReportBuilder />} />
         <Route path="misc" element={<Misc />} />

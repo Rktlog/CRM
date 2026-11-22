@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma';
 import { isHistory, isOwing } from '../lib/orderSource';
 import { NOT_A_SALE, isChargeLine, isHistoryOrder, salesOf } from '../lib/salesRules';
 import { creditSalesFor, creditSalesMisc } from '../lib/creditSales';
+import { buildEllen, ellenRowFor, MEEQ, type EllenSale } from '../lib/ellenTable';
 
 export const reportsRouter = Router();
 
@@ -247,6 +248,40 @@ reportsRouter.get('/sales', async (req, res) => {
     earliestDataAt: earliestQuote?.sentAt ?? null,
     comparisonReachesBeforeData: earliestQuote ? previousStart < earliestQuote.sentAt : false,
   });
+});
+
+// Manager-only: the Ellen table. Monthly sales by state group for three financial years side by side, laid out like Ellen's Dashboard by Month sheet.
+// Whole company, counted exactly like Sales Data's Monthly invoiced total: invoice goods ex GST on the invoice date, credit notes negative,
+// marketing and warranty included. ?fy= is the year the financial year starts in (2026 = July 2026 to June 2027).
+reportsRouter.get('/ellen', async (req, res) => {
+  if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'The Ellen report is for managers' });
+  const now = new Date();
+  const fy = Number(req.query.fy) || fyStart(now).getFullYear();
+  if (!Number.isInteger(fy) || fy < 2000 || fy > now.getFullYear() + 1) return res.status(400).json({ error: 'Invalid year' });
+  const from = new Date(fy - 2, 6, 1);
+  const to = new Date(fy + 1, 6, 1);
+
+  const accounts = await prisma.account.findMany({ select: { id: true, region: true, misc: true } });
+  const regionOf = new Map(accounts.map(a => [a.id, a.region]));
+  const inWindow = [
+    { invoiceDate: { gte: new Date(from.getTime() - 365 * 86400000), lt: to } },   // same net as /sales: a later invoice of an earlier order can fall inside
+    { invoiceDate: null, sentAt: { gte: from, lt: to } },
+    { source: 'rhino-history', sentAt: { gte: from, lt: to } },
+  ];
+  const quotes = await prisma.quote.findMany({
+    where: { OR: inWindow },
+    select: { id: true, accountId: true, amount: true, sentAt: true, source: true, number: true, paid: true, invoiceDate: true,
+              fulfillmentStatus: true, goodsTotal: true, taxTotal: true, invoices: true, creditNotes: true },
+  });
+  // Orders with a custom MeeQ line (SKUs starting IBTTCM) are shown on their own row, not under their state.
+  const custom = new Set((await prisma.quoteLine.findMany({ where: { sku: { startsWith: 'IBTTCM', mode: 'insensitive' } }, select: { quoteId: true }, distinct: ['quoteId'] })).map(l => l.quoteId));
+  const credits = [...await creditSalesFor(accounts.filter(a => !a.misc).map(a => a.id)), ...await creditSalesMisc([])];
+
+  const sales: EllenSale[] = [
+    ...salesOf(quotes).map(s => ({ amount: s.amount, sentAt: s.sentAt, row: custom.has(s.id) ? MEEQ : ellenRowFor(regionOf.get(s.accountId)) })),
+    ...credits.map(c => ({ amount: c.amount, sentAt: c.sentAt, row: ellenRowFor(regionOf.get(c.accountId)) })),
+  ].filter(s => s.sentAt >= from && s.sentAt < to);
+  res.json({ ...buildEllen(sales, fy, now), asOf: now.toISOString() });
 });
 
 // Manager-only: how much activity each rep has logged recently.

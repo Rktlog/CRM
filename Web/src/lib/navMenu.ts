@@ -56,6 +56,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/sales-data', label: 'Sales Data' },
       { to: '/reports', label: 'Reports' },
+      { to: '/ellen', label: 'Ellen', managerOnly: true },
     ],
     also: ['/conversion'],
   },
