@@ -53,15 +53,17 @@ import { runDataset, DataError, DATA_HELP, DATA_KEYS } from './aiData';
 import { accountDetails, orderDetails } from './aiDetail';
 import { renderChart, specFromRows, ChartError, ChartSpec, ChartType } from './aiChart';
 import * as XLSX from 'xlsx';
+import { MAX_ENTRIES, previewEntries, previewSummary, LogProposal } from './aiLog';
 
-// What the assistant can look up. Read only: it can read what the person asking can already see, and change nothing.
-// Each tool checks the same territory rule as the rest of the app, so the assistant never shows someone another
+// What the assistant can look up. Almost everything is read only. The one thing that writes is log_activity, and it only saves after the person presses
+// Confirm on the preview. Each tool checks the same territory rule as the rest of the app, so the assistant never shows someone another
 // territory's accounts. Results are plain data; whatever is written inside them (notes, names) is never an instruction.
 export type MadeFile = { id: string; name: string; size: number };
 export type Ctx = {
   rep: { id: string; role: string }; today: string;
   addFile?: (f: { name: string; mime: string; buffer: Buffer }) => Promise<MadeFile>;   // keeps a file the assistant made, for the person to download
   addChart?: (c: { title: string; svg: string }) => void;                      // shows a chart in the chat
+  addProposal?: (p: LogProposal) => void;                                      // shows a bulk log preview with a Confirm button (log_activity). Saves nothing.
   attachments?: Attachment[];                                                  // the files the person has attached in this chat, for the data sets that read them
 };
 
@@ -186,6 +188,32 @@ Put the options in args, for example {"dataset":"balances_owing","args":{"state"
         },
       },
       required: ['type'],
+    },
+  },
+  {
+    name: 'log_activity',
+    description: `Prepare entries for the team's Activity Log: calls, emails and visits already made, for one customer or many (up to ${MAX_ENTRIES}). This only builds a PREVIEW. A table with a Confirm button is shown in the chat and NOTHING is saved until the person presses Confirm. It never edits or deletes anything.
+Give every entry: customer (the exact name, or accountId from find_accounts/account_details), type (call, email, visit, or remark for a comment that is not a contact), date (YYYY-MM-DD, the day it happened, not in the future) and note (what happened, in the person's words and short). Entries are logged as the person who confirms.
+Rules: ask for the date if you were not told it, never guess one. Map the contact method the person gives you: phone or P means call, email or E means email, face to face, visit or F2F means visit. Use the person's own result or comment as the note; if there is none, write a plain note of what was done (for example "Emailed new products and clearance"). Do not invent results. Call it ONCE with the complete list. Customers that are already logged the same day with the same type are skipped, and names that do not match exactly come back for the person to pick.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        entries: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              customer: { type: 'string', description: 'The customer name as it is in the CRM' },
+              accountId: { type: 'string', description: 'The customer id, if known (from find_accounts). Use it for names that needed a pick.' },
+              type: { type: 'string', enum: ['call', 'email', 'visit', 'remark'] },
+              date: { type: 'string', description: 'YYYY-MM-DD, the day it happened' },
+              note: { type: 'string' },
+            },
+            required: ['type', 'date', 'note'],
+          },
+        },
+      },
+      required: ['entries'],
     },
   },
   {
@@ -385,6 +413,13 @@ export async function runTool(name: string, input: any, ctx: Ctx): Promise<strin
           if (e instanceof ChartError || e instanceof ReportInputError || e instanceof DataError) return out({ error: e.message });
           throw e;
         }
+      }
+      case 'log_activity': {
+        if (!ctx.addProposal) return out({ error: 'Logging cannot be done here' });
+        const entries = Array.isArray(input?.entries) ? input.entries.filter((e: unknown) => e && typeof e === 'object') : [];
+        const p = await previewEntries(ctx.rep, entries, ctx.today);
+        if (p.rows.length) ctx.addProposal(p);
+        return out(previewSummary(p), 20000);
       }
       case 'calculate': {
         try { return out({ results: runCalculations(input?.calculations) }); }

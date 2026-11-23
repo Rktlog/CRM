@@ -7,11 +7,13 @@ const API_URL = import.meta.env.VITE_API_URL;
 export type MadeFile = { id: string; name: string; size: number };
 export type Step = { tool: string; what: string };
 export type Chart = { title: string; svg: string };
+export type LogRow = { accountId: string; accountName: string; state: string; type: 'call' | 'email' | 'visit' | 'remark'; date: string; note: string; effects: string[]; status: 'ready' | 'duplicate' };
+export type LogProposal = { rows: LogRow[]; problems: { name: string; reason: string; choices?: { id: string; name: string; state: string }[] }[] };
 export type ChatEvent =
   | { type: 'status'; text: string }
   | { type: 'text'; delta: string }
   | { type: 'reset' }
-  | { type: 'done'; reply: string; tools: string[]; steps: Step[]; files: MadeFile[]; charts: Chart[]; chatId: string | null; title: string | null; usage: { inputTokens: number; outputTokens: number; calls: number } }
+  | { type: 'done'; reply: string; tools: string[]; steps: Step[]; files: MadeFile[]; charts: Chart[]; proposal: LogProposal | null; chatId: string | null; title: string | null; usage: { inputTokens: number; outputTokens: number; calls: number } }
   | { type: 'error'; error: string };
 export type SendMessage = { role: 'user' | 'assistant'; content: string; attachments?: { name: string; type: string; data: string }[] };
 
