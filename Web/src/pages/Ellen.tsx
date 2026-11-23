@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { apiGet } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 
@@ -11,6 +11,13 @@ type Data = { fy: number; fyYears: number[]; rows: string[]; blocks: Block[]; as
 const money = (n: number) => n.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const pct = (n: number) => `${n > 0 ? '+' : ''}${(n * 100).toFixed(1)}%`;
 const isTotal = (row: string) => row.startsWith('TOTAL');
+// One colour per year column so the three years are easy to tell apart: the oldest is grey, the middle dark, the newest green.
+const YEAR_COLOUR = ['var(--muted)', '#2b2b2b', 'var(--teal)'];
+const YEAR_BG = ['transparent', 'transparent', 'var(--teal-bg)'];
+
+// Change: green when up, red when down, bold either way. While the newest quarter or half is still running it says so; a period that has not started shows nothing.
+const changeStyle = (v: number | null): CSSProperties => ({ fontWeight: 700, color: v == null ? 'var(--muted)' : v > 0 ? 'var(--teal)' : v < 0 ? 'var(--rust)' : undefined });
+const changeText = (v: number | null, status: Block['status']) => (v != null ? pct(v) : status === 'partial' ? 'not finished' : '');
 
 export default function Ellen() {
   const { role } = useAuth();
@@ -48,9 +55,9 @@ export default function Ellen() {
       {data && (
         <>
           <p style={{ color: 'var(--muted)', fontSize: 13 }}>
-            Each column shows {data.fyYears.map(y => `FY ${y}/${String(y + 1).slice(2)}`).join(', ')}, oldest first. Change % is the newest year against the year before it, divided by the year before it.
-            It only shows once the newest quarter or half is finished, so a half that is still running is not compared to a full one.
-            Sales are goods ex GST on the invoice date, credit notes taken off, marketing and warranty included. MeeQ Custom is every order with a custom MeeQ line, kept on its own row.
+            The three columns are {data.fyYears.map(y => `FY ${y}/${String(y + 1).slice(2)}`).join(', ')}, oldest first. Change is the newest year against the year before it, as a share of the year before.
+            Green is up, red is down. It is left out ("not finished") while the newest quarter or half is still running, so a part year is not compared with a whole one.
+            Sales are goods ex GST on the invoice date, credit notes taken off, marketing and warranty included. MeeQ Custom is the DEAR brand "Miffy Plush - Custom"; only the VIC/HO row leaves it out, and Others is whatever is left, as in Ellen's sheet.
           </p>
           {halves.map((blocks, hi) => (
             <div key={hi} className="card" style={{ marginBottom: 16 }}>
@@ -60,13 +67,13 @@ export default function Ellen() {
                   <thead>
                     <tr>
                       <th />
-                      {blocks.map(b => <th key={b.key} colSpan={b.kind === 'month' ? 3 : 4} className="num-col" style={{ textAlign: 'center' }}>{b.label}{b.status === 'partial' ? ' (so far)' : b.status === 'future' ? ' (not started)' : ''}</th>)}
+                      {blocks.map(b => <th key={b.key} colSpan={b.kind === 'month' ? 3 : 4} className="num-col" style={{ textAlign: 'center', fontWeight: 800, fontSize: 14, color: '#111', borderLeft: '1px solid var(--line)' }}>{b.label}{b.status === 'partial' ? ' (so far)' : b.status === 'future' ? ' (not started)' : ''}</th>)}
                     </tr>
                     <tr>
                       <th />
                       {blocks.flatMap(b => [
-                        ...b.years.map((y, i) => <th key={`${b.key}-${i}`} className="num-col">{y}</th>),
-                        ...(b.kind === 'month' ? [] : [<th key={`${b.key}-v`} className="num-col">Change</th>]),
+                        ...b.years.map((y, i) => <th key={`${b.key}-${i}`} className="num-col" style={{ fontWeight: 700, color: YEAR_COLOUR[i], background: YEAR_BG[i], borderLeft: i === 0 ? '1px solid var(--line)' : undefined }}>{y}</th>),
+                        ...(b.kind === 'month' ? [] : [<th key={`${b.key}-v`} className="num-col" style={{ fontWeight: 700 }}>Change</th>]),
                       ])}
                     </tr>
                   </thead>
@@ -76,15 +83,11 @@ export default function Ellen() {
                         <td style={{ whiteSpace: 'nowrap' }}>{row}</td>
                         {blocks.flatMap(b => [
                           ...b.values[row].map((v, i) => (
-                            <td key={`${b.key}-${i}`} className="num-col" style={{ color: i === 2 && b.status === 'future' ? 'var(--muted)' : undefined }}>
+                            <td key={`${b.key}-${i}`} className="num-col" style={{ color: i === 2 && b.status === 'future' ? 'var(--muted)' : YEAR_COLOUR[i], background: YEAR_BG[i], fontWeight: i === 2 ? 600 : undefined, borderLeft: i === 0 ? '1px solid var(--line)' : undefined }}>
                               {i === 2 && b.status === 'future' ? '–' : money(v)}
                             </td>
                           )),
-                          ...(b.kind === 'month' ? [] : [
-                            <td key={`${b.key}-v`} className="num-col" style={{ color: b.variance[row] != null && b.variance[row]! < 0 ? 'var(--rust)' : undefined }}>
-                              {b.variance[row] != null ? pct(b.variance[row]!) : b.status === 'done' ? '' : 'open'}
-                            </td>,
-                          ]),
+                          ...(b.kind === 'month' ? [] : [<td key={`${b.key}-v`} className="num-col" style={changeStyle(b.variance[row])}>{changeText(b.variance[row], b.status)}</td>]),
                         ])}
                       </tr>
                     ))}

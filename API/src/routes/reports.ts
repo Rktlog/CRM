@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma';
 import { isHistory, isOwing } from '../lib/orderSource';
 import { NOT_A_SALE, isChargeLine, isHistoryOrder, salesOf } from '../lib/salesRules';
 import { creditSalesFor, creditSalesMisc } from '../lib/creditSales';
-import { buildEllen, ellenRowFor, MEEQ, type EllenSale } from '../lib/ellenTable';
+import { buildEllen, ellenRowFor, CUSTOM_BRAND, type EllenSale } from '../lib/ellenTable';
 
 export const reportsRouter = Router();
 
@@ -252,7 +252,7 @@ reportsRouter.get('/sales', async (req, res) => {
 
 // Manager-only: the Ellen table. Monthly sales by state group for three financial years side by side, laid out like Ellen's Dashboard by Month sheet.
 // Whole company, counted exactly like Sales Data's Monthly invoiced total: invoice goods ex GST on the invoice date, credit notes negative,
-// marketing and warranty included. ?fy= is the year the financial year starts in (2026 = July 2026 to June 2027).
+// marketing and warranty included. The rows follow the sheet's rules exactly (see ellenTable.ts). ?fy= is the year the financial year starts in (2026 = July 2026 to June 2027).
 reportsRouter.get('/ellen', async (req, res) => {
   if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'The Ellen report is for managers' });
   const now = new Date();
@@ -273,12 +273,24 @@ reportsRouter.get('/ellen', async (req, res) => {
     select: { id: true, accountId: true, amount: true, sentAt: true, source: true, number: true, paid: true, invoiceDate: true,
               fulfillmentStatus: true, goodsTotal: true, taxTotal: true, invoices: true, creditNotes: true },
   });
-  // Orders with a custom MeeQ line (SKUs starting IBTTCM) are shown on their own row, not under their state.
-  const custom = new Set((await prisma.quoteLine.findMany({ where: { sku: { startsWith: 'IBTTCM', mode: 'insensitive' } }, select: { quoteId: true }, distinct: ['quoteId'] })).map(l => l.quoteId));
+  // The custom MeeQ brand, as the sheet does it: by the product's brand ("Miffy Plush - Custom"), line by line. For each order, the custom share is the
+  // custom lines' value over all its goods lines; each invoice and credit note of the order is split in that proportion (an order is often invoiced in parts).
+  const customOrders = (await prisma.quoteLine.findMany({ where: { brand: { equals: CUSTOM_BRAND, mode: 'insensitive' } }, select: { quoteId: true }, distinct: ['quoteId'] })).map(l => l.quoteId);
+  const shareOf = new Map<string, number>();
+  if (customOrders.length) {
+    const lines = await prisma.quoteLine.findMany({ where: { quoteId: { in: customOrders } }, select: { quoteId: true, brand: true, sku: true, productName: true, lineTotal: true } });
+    const goods = new Map<string, number>(), custom = new Map<string, number>();
+    for (const l of lines) {
+      if (isChargeLine(l)) continue;
+      goods.set(l.quoteId, (goods.get(l.quoteId) ?? 0) + l.lineTotal);
+      if ((l.brand ?? '').trim().toLowerCase() === CUSTOM_BRAND.toLowerCase()) custom.set(l.quoteId, (custom.get(l.quoteId) ?? 0) + l.lineTotal);
+    }
+    for (const [id, c] of custom) { const g = goods.get(id) ?? 0; if (g > 0) shareOf.set(id, Math.min(1, c / g)); }
+  }
   const credits = [...await creditSalesFor(accounts.filter(a => !a.misc).map(a => a.id)), ...await creditSalesMisc([])];
 
   const sales: EllenSale[] = [
-    ...salesOf(quotes).map(s => ({ amount: s.amount, sentAt: s.sentAt, row: custom.has(s.id) ? MEEQ : ellenRowFor(regionOf.get(s.accountId)) })),
+    ...salesOf(quotes).map(s => ({ amount: s.amount, sentAt: s.sentAt, row: ellenRowFor(regionOf.get(s.accountId)), custom: s.amount * (shareOf.get(s.id) ?? 0) })),
     ...credits.map(c => ({ amount: c.amount, sentAt: c.sentAt, row: ellenRowFor(regionOf.get(c.accountId)) })),
   ].filter(s => s.sentAt >= from && s.sentAt < to);
   res.json({ ...buildEllen(sales, fy, now), asOf: now.toISOString() });

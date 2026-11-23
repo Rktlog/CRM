@@ -1,8 +1,17 @@
-// The "Ellen" monthly sales table: the same layout as Ellen's Dashboard by Month sheet. One row per state group, one column per month, with the
-// quarters and the two halves of the financial year (July to June), and three years side by side. Pure sums: the caller passes the sales
-// (already counted the Sales Data way, see salesRules.ts) and which row each one belongs to.
+// The "Ellen" monthly sales table: the same layout and the same row rules as Ellen's Dashboard by Month sheet. One row per state group, one column per
+// month, with the quarters and the two halves of the financial year (July to June), and three years side by side. Pure sums: the caller passes the sales
+// (already counted the Sales Data way, see salesRules.ts), which state row each belongs to, and how much of it is the custom MeeQ brand.
+//
+// The sheet's row rules, copied exactly:
+//  - A state row is every sale of that state, EXCEPT that the VIC/HO row leaves out the custom brand ("Miffy Plush - Custom"). No other row does.
+//  - MeeQ Custom is every custom-brand line, in any state.
+//  - Others is what is left: all sales, minus the ten state rows, minus MeeQ Custom. So it holds sales of unknown or overseas states, and it also
+//    cancels the custom-brand amount that sits in a state other than VIC/HO (which the sheet counts in that state AND in MeeQ Custom).
+//  - TOTAL including MeeQ Custom is all sales. TOTAL excluding MeeQ Custom is all sales minus MeeQ Custom.
 
 export const ELLEN_STATES = ['VIC', 'VIC/HO', 'NSW/HO', 'NSW, ACT', 'QLD', 'NZ', 'WA', 'SA', 'TAS', 'NT', 'Others'] as const;
+const TEN = ELLEN_STATES.filter(s => s !== 'Others');
+export const CUSTOM_BRAND = 'Miffy Plush - Custom';
 export const MEEQ = 'MeeQ Custom';
 export const TOTAL_WITH = 'TOTAL including MeeQ Custom';
 export const TOTAL_WITHOUT = 'TOTAL excluding MeeQ Custom';
@@ -16,7 +25,8 @@ export function ellenRowFor(region: string | null | undefined): string {
   return hit ?? 'Others';
 }
 
-export type EllenSale = { amount: number; sentAt: Date; row: string };
+/** row: the state row of the account (see ellenRowFor). custom: how much of `amount` is the custom MeeQ brand (0 for most sales; same sign as amount). */
+export type EllenSale = { amount: number; sentAt: Date; row: string; custom?: number };
 export type EllenStatus = 'done' | 'partial' | 'future';
 export type EllenBlock = {
   key: string;
@@ -39,7 +49,7 @@ export function changePct(newest: number, before: number): number | null {
 /** fy = the year the financial year starts in (2026 = July 2026 to June 2027). The columns are fy-2, fy-1 and fy. */
 export function buildEllen(sales: EllenSale[], fy: number, now: Date): { fy: number; fyYears: number[]; rows: string[]; blocks: EllenBlock[] } {
   const fyYears = [fy - 2, fy - 1, fy];
-  // sums[row]["calendarYear-month"] (month 0 to 11)
+  // sums[row]["calendarYear-month"] (month 0 to 11). Only the ten state rows, MeeQ Custom and the grand total are summed; Others and the totals come from them.
   const sums = new Map<string, Map<string, number>>();
   const add = (row: string, key: string, v: number) => {
     const m = sums.get(row) ?? new Map<string, number>();
@@ -48,12 +58,19 @@ export function buildEllen(sales: EllenSale[], fy: number, now: Date): { fy: num
   };
   for (const s of sales) {
     const key = `${s.sentAt.getFullYear()}-${s.sentAt.getMonth()}`;
-    add(s.row, key, s.amount);
-    add(TOTAL_WITH, key, s.amount);
-    if (s.row !== MEEQ) add(TOTAL_WITHOUT, key, s.amount);
+    const custom = s.custom ?? 0;
+    add('ALL', key, s.amount);
+    if (custom) add(MEEQ, key, custom);
+    if ((TEN as readonly string[]).includes(s.row)) add(s.row, key, s.row === 'VIC/HO' ? s.amount - custom : s.amount);
   }
   const calYear = (fyStart: number, month: number) => (month >= 6 ? fyStart : fyStart + 1);
-  const monthTotal = (row: string, fyStart: number, month: number) => sums.get(row)?.get(`${calYear(fyStart, month)}-${month}`) ?? 0;
+  const raw = (row: string, fyStart: number, month: number) => sums.get(row)?.get(`${calYear(fyStart, month)}-${month}`) ?? 0;
+  const monthTotal = (row: string, fyStart: number, month: number): number => {
+    if (row === TOTAL_WITH) return raw('ALL', fyStart, month);
+    if (row === TOTAL_WITHOUT) return raw('ALL', fyStart, month) - raw(MEEQ, fyStart, month);
+    if (row === 'Others') return raw('ALL', fyStart, month) - TEN.reduce((t, r) => t + raw(r, fyStart, month), 0) - raw(MEEQ, fyStart, month);
+    return raw(row, fyStart, month);
+  };
   const statusOf = (fyStart: number, months: number[]): EllenStatus => {
     const cur = now.getFullYear() * 12 + now.getMonth();
     const idx = months.map(m => calYear(fyStart, m) * 12 + m);
