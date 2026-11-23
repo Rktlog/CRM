@@ -202,7 +202,7 @@ textarea, input[type="email"], input[type="password"], input[type="text"], selec
    app's chrome, echoing the exported ledger report: serif headings,
    quieter accents, table rows instead of cards. ---- */
 
-.ledger { max-width: 1080px; }
+.ledger { max-width: none; }   /* uses the whole screen; it was 1080px, which cut wide tables off on a big monitor */
 .ledger-head { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 16px; margin-bottom: 26px; }
 .ledger-tag { font-size: 13px; color: var(--teal); border: 1px solid var(--teal); display: inline-block; padding: 2px 8px; border-radius: 3px; margin-bottom: 8px; }
 .ledger-title { font-family: 'Source Serif 4', Georgia, serif; font-size: 28px; font-weight: 600; margin: 0; color: var(--ink); }
@@ -258,11 +258,17 @@ textarea, input[type="email"], input[type="password"], input[type="text"], selec
 
 .ledger-table-scroll { overflow-x: auto; border: 1px solid var(--line); background: var(--panel); }
 .ledger-table-scroll table { width: 100%; border-collapse: collapse; min-width: 560px; }
-.ledger-table-scroll.tall { max-height: 480px; overflow-y: auto; }
+/* The heights below are only the starting size. useFitTables (lib/useFitTables.ts) then fits each box to the space left on the screen. */
+.ledger-table-scroll.tall { max-height: max(360px, calc(100vh - 360px)); overflow-y: auto; }
 .ledger-table-scroll th { text-align: left; font-size: 13px; color: var(--muted); font-weight: 500; padding: 0 10px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; position: sticky; top: 0; background: var(--panel); }
 .ledger-table-scroll th.num-col, .ledger-table-scroll td.num-col { text-align: right; }
 .ledger-table-scroll td { padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 14.5px; }
 .ledger-table-scroll tr:last-child td { border-bottom: none; }
+/* Ellen: six months, three years each, so the cells are tight, and the state names stay put if the table still has to scroll sideways. */
+.ledger-table-scroll .ellen-table { min-width: 0; }
+.ledger-table-scroll .ellen-table th, .ledger-table-scroll .ellen-table td { padding: 5px 7px; font-size: 13px; }
+.ledger-table-scroll .ellen-table th:first-child, .ledger-table-scroll .ellen-table td:first-child { position: sticky; left: 0; z-index: 2; background: var(--panel); }
+.ledger-table-scroll .ellen-table tbody tr[style*="background"] td:first-child { background: var(--bg); }
 .ledger-table-scroll .sortable { cursor: pointer; user-select: none; }
 .ledger-table-scroll .sortable:hover { color: var(--ink); }
 .cust-name { font-weight: 500; }
@@ -316,11 +322,11 @@ textarea, input[type="email"], input[type="password"], input[type="text"], selec
 /* Caps a manifest to roughly 10 rows visible, scrolls for the rest.
    Row height ~= 46px + a 38px header, so 10 rows lands near 498px —
    tuned by eye rather than measured exactly. */
-.scroll-capped-10 { max-height: 498px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; }
+.scroll-capped-10 { max-height: max(498px, calc(100vh - 360px)); overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; }
 .scroll-capped-10 .manifest { border: none; border-radius: 0; overflow: visible; }
 .scroll-capped-10 .m-row.head { position: sticky; top: 0; z-index: 1; }
 
-.scroll-capped-5 { max-height: 280px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; }
+.scroll-capped-5 { max-height: max(280px, calc(100vh - 460px)); overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; }
 .scroll-capped-5 .manifest { border: none; border-radius: 0; overflow: visible; }
 .scroll-capped-5 .m-row.head { position: sticky; top: 0; z-index: 1; }
 

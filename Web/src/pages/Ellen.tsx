@@ -63,7 +63,7 @@ export default function Ellen() {
             <div key={hi} className="card" style={{ marginBottom: 16 }}>
               <h3 style={{ marginTop: 0 }}>{blocks[blocks.length - 1].label}</h3>
               <div className="ledger-table-scroll">
-                <table>
+                <table className="ellen-table">
                   <thead>
                     <tr>
                       <th />
