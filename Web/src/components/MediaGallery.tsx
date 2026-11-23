@@ -1,5 +1,6 @@
 import { useRef, useState, type CSSProperties } from 'react';
 import { apiDelete } from '../lib/api';
+import CameraButton from './CameraCapture';
 import { mediaChanged, sizeText, useAccountMedia, useCapabilities, type Attachments, type MediaItem } from '../lib/media';
 
 // Photos and videos on an account: the control for attaching them to a log entry, the thumbnails under each log entry, and a gallery of all of them.
@@ -99,6 +100,7 @@ export function AttachmentPicker({ attach }: { attach: Attachments }) {
     <div style={{ marginBottom: 8 }}>
       <input ref={input} type="file" multiple accept="image/*,video/*" aria-label="Choose photos or videos" style={{ display: 'none' }} onChange={e => { attach.add(e.target.files); e.target.value = ''; }} />
       <button type="button" className="btn secondary" disabled={attach.busy} onClick={() => input.current?.click()}>Attach photo or video</button>
+      <span style={{ marginLeft: 8 }}><CameraButton disabled={attach.busy} onCapture={f => attach.add([f])} /></span>
       <span className="acct-region" style={{ marginLeft: 8 }}>Saved in the customer's Dropbox folder. Photos up to {cap.maxPhotoMb} MB, videos up to {cap.maxVideoMb} MB.</span>
       {attach.problem && <div className="save-msg err" role="alert" style={{ marginTop: 6 }}>{attach.problem}</div>}
       {attach.files.length > 0 && (

@@ -138,3 +138,18 @@ export async function apiPostText(path: string, text: string, contentType = 'tex
     return body;
   } finally { clearApiCache(); }
 }
+// Sends text as-is with PUT (for a body that is too big for the normal JSON limit, such as a picture) and returns the JSON answer.
+export async function apiPutText(path: string, text: string, contentType = 'text/plain') {
+  try {
+    const res = await fetch(`${API_URL}${path}`, { method: 'PUT', headers: { 'Content-Type': contentType, ...(await authHeader()) }, body: text });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error ?? `PUT ${path} failed: ${res.status}`);
+    return body;
+  } finally { clearApiCache(); }
+}
+// A picture that needs sign-in to fetch: gets it with the person's token and gives back a link the page can show. The caller revokes it when done.
+export async function apiBlobUrl(path: string): Promise<string> {
+  const res = await fetch(`${API_URL}${path}`, { headers: await authHeader() });
+  if (!res.ok) await fail(res, 'GET', path);
+  return URL.createObjectURL(await res.blob());
+}

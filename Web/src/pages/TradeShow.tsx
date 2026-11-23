@@ -7,18 +7,20 @@ import TsCustomerPicker, { type Picked } from '../components/TsCustomerPicker';
 import { FollowUpTable } from './TradeShows';
 import TsOffers from '../components/TsOffers';
 import TsQueue from '../components/TsQueue';
+import TsActions from '../components/TsActions';
+import TsStand from '../components/TsStand';
 import TsAppointments from '../components/TsAppointments';
 import TsChecklist from '../components/TsChecklist';
 import TsFeedback from '../components/TsFeedback';
 import TsAsk from '../components/TsAsk';
-import { $, errMsg, pct, postFull, shortDay, STAGE_TONE, type Customer, type FollowUpItem, type ShowPage } from '../lib/tradeshow';
+import { $, errMsg, pct, postFull, shortDay, STAGE_TONE, type Customer, type Actions, type FollowUpItem, type ShowPage } from '../lib/tradeshow';
 
 // One show: write an order or quote, take a lead, see its orders, leads, follow-ups and results.
 const th: CSSProperties = { textAlign: 'left', fontSize: 13, color: 'var(--muted)', fontWeight: 500, padding: '8px 10px', borderBottom: '1px solid var(--line)', whiteSpace: 'nowrap' };
 const td: CSSProperties = { padding: '9px 10px', borderBottom: '1px solid var(--line)', fontSize: 14, verticalAlign: 'top' };
 const num: CSSProperties = { ...td, textAlign: 'right', whiteSpace: 'nowrap' };
 const field: CSSProperties = { width: '100%', padding: '7px 10px', border: '1px solid var(--line)', borderRadius: 3, font: 'inherit', fontSize: 15 };
-type Tab = 'orders' | 'leads' | 'followups' | 'results' | 'queue' | 'offers' | 'appointments' | 'checklist' | 'feedback' | 'ask';
+type Tab = 'orders' | 'actions' | 'leads' | 'followups' | 'results' | 'queue' | 'offers' | 'appointments' | 'checklist' | 'feedback' | 'ask';
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return <div className="ledger-stat" style={{ minWidth: 150 }}><div className="label">{label}</div><div className="val" style={{ fontSize: 20 }}>{value}</div>{sub && <div className="acct-region" style={{ fontSize: 12.5, marginTop: 4 }}>{sub}</div>}</div>;
@@ -30,6 +32,9 @@ export default function TradeShow() {
   const [d, setD] = useState<ShowPage | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('orders');
+  const [acts, setActs] = useState<Actions | null>(null);
+  const loadActs = useCallback(() => { apiGet(`/tradeshow/shows/${id}/actions`, { fresh: true }).then(setActs).catch(() => setActs({ ready: false, todo: [], done: [] })); }, [id]);
+  useEffect(() => { loadActs(); }, [loadActs]);
   const [exporting, setExporting] = useState(false);
   const [editing, setEditing] = useState(false);
   const [starting, setStarting] = useState<null | 'order' | 'quote' | 'lead'>(null);
@@ -91,8 +96,9 @@ export default function TradeShow() {
         </div>
       )}
 
+      <TsStand showId={id} isManager={isManager} />
       <div className="tab-bar">
-        {(['orders', 'leads', 'followups', 'results', 'queue', 'offers', 'appointments', 'checklist', 'feedback', 'ask'] as Tab[]).map(t => <button key={t} type="button" className={`tab${tab === t ? ' active' : ''}`} onClick={() => setTab(t)}>{t === 'orders' ? `Orders and quotes (${d.orders.length})` : t === 'leads' ? `Leads (${d.leads.length})` : t === 'followups' ? 'Follow-ups' : t === 'queue' ? 'Payments and DEAR' : t === 'offers' ? 'Offers' : t === 'appointments' ? 'Appointments' : t === 'checklist' ? 'Checklist' : t === 'feedback' ? 'Feedback' : t === 'ask' ? 'Ask Claude' : 'Results'}</button>)}
+        {(['orders', 'actions', 'leads', 'followups', 'results', 'queue', 'offers', 'appointments', 'checklist', 'feedback', 'ask'] as Tab[]).map(t => <button key={t} type="button" className={`tab${tab === t ? ' active' : ''}`} onClick={() => setTab(t)}>{t === 'orders' ? `Orders and quotes (${d.orders.length})` : t === 'actions' ? `To action${acts?.ready ? ` (${acts.todo.length})` : ''}` : t === 'leads' ? `Leads (${d.leads.length})` : t === 'followups' ? 'Follow-ups' : t === 'queue' ? 'Payments and DEAR' : t === 'offers' ? 'Offers' : t === 'appointments' ? 'Appointments' : t === 'checklist' ? 'Checklist' : t === 'feedback' ? 'Feedback' : t === 'ask' ? 'Ask Claude' : 'Results'}</button>)}
       </div>
 
       {tab === 'orders' && (d.orders.length === 0 ? <div className="empty-state">No orders yet.</div> : (
@@ -113,6 +119,7 @@ export default function TradeShow() {
         </div>
       ))}
 
+      {tab === 'actions' && <TsActions data={acts} onChange={loadActs} />}
       {tab === 'leads' && (d.leads.length === 0 ? <div className="empty-state">No leads yet.</div> : (
         <div style={{ overflowX: 'auto', border: '1px solid var(--line)', borderRadius: 4, background: 'var(--panel)' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>

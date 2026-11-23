@@ -5,6 +5,9 @@ export type Show = { id: string; name: string; refName: string; startsOn: string
 export type Customer = { id: string; name: string; region: string; contact: string | null; email: string | null; phone: string | null; address: string | null; terms: string | null; archived: boolean };
 export type Incoming = { qty: number; date: string | null; po: string | null } | null;
 export type Product = { sku: string; name: string; brand: string | null; price: number | null; increment: number | null; image: string | null; status: string | null; available: number; pending: number; free: number; incoming: Incoming; eta: string | null };
+/** The same item in another colour (the colour is read from the product names), and whether its brand is on the show's stand. */
+export type Variant = Product & { colour: string; onStand: boolean };
+export type Stand = { ready: boolean; brands: string[]; allBrands: string[] };
 export type Stock = { available: number; pending: number; free: number; canShip: number; backorder: number; incoming: Incoming; eta: string | null; note: string };
 export type Totals = { goods: number; linePct: number; offerDiscount: number; linePcts: number[]; discount: number; goodsAfter: number; freight: number; surcharge: number; surchargePct: number; exGst: number; gst: number; total: number; lineTotals: number[] };
 export type LogEntry = { id: string; kind: 'call' | 'email' | 'visit' | 'note' | 'system'; note: string; at: string; by: string | null };
@@ -17,7 +20,12 @@ export type Order = {
   lines: { lineNo: number; kind: 'normal' | 'bundle' | 'gift'; offerId: string | null; pct: number; sku: string; name: string; brand: string | null; qty: number; price: number; comment: string | null; lineTotal: number; increment: number | null; packNote: string | null; stock: Stock | null }[];
   totals: Totals; dear: { number: string; status: string | null; id: string; linkedByHand: boolean } | null;
   emailedAt: string | null; emailError: string | null; emailVersion: number; cancelReason: string | null; log: LogEntry[]; followUps: FollowUp[]; followUpsClosed: boolean;
+  handoffReady: boolean; handoff: Handoff | null;
 } & OrderPlus;
+/** How the customer pays, and whether sales has dealt with the order (the To action list). */
+export type Handoff = { mode: 'later' | 'paid'; method: 'bank' | 'card' | null; amount: number | null; hasProof: boolean; proofName: string | null; actionedAt: string | null; actionedBy: string | null; actionNote: string | null };
+export type ActionRow = { id: string; number: string; kind: 'order' | 'quote'; customer: string; region: string | null; rep: string | null; confirmedAt: string; mode: 'later' | 'paid'; method: 'bank' | 'card' | null; amount: number | null; hasProof: boolean; dear: string | null; stage: string; stageLabel: string; dearPaid: boolean; actionedAt: string | null; actionedBy: string | null; actionNote: string | null };
+export type Actions = { ready: boolean; todo: ActionRow[]; done: ActionRow[] };
 export type Lead = { id: string; show: Show; customer: Customer; newAccount: boolean; contact: { name: string | null; email: string | null; phone: string | null }; brands: string | null; notes: string | null;
   status: 'open' | 'won' | 'lost'; lostReason: string | null; takenOn: string; repName: string | null; log: LogEntry[]; followUps: FollowUp[]; followUpsClosed: boolean };
 export type FollowUpItem = { id: string; dueOn: string; overdue: boolean; who: { id: string; name: string } | null; kind: 'order' | 'quote' | 'lead'; targetId: string; label: string; customer: string; region: string | null; show: { id: string; name: string }; amount: number | null; stage: string };
