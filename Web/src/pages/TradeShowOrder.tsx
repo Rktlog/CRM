@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { apiGet, apiPatch, apiPost } from '../lib/api';
+import { apiGet, apiPatch, apiPost, apiPutText } from '../lib/api';
+import { blobToBase64, shrinkImage } from '../lib/shrinkImage';
+import BarcodeScanner, { scannerAvailable } from '../components/BarcodeScanner';
+import { PaymentPicker, PaymentSummary, type Pay } from '../components/TsPayment';
 import { useMe } from '../lib/useMe';
 import TsLogFollowUps from '../components/TsLogFollowUps';
-import { $, errMsg, shortDay, STAGE_TONE, type Incoming, type Order, type Product } from '../lib/tradeshow';
+import { $, errMsg, shortDay, STAGE_TONE, type Incoming, type Order, type Product, type Stand, type Variant } from '../lib/tradeshow';
 import { liveStock as stockFor, liveTotals, packProblem } from '../lib/tsLive';
 import { applyOffers, freightFor, type Offer } from '../lib/tsOffers';
 import { PAY_TONE } from '../lib/tsExtra';
@@ -43,6 +46,13 @@ export default function TradeShowOrder() {
   const [frAuto, setFrAuto] = useState(true);   // freight is worked out by Radar until someone types it in
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const latest = useRef(0);
+  const [pay, setPay] = useState<Pay>({ mode: 'later', method: 'bank', file: null });
+  const payInit = useRef(false);   // the saved choice is read once; after that the page's own choice stands (saving the order reloads it)
+  const [scanning, setScanning] = useState(false);
+  const linesRef = useRef<Line[]>([]);
+  const [lastSku, setLastSku] = useState<string | null>(null);   // the product just added: its other colours are suggested
+  const [variants, setVariants] = useState<{ colour: string | null; others: Variant[] } | null>(null);
+  const [stand, setStand] = useState<Set<string>>(new Set());   // the brands physically on this show's stand
 
   const show = useCallback((x: Order) => {
     setO(x); setLines(x.lines.filter(l => l.kind !== 'gift').map(l => ({ sku: l.sku, name: l.name, brand: l.brand, kind: l.kind === 'bundle' ? 'bundle' as const : 'normal' as const, offerId: l.offerId, qty: l.qty, comment: l.comment ?? '', price: l.price, increment: l.increment, available: l.stock?.available ?? 0, pending: l.stock?.pending ?? 0, incoming: l.stock?.incoming ?? null, eta: l.stock?.eta ?? null }))); setDirty(false);
@@ -51,6 +61,16 @@ export default function TradeShowOrder() {
   }, []);
   const load = useCallback(() => { apiGet(`/tradeshow/orders/${id}`, { fresh: true }).then((d: { order: Order }) => { show(d.order); setErr(null); }).catch(e => setErr(errMsg(e))); }, [id, show]);
   useEffect(() => { load(); }, [load]);
+  linesRef.current = lines;
+  const showId = o?.show.id;
+  useEffect(() => { if (showId) apiGet(`/tradeshow/shows/${showId}/stand`).then((d: Stand) => setStand(new Set(d.brands.map(b => b.toLowerCase())))).catch(() => {}); }, [showId]);
+  useEffect(() => {
+    if (!lastSku) { setVariants(null); return; }
+    let live = true;
+    apiGet(`/tradeshow/products/variants?sku=${encodeURIComponent(lastSku)}${showId ? `&showId=${showId}` : ''}`).then(d => { if (live) setVariants(d); }).catch(() => { if (live) setVariants(null); });
+    return () => { live = false; };
+  }, [lastSku, showId]);
+  useEffect(() => { if (o && !payInit.current) { payInit.current = true; if (o.handoff?.mode === 'paid') setPay({ mode: 'paid', method: o.handoff.method ?? 'bank', file: null }); } }, [o]);
   useEffect(() => {
     const term = q.trim(); if (term.length < 2) { setHits([]); return; }
     const mine = ++latest.current;
@@ -68,14 +88,39 @@ export default function TradeShowOrder() {
     regionType: fr.regionType, largeItems: fr.largeItems, pantone: fr.pantone, freightEdited: !frAuto,
     ...(isManager ? { discount: disc.value ? { kind: disc.kind, value: disc.value } : null } : {}) });
   const save = (extra: object = {}) => act(() => apiPatch(`/tradeshow/orders/${id}`, { ...body(), ...extra }), 'Saved.');
+  const payHere = !!o && o.kind === 'order' && o.handoffReady;   // the payment step shows on orders, once the database has the table for it
   async function confirm() {
     if (!o) return;
-    const r = await act(async () => { await apiPatch(`/tradeshow/orders/${id}`, body()); return apiPost(`/tradeshow/orders/${id}/confirm`, {}); });
-    if (r) setMsg(r.emailed ? { ok: true, text: `Confirmed and emailed to sales with the DEAR file. Reference: ${r.order.reference}` } : { ok: false, text: `Confirmed, but not emailed: ${r.reason}` });
+    const paidHere = payHere && pay.mode === 'paid';
+    const r = await act(async () => {
+      // the card surcharge must match how they paid, so the total (and the amount on the screenshot) is right
+      await apiPatch(`/tradeshow/orders/${id}`, { ...body(), ...(paidHere ? { cardPayment: pay.method === 'card' } : {}) });
+      if (payHere) {
+        const proof = paidHere && pay.file ? { name: 'payment.jpg', mime: 'image/jpeg', data: await blobToBase64(await shrinkImage(pay.file)) } : undefined;
+        await apiPutText(`/tradeshow/orders/${id}/handoff`, JSON.stringify({ mode: pay.mode, method: pay.method, proof }));
+      }
+      return apiPost(`/tradeshow/orders/${id}/confirm`, {});
+    });
+    if (r) setMsg(r.emailed ? { ok: true, text: `Confirmed and emailed to sales with the DEAR file${paidHere ? ' and the payment screenshot' : ''}. Reference: ${r.order.reference}` } : { ok: false, text: `Confirmed, but not emailed: ${r.reason}` });
+  }
+  function changePay(p: Pay) {
+    setPay(p);
+    if (o && p.mode === 'paid' && (p.method === 'card') !== o.cardPayment) void save({ cardPayment: p.method === 'card' });   // the total moves with the surcharge
+  }
+  /** One scan: the product with that barcode is added, or its quantity grows by one pack (or by 1). The scanner stays open for the next one. */
+  async function onScan(code: string): Promise<{ ok: boolean; text: string }> {
+    const d: { product: Product | null } = await apiGet(`/tradeshow/products/by-barcode?code=${encodeURIComponent(code)}`, { fresh: true });
+    const p = d.product;
+    if (!p) return { ok: false, text: `Barcode ${code} is not a product in Radar.` };
+    if (p.price === null) return { ok: false, text: `${p.name}: no wholesale price, so it can't be added.` };
+    const step = p.increment && p.increment > 1 ? p.increment : 1;
+    const now = (linesRef.current.find(l => l.sku === p.sku && l.kind === 'normal')?.qty ?? 0) + step;
+    add(p);
+    return { ok: true, text: `Added: ${p.name} (+${step}), now ${now}${p.free < now ? `. Only ${Math.max(p.free, 0)} free in stock` : ''}` };
   }
   function add(p: Product) {
     setLines(ls => { const i = ls.findIndex(l => l.sku === p.sku && l.kind === 'normal'); const step = p.increment && p.increment > 1 ? p.increment : 1; return i >= 0 ? ls.map((l, j) => (j === i ? { ...l, qty: l.qty + step } : l)) : [...ls, { sku: p.sku, name: p.name, brand: p.brand, kind: 'normal' as const, offerId: null, qty: step, comment: '', price: p.price ?? 0, increment: p.increment, available: p.available, pending: p.pending, incoming: p.incoming, eta: p.eta }]; });
-    setDirty(true); setQ(''); setHits([]);
+    setDirty(true); setQ(''); setHits([]); setLastSku(p.sku);
   }
   /** A bundle goes in as its own lines, marked with the offer, so the pack price works out however many packs are added. */
   async function addBundle(b: Offer, packs: number) {
@@ -133,12 +178,33 @@ export default function TradeShowOrder() {
       <OffersPanel offers={o.offers} applied={A ? A.applied : o.applied} prompts={A ? A.prompts : o.prompts} payBy={A ? A.payBy : o.payBy} payByOverdue={o.payByOverdue} canEdit={draft && !!mine} onAddBundle={addBundle} />
       {draft && mine && (
         <div className="section" style={{ marginBottom: 14 }}>
-          <input style={{ ...field, width: '100%', maxWidth: 640, fontSize: 16 }} placeholder="Add a product: SKU, name, barcode or brand" value={q} onChange={e => setQ(e.target.value)} />
+          <div style={{ display: 'flex', gap: 8, maxWidth: 640, alignItems: 'center' }}>
+            <input style={{ ...field, flex: 1, minWidth: 0, fontSize: 16 }} placeholder="Add a product: SKU, name, barcode or brand" value={q} onChange={e => setQ(e.target.value)} />
+            {scannerAvailable() && <button type="button" className="btn secondary" onClick={() => setScanning(true)}>Scan barcode</button>}
+          </div>
+          {scanning && <BarcodeScanner onScan={onScan} onClose={() => setScanning(false)} />}
+          {variants && variants.others.length > 0 && !q.trim() && (
+            <div style={{ maxWidth: 640, marginTop: 8, padding: '8px 10px', border: '1px dashed var(--line)', borderRadius: 6 }}>
+              <div className="acct-region" style={{ fontSize: 12.5, marginBottom: 6 }}>Other colours of this item <span style={{ opacity: 0.8 }}>(worked out from the product names)</span></div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {variants.others.map(v => {
+                  const offer = o.offers.find(x => x.active && x.kind === 'pct' && x.pct && ((v.brand && x.brands.some(b => b.toLowerCase() === v.brand!.toLowerCase())) || x.skus.some(k => k.toUpperCase() === v.sku.toUpperCase())));
+                  return (
+                    <button key={v.sku} type="button" className="btn secondary" disabled={v.price === null} onClick={() => add(v)} title={`${v.name} (${v.sku})`} style={{ textAlign: 'left', padding: '6px 10px' }}>
+                      <b style={{ textTransform: 'capitalize' }}>{v.colour}</b> <span style={{ fontSize: 12.5 }}>{v.price === null ? 'no price' : $(v.price)} · <span style={{ color: v.free > 0 ? 'var(--teal)' : 'var(--rust)' }}>{Math.max(v.free, 0)} free</span></span>
+                      {v.onStand && <span className="pill teal" style={{ marginLeft: 6 }}>On the stand</span>}
+                      {offer && <div style={{ fontSize: 12, color: 'var(--teal)' }}>{offer.name}: {offer.pct}% off</div>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {hits.length > 0 && (
             <div style={{ border: '1px solid var(--line)', borderRadius: 6, maxWidth: 640, background: 'var(--panel)', marginTop: 4, maxHeight: 340, overflowY: 'auto' }}>
               {hits.map(p => (
                 <button key={p.sku} type="button" onClick={() => add(p)} disabled={p.price === null} style={{ display: 'flex', gap: 10, width: '100%', textAlign: 'left', padding: '8px 12px', border: 0, borderBottom: '1px solid var(--line)', background: 'none', font: 'inherit', cursor: 'pointer', alignItems: 'center' }}>
-                  <span style={{ flex: 1 }}><b>{p.name}</b><div className="acct-region" style={{ fontSize: 12.5 }}>{p.sku}{p.brand ? ` · ${p.brand}` : ''}{p.increment && p.increment > 1 ? ` · packs of ${p.increment}` : ''}</div></span>
+                  <span style={{ flex: 1 }}><b>{p.name}</b>{p.brand && stand.has(p.brand.toLowerCase()) && <> <span className="pill teal">On the stand</span></>}<div className="acct-region" style={{ fontSize: 12.5 }}>{p.sku}{p.brand ? ` · ${p.brand}` : ''}{p.increment && p.increment > 1 ? ` · packs of ${p.increment}` : ''}</div></span>
                   <span style={{ textAlign: 'right', fontSize: 13, whiteSpace: 'nowrap' }}>{p.price === null ? <span style={{ color: 'var(--rust)' }}>no wholesale price</span> : $(p.price)}<div style={{ color: p.free > 0 ? 'var(--teal)' : 'var(--rust)', fontSize: 12.5 }}>{stockText(p)}</div></span>
                 </button>
               ))}
@@ -192,6 +258,7 @@ export default function TradeShowOrder() {
             <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>Notes for sales<textarea style={{ ...field, minHeight: 54 }} value={notes} disabled={!mine || o.status === 'cancelled'} onChange={e => { setNotes(e.target.value); setDirty(true); }} /></label>
           </div>
         </div>
+        {draft && mine && payHere && <PaymentPicker pay={pay} onChange={changePay} total={tt.total} savedProof={!!o.handoff?.hasProof} surchargePct={o.cardSurchargePct} disabled={busy} />}
         <div className="card" style={{ marginBottom: 0 }}>
           <div className="panel-title">Total</div>
           <div className="kv"><span>Goods (wholesale ex GST)</span><span className="num">{$(tt.goods)}</span></div>
@@ -209,7 +276,7 @@ export default function TradeShowOrder() {
         {draft && mine && <>
           <button type="button" className="btn secondary" disabled={busy} onClick={() => save()}>{busy ? 'Saving…' : 'Save'}</button>
           <select style={field} value={o.kind} disabled={busy} onChange={e => save({ kind: e.target.value })}><option value="order">Order</option><option value="quote">Quote</option></select>
-          <button type="button" className="btn" disabled={busy || !lines.length || lines.some(l => l.qty < 1)} onClick={confirm}>Confirm and send to sales</button>
+          <button type="button" className="btn" disabled={busy || !lines.length || lines.some(l => l.qty < 1) || (payHere && pay.mode === 'paid' && !pay.file && !o.handoff?.hasProof)} onClick={confirm}>Confirm and send to sales</button>
           <button type="button" className="link-btn" style={{ color: 'var(--rust)' }} disabled={busy} onClick={async () => { if (window.confirm('Throw this draft away?')) { await apiPost(`/tradeshow/orders/${id}/cancel`, {}); nav(`/trade-shows/${o.show.id}`); } }}>Discard draft</button>
         </>}
         {o.status === 'sent' && mine && <>
@@ -222,6 +289,7 @@ export default function TradeShowOrder() {
       {o.status === 'sent' && o.emailedAt && !o.emailError && <div className="acct-region" style={{ fontSize: 13 }}>Emailed to sales {new Date(o.emailedAt).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}{o.emailVersion > 1 ? ` (version ${o.emailVersion})` : ''}.</div>}
       {msg && <div className={msg.ok ? 'save-msg ok' : 'save-msg err'} role={msg.ok ? 'status' : 'alert'}>{msg.text}</div>}
 
+      {o.status === 'sent' && o.handoff && <PaymentSummary orderId={o.id} h={o.handoff} onChange={load} />}
       {o.status !== 'draft' && (
         <div className="section" style={{ marginTop: 18 }}>
           <TsLogFollowUps target={{ orderId: o.id }} log={o.log} followUps={o.followUps} closed={o.followUpsClosed} onChange={load}

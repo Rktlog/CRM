@@ -8,6 +8,7 @@ import AccountPicker, { AccountSelection, resolveSelection } from './AccountPick
 import { ACTIVITY_KINDS, ACTIVITY_LABEL, ActivityKind } from '../lib/activityLabels';
 import { todayLocal, isoForDay } from '../lib/logDate';
 import DictationTextarea from './DictationTextarea';
+import CameraButton from './CameraCapture';
 
 type Props = {
   onCreated: () => void;
@@ -108,8 +109,9 @@ export default function LogVisitModal({ onCreated, onClose, defaultType }: Props
     return () => clearTimeout(t);
   }, [success, onCreated, onClose]);
 
-  function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0] ?? null;
+  function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) { setPhoto(e.target.files?.[0] ?? null); }
+
+  function setPhoto(file: File | null) {
     if (photoPreview) URL.revokeObjectURL(photoPreview);
     setPhotoFile(file);
     setPhotoPreview(file ? previewUrl(file) : null);
@@ -218,6 +220,7 @@ export default function LogVisitModal({ onCreated, onClose, defaultType }: Props
         </label>
 
         {type === 'visit' && (
+        <>
         <label className="modal-field">
           Photo or video (optional)
           {photoPreview ? (
@@ -239,6 +242,8 @@ export default function LogVisitModal({ onCreated, onClose, defaultType }: Props
             <input type="file" accept="image/*,video/*" onChange={handlePhotoChange} />
           )}
         </label>
+        {!photoPreview && <div style={{ marginTop: -6, marginBottom: 12 }}><CameraButton onCapture={setPhoto} /></div>}
+        </>
         )}
 
         {error && <div className="login-error" style={{ marginBottom: 10 }}>{error}</div>}

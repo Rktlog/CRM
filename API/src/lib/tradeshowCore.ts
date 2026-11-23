@@ -102,7 +102,19 @@ export type EmailOrder = {
   lines: { sku: string; name: string; qty: number; price: number; lineTotal: number; stock: string; pct?: number; note?: string | null }[];
   totals: Totals; notes: string | null; version: number; chargesInFile: boolean;
   dearReference?: string; payBy?: string | null; offersNote?: string[]; freightNote?: string | null;
+  payment?: { mode: 'later' | 'paid'; method: 'bank' | 'card' | null; amount: number | null; proofName: string | null } | null;
 };
+const METHOD_WORDS = { bank: 'bank transfer', card: 'card' } as const;
+/** The payment part of the email to sales: it says what to do next, so nobody has to ask on WhatsApp. */
+export function paymentLines(o: Pick<EmailOrder, 'kind' | 'payment'>): string[] {
+  const p = o.payment;
+  if (!p) return [];
+  if (p.mode === 'paid') return [
+    `PAYMENT: PAID AT THE SHOW by ${METHOD_WORDS[p.method ?? 'bank']}${p.amount != null ? `, $${money(p.amount)} inc GST` : ''}.`,
+    `  The customer's payment screenshot is attached${p.proofName ? ` (${p.proofName})` : ''}. Please match it to the order in DEAR, then press Done in Radar (Trade Shows, the show, To action).`, '',
+  ];
+  return [`PAYMENT: not paid yet. Please send the customer ${o.kind === 'quote' ? 'the quote' : 'the invoice and payment details'}, then press Done in Radar (Trade Shows, the show, To action).`, ''];
+}
 export function salesEmail(o: EmailOrder): { subject: string; body: string } {
   const c = o.customer, t = o.totals, what = o.kind === 'quote' ? 'Quote' : 'Order';
   const body = [
@@ -115,12 +127,13 @@ export function salesEmail(o: EmailOrder): { subject: string; body: string } {
     ...o.lines.map(l => `  ${l.sku}  ${l.name}  x${l.qty} @ $${money(l.price)}${(l.pct ?? t.linePct) ? ` less ${l.pct ?? t.linePct}%` : ''} = $${money(l.lineTotal)}${l.note ? `  (${l.note})` : ''}   [${l.stock}]`), '',
     `Goods: $${money(t.goods)}`, ...(t.offerDiscount ? [`Offers: -$${money(t.offerDiscount)}`] : []), ...(t.linePct ? [`Discount: ${t.linePct}% on every line, -$${money(round2(t.discount - (t.offerDiscount || 0)))}`] : []), `Freight: $${money(t.freight)}${o.freightNote ? ` (${o.freightNote})` : ''}`,
     ...(t.surcharge ? [`Card surcharge (${t.surchargePct}%): $${money(t.surcharge)}`] : []), `Total ex GST: $${money(t.exGst)}`, `GST: $${money(t.gst)}`, `TOTAL inc GST: $${money(t.total)}`, '',
+    ...paymentLines(o),
     ...(o.offersNote?.length ? ['OFFERS ON THIS ORDER', ...o.offersNote.map(x => `  ${x}`), ...(o.payBy ? [`  These only hold if the order is paid by ${ddmmyyyy(o.payBy)}.`] : []), ''] : []),
     ...(o.notes ? ['NOTES', o.notes, ''] : []),
     `Attached: ${o.reference.replace(/[^\w\- ]+/g, '_')}.csv, ready to import into the ${o.kind === 'quote' ? 'quote' : 'sale'} in DEAR (Bulk Update Sale Quote).${o.chargesInFile ? '' : ' Add the freight and surcharge in DEAR.'}`,
     'Use the reference above exactly, so Radar can match the DEAR order to this one.',
   ].join('\n');
-  return { subject: `[Radar] ${o.version > 1 ? 'UPDATED ' : ''}Trade show ${what.toLowerCase()} ${o.number}: ${c.name}, $${money(t.total)} inc GST (${o.reference})`.slice(0, 200), body };
+  return { subject: `[Radar] ${o.version > 1 ? 'UPDATED ' : ''}Trade show ${what.toLowerCase()} ${o.number}: ${c.name}, $${money(t.total)} inc GST${o.payment?.mode === 'paid' ? `, PAID by ${METHOD_WORDS[o.payment.method ?? 'bank']}` : ''} (${o.reference})`.slice(0, 200), body };
 }
 
 // ---------- where it is, and follow-ups ----------
@@ -174,3 +187,29 @@ export function parseNewCustomer(b: any): NewCustomer {
 export const phoneKey = (p: string | null | undefined) => { const d = String(p ?? '').replace(/\D/g, ''); return d.length >= 8 ? d.slice(-8) : null; };
 export const nameKey = (n: string | null | undefined) => String(n ?? '').toLowerCase().replace(/\b(pty|ltd|limited|the|t\/a|trading as)\b/g, '').replace(/[^a-z0-9]/g, '');
 export { t as cleanText };
+
+// ---------- scanning ----------
+/** A 12-digit UPC and the same code with a leading 0 (13 digits) are the same barcode; try each. Anything that is not plausibly a barcode gives nothing. */
+export function barcodeCandidates(code: string): string[] {
+  const c = code.replace(/\s+/g, '');
+  if (!/^[A-Za-z0-9\-.$/+% ]{3,64}$/.test(c)) return [];
+  const out = new Set([c]);
+  if (/^\d+$/.test(c)) { const bare = c.replace(/^0+/, ''); for (const n of [12, 13, 14]) if (bare.length <= n) out.add(bare.padStart(n, '0')); out.add(bare); }
+  return [...out];
+}
+
+// ---------- the same item in other colours ----------
+// Radar has no colour field, so the colour is read from the product name: a colour word at the start ("Pink Birthday Candle Set"), at the end ("Bunny
+// Small Pink") or after a dash or comma ("Bunny Small - Pink"). It is a best guess, so the page says "other colours (from the names)".
+export const COLOUR_WORDS = ['black', 'white', 'grey', 'gray', 'silver', 'gold', 'rose gold', 'bronze', 'copper', 'red', 'burgundy', 'maroon', 'rust', 'orange', 'peach', 'coral', 'apricot', 'yellow', 'mustard', 'lemon', 'cream', 'beige', 'sand', 'tan', 'brown', 'chocolate', 'camel', 'green', 'sage', 'olive', 'khaki', 'forest', 'mint', 'teal', 'aqua', 'blue', 'navy', 'sky blue', 'baby blue', 'powder blue', 'cobalt', 'purple', 'lilac', 'lavender', 'mauve', 'plum', 'pink', 'blush', 'dusty pink', 'rose', 'fuchsia', 'magenta', 'multi', 'rainbow', 'natural', 'clear', 'ivory'];
+const COLOUR_RE = [...COLOUR_WORDS].sort((a, b) => b.length - a.length).map(w => w.replace(/ /g, '\\s+')).join('|');
+const lower = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+/** "Pink Birthday Candle Set" gives base "birthday candle set" and colour "pink". A name with no colour word gives colour null. */
+export function splitColour(name: string): { base: string; colour: string | null } {
+  const n = name.replace(/\s+/g, ' ').trim();
+  const end = new RegExp(`^(.*?)\\s*(?:[-,/(]\\s*)?\\(?\\b(${COLOUR_RE})\\b\\)?\\s*$`, 'i').exec(n);
+  if (end && end[1]!.trim().length >= 3) return { base: lower(end[1]!.replace(/[-,/(\s]+$/, '')), colour: lower(end[2]!) };
+  const start = new RegExp(`^\\b(${COLOUR_RE})\\b\\s*[-,]?\\s+(.{3,})$`, 'i').exec(n);
+  if (start) return { base: lower(start[2]!), colour: lower(start[1]!) };
+  return { base: lower(n), colour: null };
+}

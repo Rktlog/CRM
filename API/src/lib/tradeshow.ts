@@ -4,9 +4,10 @@
 import { prisma } from './prisma';
 import { sendAlert } from './alerts';
 import { wholesalePrice } from './pricing';
+import * as hand from './tsHandoff';
 import { autoFreight, chargeSkus, dearReference, orderPlus, withOffers, writeLines } from './tradeshowOrderPlus';
 import {
-  TsError, cleanReference, cleanText, dearCsv, defaultReference, firstFollowUp, followUpsClosed, gstRateFor, holdsStock, incrementProblem, nameKey, orderStage,
+  TsError, barcodeCandidates, cleanReference, splitColour, cleanText, dearCsv, defaultReference, firstFollowUp, followUpsClosed, gstRateFor, holdsStock, incrementProblem, nameKey, orderStage,
   parseDay, parseDiscount, plusDays, parseNewCustomer, phoneKey, QUOTE_STAGE, round2, salesEmail, STAGE_LABEL, stockView, totals, type DearLink, type Discount, type OrderStage,
 } from './tradeshowCore';
 
@@ -94,6 +95,51 @@ export async function searchProducts(q: unknown): Promise<ProductHit[]> {
   return rows.map(r => facts.get(r.sku.toUpperCase())!).filter(Boolean);
 }
 
+/** The one product whose barcode is exactly this (a scan), or whose SKU is. */
+export async function productByBarcode(code: unknown): Promise<ProductHit | null> {
+  const want = barcodeCandidates(String(code ?? ''));
+  if (!want.length) return null;
+  const rows = await prisma.$queryRaw<{ sku: string }[]>`select sku from crm.products where (barcode = any(${want}::text[]) or upper(sku) = any(${want.map(x => x.toUpperCase())}::text[])) and coalesce(status, '') not in ('Deprecated') order by (barcode = any(${want}::text[])) desc limit 1`;
+  if (!rows.length) return null;
+  const facts = await guard(() => stockFacts([rows[0]!.sku]));
+  return facts.get(rows[0]!.sku.toUpperCase()) ?? null;
+}
+
+export type VariantHit = ProductHit & { colour: string; onStand: boolean };
+/** The same item in its other colours (read from the names), with stock, so a rep can offer the ones the stand does not have. Newest names first is not needed: the colours are sorted. */
+export async function productVariants(sku: unknown, showId?: unknown): Promise<{ colour: string | null; others: VariantHit[] }> {
+  const s = String(sku ?? '').trim();
+  if (!s) return { colour: null, others: [] };
+  const [me] = await prisma.$queryRaw<{ name: string; brand: string | null }[]>`select name, brand from crm.products where upper(sku) = upper(${s}) limit 1`;
+  if (!me) return { colour: null, others: [] };
+  const { base, colour } = splitColour(me.name);
+  if (!colour || base.length < 3) return { colour: null, others: [] };
+  // the candidates share the base words and the brand; the names are then split again to be sure the base is the same
+  const like = `%${base.replace(/[%_\\]/g, m => '\\' + m)}%`;
+  const rows = await prisma.$queryRaw<{ sku: string; name: string }[]>`
+    select sku, name from crm.products where brand is not distinct from ${me.brand} and upper(sku) <> upper(${s}) and name ilike ${like} and coalesce(status, '') not in ('Deprecated') order by name limit 60`;
+  const same = rows.filter(r => { const x = splitColour(r.name); return x.base === base && x.colour && x.colour !== colour; });
+  if (!same.length) return { colour, others: [] };
+  const facts = await guard(() => stockFacts(same.map(r => r.sku)));
+  const stand = new Set((await hand.getStandBrands(typeof showId === 'string' && UUID.test(showId) ? showId : '00000000-0000-0000-0000-000000000000')).map(b => b.toLowerCase()));
+  const others = same.map(r => ({ r, f: facts.get(r.sku.toUpperCase()) })).filter(x => x.f).map(x => ({ ...x.f!, colour: splitColour(x.r.name).colour!, onStand: !!x.f!.brand && stand.has(x.f!.brand.toLowerCase()) }));
+  return { colour, others: others.sort((a, b) => a.colour.localeCompare(b.colour)) };
+}
+
+// ---------- range on the stand ----------
+export async function getStand(showId: unknown) {
+  const sid = idOk(showId, 'That show');
+  return { ready: await hand.standReady(), brands: await hand.getStandBrands(sid), allBrands: (await hand.standReady()) ? await hand.allBrands() : [] };
+}
+export async function saveStand(rep: Rep, showId: unknown, brands: unknown): Promise<void> {
+  const sid = idOk(showId, 'That show');
+  if (!isManager(rep)) throw new TsError('Only managers can set the range on the stand.', 403);
+  if (!(await hand.standReady())) throw new TsError('The range on the stand is not set up in the database yet. Ask whoever looks after Radar to run tradeshow-handoffs.sql.', 503);
+  const list = [...new Set((Array.isArray(brands) ? brands : []).map(b => String(b ?? '').trim()).filter(Boolean))].slice(0, 300);
+  await showRow(sid);
+  await hand.putStandBrands(sid, list);
+}
+
 // ---------- customers ----------
 export type CustomerHit = { id: string; name: string; region: string; contact: string | null; email: string | null; phone: string | null; address: string | null; terms: string | null; archived: boolean };
 const CUSTOMER_COLS = `id, name, region, contact_name as contact, email, phone, address, payment_terms as terms, archived`;
@@ -104,6 +150,11 @@ export async function searchCustomers(q: unknown): Promise<CustomerHit[]> {
   return prisma.$queryRawUnsafe<CustomerHit[]>(`select ${CUSTOMER_COLS} from crm.accounts
     where not misc and (name ilike $1 or email ilike $1 or contact_name ilike $1 or ($2::text is not null and right(regexp_replace(coalesce(phone, ''), '\\D', '', 'g'), 8) = $2))
     order by archived, (name ilike $3) desc, name limit 12`, like, ph, `${term}%`);
+}
+export async function customerById(id: string): Promise<CustomerHit | null> {
+  if (!UUID.test(id)) return null;
+  const [a] = await prisma.$queryRawUnsafe<CustomerHit[]>(`select ${CUSTOMER_COLS} from crm.accounts where id = $1::uuid and not misc`, id);
+  return a ?? null;
 }
 /** Accounts that look like the same shop (same email, phone, or name), so nobody makes a second one by mistake. */
 export async function lookAlikes(b: { name: string; email: string | null; phone: string | null }): Promise<CustomerHit[]> {
@@ -277,9 +328,22 @@ export async function confirmOrder(rep: Rep, id: unknown, d: { alert: typeof sen
     if (o.status !== 'draft') throw new TsError(o.status === 'sent' ? 'It has already been confirmed. Use Send again to email sales again.' : 'A cancelled order cannot be confirmed.');
     const lines = (await linesOf([oid])).get(oid) ?? [];
     if (!lines.length) throw new TsError('Add at least one product.');
+    const hasHandoff = await hand.handoffReady();
+    const chosen = hasHandoff ? await hand.getHandoff(oid) : null;
+    if (chosen?.mode === 'paid' && (!chosen.hasProof || !chosen.method)) throw new TsError('Add the payment screenshot, or choose "Sales will send the payment details".');
+    if (chosen?.mode === 'paid' && o.kind !== 'order') throw new TsError('Only an order can be paid at the show. A quote is sent to the customer by sales.');
     const done = await prisma.$queryRaw<{ id: string }[]>`update crm.ts_orders set status = 'sent', confirmed_at = now(), updated_at = now() where id = ${oid}::uuid and status = 'draft' returning id`;
     if (!done.length) throw new TsError('It has already been confirmed.');   // a second press of Confirm
     await addSystemLog(oid, null, rep.id, `${o.kind === 'quote' ? 'Quote' : 'Order'} confirmed: ${lines.length} lines.`);
+    if (hasHandoff) {
+      // every confirmed order lands in sales' To action list; a paid one carries the final amount (the total can move between taking the screenshot and confirming)
+      await prisma.$queryRaw`insert into crm.ts_handoffs (order_id, mode) values (${oid}::uuid, 'later') on conflict (order_id) do nothing`;
+      if (chosen?.mode === 'paid') {
+        const t = orderTotals(o, lines.map(l => ({ qty: l.qty, price: Number(l.price), pct: Number(l.pct) || 0 })));
+        await hand.setAmount(oid, t.total);
+        await addSystemLog(oid, null, rep.id, `Paid at the show by ${chosen.method === 'card' ? 'card' : 'bank transfer'}: $${t.total.toFixed(2)} inc GST, screenshot kept.`);
+      }
+    }
     await prisma.$queryRaw`insert into crm.ts_followups (order_id, due_on, created_by) values (${oid}::uuid, ${firstFollowUp(day(o.order_date)!)}::date, ${rep.id}::uuid) on conflict do nothing`;
     return emailSales(rep, oid, d);
   });
@@ -306,15 +370,17 @@ async function emailSales(rep: Rep, oid: string, d: { alert: typeof sendAlert })
   const ch = await chargeSkus();
   const plus = await orderPlus(o, lines, t, stageOf(o));
   const charges = [...(ch.freight ? [{ sku: ch.freight, name: 'Freight', amount: t.freight }] : []), ...(ch.surcharge ? [{ sku: ch.surcharge, name: 'Credit card surcharge', amount: t.surcharge }] : [])];
+  const pay = await hand.getHandoffWithProof(oid);
   const msg = salesEmail({
     number: o.number, kind: o.kind, reference: o.reference, dearReference: plus.dearReference, customerPo: o.customer_po, orderDate: day(o.order_date)!, showName: show.name, repName: o.rep_name,
     customer: { name: a.name, isNew: o.new_customer, region: a.region, contact: o.contact_name, email: o.contact_email, phone: o.contact_phone, address: o.delivery_address, terms: a.payment_terms },
     lines: lines.map((l, i) => { const f = facts.get(l.sku.toUpperCase()); return { sku: l.sku, name: l.name, qty: l.qty, price: Number(l.price), lineTotal: t.lineTotals[i]!, pct: t.linePcts[i], note: l.line_kind === 'gift' ? 'free bonus' : l.line_kind === 'bundle' ? 'bundle' : null, stock: f ? stockView(l.qty, f.available, f.pending, f.incoming, f.eta).note : 'not in Radar' }; }),
     totals: t, notes: o.notes, version: v!.v, chargesInFile: !!(ch.freight || !t.freight) && !!(ch.surcharge || !t.surcharge), payBy: plus.payBy, offersNote: plus.applied.map(x => x.text), freightNote: o.freight_note,
+    payment: pay ? { mode: pay.mode, method: pay.method, amount: pay.amount, proofName: pay.proofName } : null,
   });
   const csv = dearCsv(lines.map((l, i) => ({ sku: l.sku, name: l.name, comment: l.comment, qty: l.qty, price: Number(l.price), pct: t.linePcts[i] })), t.linePct, charges);
   const file = `${o.reference.replace(/[^\w\- ]+/g, '_').trim()}.csv`;
-  const r = await d.alert('tradeshow_order' as any, msg, { relatedId: `ts|${oid}|v${v!.v}`, attachments: [{ name: file, mime: 'text/csv', data: Buffer.from(csv, 'utf8') }] } as any);
+  const r = await d.alert('tradeshow_order' as any, msg, { relatedId: `ts|${oid}|v${v!.v}`, attachments: [{ name: file, mime: 'text/csv', data: Buffer.from(csv, 'utf8') }, ...(pay?.mode === 'paid' && pay.proof ? [{ name: `payment-${o.number}${pay.proofMime === 'image/png' ? '.png' : pay.proofMime === 'image/webp' ? '.webp' : '.jpg'}`, mime: pay.proofMime ?? 'image/jpeg', data: pay.proof }] : [])] } as any);
   const why = r.sent ? null : r.reason === 'off' ? 'The "Trade show orders" email list is off in Settings (Email alerts). Switch it on with sales@ in it, then press Send again.' : r.reason;
   await prisma.$queryRaw`update crm.ts_orders set emailed_at = case when ${r.sent}::boolean then now() else emailed_at end, email_error = ${why} where id = ${oid}::uuid`;
   await addSystemLog(oid, null, rep.id, r.sent ? `Emailed to sales${v!.v > 1 ? ` again (version ${v!.v})` : ''} with ${file}. Reference: ${o.reference}` : `Not emailed to sales: ${why}`);
@@ -376,7 +442,73 @@ export async function getOrder(id: unknown) {
       totals: t, dear: o.dear_number ? { number: o.dear_number, status: o.dear_status, id: o.dear_id, linkedByHand: !!o.dear_quote_id } : null,
       emailedAt: o.emailed_at, emailError: o.email_error, emailVersion: o.email_version, cancelReason: o.cancel_reason, ...(await orderPlus(o, lines, t, stage)),
       log: await logOf({ orderId: oid }), followUps: await followUpsOf({ orderId: oid }), followUpsClosed: followUpsClosed(o.kind, stage),
+      handoffReady: await hand.handoffReady(), handoff: await hand.getHandoff(oid),
     };
+  });
+}
+
+// ---------- paid at the show, and sales' "To action" list ----------
+/** Saves how the customer is paying, for a draft order. The amount is the order's own total, so the rep never types it. */
+export async function saveHandoff(rep: Rep, id: unknown, b: any): Promise<void> {
+  const oid = idOk(id, 'That order');
+  await guard(async () => {
+    if (!(await hand.handoffReady())) throw new TsError('The payment step is not set up in the database yet. Ask whoever looks after Radar to run tradeshow-handoffs.sql.', 503);
+    const o = await orderRow(oid);
+    if (!canEdit(rep, o)) throw new TsError('Only the person who wrote it, or a manager, can change this.', 403);
+    if (o.status !== 'draft') throw new TsError('This order is already confirmed.');
+    const mode = b?.mode === 'paid' ? 'paid' : 'later';
+    if (mode === 'later') return hand.putHandoff(oid, { mode, method: null, amount: null, proof: null, keepProof: false });
+    if (o.kind !== 'order') throw new TsError('Only an order can be paid at the show. A quote is sent to the customer by sales.');
+    const method = b?.method === 'card' ? 'card' : b?.method === 'bank' ? 'bank' : null;
+    if (!method) throw new TsError('Choose bank transfer or card.');
+    if (method === 'card' && !o.card_payment) throw new TsError('Tick "Paying by card" first, so the card surcharge is in the total.');
+    if (method === 'bank' && o.card_payment) throw new TsError('Untick "Paying by card": a bank transfer has no card surcharge.');
+    const lines = (await linesOf([oid])).get(oid) ?? [];
+    if (!lines.length) throw new TsError('Add at least one product first.');
+    const t = orderTotals(o, lines.map(l => ({ qty: l.qty, price: Number(l.price), pct: Number(l.pct) || 0 })));
+    try { await hand.putHandoff(oid, { mode, method, amount: t.total, proof: hand.parseProof(b?.proof), keepProof: !b?.proof }); }
+    catch (e) { if (e instanceof hand.HandoffInputError) throw new TsError(e.message); throw e; }
+  });
+}
+/** The payment screenshot. Anyone signed in can see it, as anyone signed in can already see every order at a show. */
+export async function paymentProof(id: unknown) {
+  const oid = idOk(id, 'That order');
+  const p = await guard(() => hand.proofOf(oid));
+  if (!p) throw new TsError('There is no payment screenshot on this order.', 404);
+  return p;
+}
+export async function markActioned(rep: Rep, id: unknown, b: any): Promise<void> {
+  const oid = idOk(id, 'That order');
+  await guard(async () => {
+    const o = await orderRow(oid);
+    if (o.status !== 'sent') throw new TsError('Only a confirmed order can be marked done.');
+    const done = b?.done !== false;
+    const note = typeof b?.note === 'string' && b.note.trim() ? b.note.trim().slice(0, 500) : null;
+    if (!(await hand.setActioned(oid, rep.id, done, note))) throw new TsError('This order has no payment record to mark.', 404);
+    await addSystemLog(oid, null, rep.id, done ? `Sales marked it done${note ? `: ${note}` : '.'}` : 'Sales put it back on the To action list.');
+  });
+}
+/** What sales still has to do at a show (and the last few things done): every confirmed order, with how it was paid and where DEAR has got to. */
+export async function listActions(showId: unknown) {
+  const sid = idOk(showId, 'That show');
+  return guard(async () => {
+    if (!(await hand.handoffReady())) return { ready: false, todo: [], done: [] };
+    const rows = await prisma.$queryRawUnsafe<any[]>(`${linkedCte(` where o.show_id = $1::uuid and o.status = 'sent'`)}
+      select ol.*, a.name as customer, a.region, r.name as rep_name, h.mode, h.method, h.amount, h.proof is not null as has_proof, h.actioned_at, h.action_note, ab.name as actioned_by_name
+      from ol join crm.ts_handoffs h on h.order_id = ol.id join crm.accounts a on a.id = ol.account_id
+      left join crm.reps r on r.id = ol.rep_id left join crm.reps ab on ab.id = h.actioned_by
+      order by (h.actioned_at is not null), ol.confirmed_at`, sid);
+    const out = rows.map(o => {
+      const stage = stageOf(o);
+      return {
+        id: o.id, number: o.number, kind: o.kind, customer: o.customer, region: o.region, rep: o.rep_name, confirmedAt: o.confirmed_at,
+        mode: o.mode as 'later' | 'paid', method: o.method as 'bank' | 'card' | null, amount: o.amount == null ? null : Number(o.amount), hasProof: o.has_proof,
+        dear: o.dear_number ?? null, stage, stageLabel: STAGE_LABEL[stage],
+        // DEAR shows the order paid in full: the reconcile has effectively happened, so sales only needs to tick it
+        dearPaid: stage === 'paid', actionedAt: o.actioned_at, actionedBy: o.actioned_by_name, actionNote: o.action_note,
+      };
+    });
+    return { ready: true, todo: out.filter(x => !x.actionedAt), done: out.filter(x => x.actionedAt).sort((a, b) => String(b.actionedAt).localeCompare(String(a.actionedAt))).slice(0, 30) };
   });
 }
 

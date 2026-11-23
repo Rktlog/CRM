@@ -54,6 +54,7 @@ import { accountDetails, orderDetails } from './aiDetail';
 import { renderChart, specFromRows, ChartError, ChartSpec, ChartType } from './aiChart';
 import * as XLSX from 'xlsx';
 import { MAX_ENTRIES, previewEntries, previewSummary, LogProposal } from './aiLog';
+import { MAX_ITEMS, orderSummary, previewShowOrder, type OrderProposal } from './aiShowOrder';
 
 // What the assistant can look up. Almost everything is read only. The one thing that writes is log_activity, and it only saves after the person presses
 // Confirm on the preview. Each tool checks the same territory rule as the rest of the app, so the assistant never shows someone another
@@ -64,6 +65,7 @@ export type Ctx = {
   addFile?: (f: { name: string; mime: string; buffer: Buffer }) => Promise<MadeFile>;   // keeps a file the assistant made, for the person to download
   addChart?: (c: { title: string; svg: string }) => void;                      // shows a chart in the chat
   addProposal?: (p: LogProposal) => void;                                      // shows a bulk log preview with a Confirm button (log_activity). Saves nothing.
+  addOrderProposal?: (p: OrderProposal) => void;                               // shows a trade show order preview with a Create draft button (show_order). Saves nothing.
   attachments?: Attachment[];                                                  // the files the person has attached in this chat, for the data sets that read them
 };
 
@@ -214,6 +216,35 @@ Rules: ask for the date if you were not told it, never guess one. Map the contac
         },
       },
       required: ['entries'],
+    },
+  },
+  {
+    name: 'show_order',
+    description: `Take a trade show order from what a rep says or types ("Third Drawer Down, 12 small bunny in blue and 6 in pink, order"). This only builds a PREVIEW (up to ${MAX_ITEMS} products). A table with a Create draft button is shown in the chat and NOTHING is saved until the rep presses it, and even then only a DRAFT order is made: the rep opens it to check offers, freight and the total, chooses how the customer pays and confirms it there. You can never confirm, email or send an order.
+Give: customer (the exact name, or accountId once it is settled), show (a name or part of one; leave it out when there is only one show running), kind ('order' or 'quote', default order) and items: each with product (the words the rep used, like "small bunny"), colour (if they said one), sku (once it is settled) and qty (a whole number).
+Rules: never guess a quantity, a colour or a customer. If something is unclear the preview lists a problem with choices: ask the rep which one, then call show_order again with the COMPLETE list (sku for products already settled, accountId for the customer). Prices are Radar's wholesale prices; you cannot change them, give discounts or take payment. A new customer is added on the show page, not here.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        customer: { type: 'string', description: 'The customer name as it is in the CRM' },
+        accountId: { type: 'string', description: 'The customer id, once settled' },
+        show: { type: 'string', description: 'The trade show name, or part of it. Leave out when only one show is running.' },
+        kind: { type: 'string', enum: ['order', 'quote'] },
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              product: { type: 'string', description: 'The words the rep used for the product, e.g. "small bunny"' },
+              colour: { type: 'string' },
+              sku: { type: 'string', description: 'The product SKU, once settled' },
+              qty: { type: 'number' },
+            },
+            required: ['qty'],
+          },
+        },
+      },
+      required: ['items'],
     },
   },
   {
@@ -420,6 +451,12 @@ export async function runTool(name: string, input: any, ctx: Ctx): Promise<strin
         const p = await previewEntries(ctx.rep, entries, ctx.today);
         if (p.rows.length) ctx.addProposal(p);
         return out(previewSummary(p), 20000);
+      }
+      case 'show_order': {
+        if (!ctx.addOrderProposal) return out({ error: 'Taking an order cannot be done here' });
+        const p = await previewShowOrder(ctx.rep, { customer: input?.customer, accountId: input?.accountId, show: input?.show, kind: input?.kind, items: input?.items }, ctx.today);
+        if ('lines' in p) ctx.addOrderProposal(p);
+        return out(orderSummary(p), 20000);
       }
       case 'calculate': {
         try { return out({ results: runCalculations(input?.calculations) }); }
