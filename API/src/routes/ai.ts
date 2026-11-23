@@ -6,6 +6,7 @@ import { runChat, Turn } from '../lib/aiChat';
 import { checkAttachments, saveFile, takeFile, Attachment, MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from '../lib/aiFiles';
 import { listChats, getChat, renameChat, deleteChat, deleteAllChats, saveTurn, purgeOld, getPrefs, setPrefs, isChatId } from '../lib/aiChats';
 import { melDay } from '../lib/receivables';
+import { saveEntries, LogInputError } from '../lib/aiLog';
 
 // Claude inside the CRM. Every call: signed in, key set, inside the limits (switch, per person per day, team per month,
 // hourly rate), input size capped, and logged (who, which feature, tokens) so the cost is visible.
@@ -21,6 +22,7 @@ import { melDay } from '../lib/receivables';
 //   DELETE /ai/chats/:id      delete one;  DELETE /ai/chats  delete all of yours
 //   GET/PUT /ai/prefs         how you like the assistant to answer (the "About me" box)
 //   GET    /ai/files/:id      a file the assistant made, for the person who asked
+//   POST   /ai/log/confirm    { entries: [{ accountId, type, date, note }] }  saves the Activity Log entries the person confirmed in a bulk log preview, as them.
 //   POST   /ai/tidy-note      { text } -> { text }   the same note with spelling, punctuation and speech-to-text slips fixed
 export const aiRouter = Router();
 
@@ -161,7 +163,7 @@ aiRouter.post('/chat', express.text({ type: '*/*', limit: '40mb' }), async (req,
         const toSave = chatId ? [asMsg(history[history.length - 1])] : history.map(asMsg);
         saved = await saveTurn(req.rep!.id, chatId, history[0].content, chatId ? keep : null, [...toSave, { role: 'assistant' as const, content: r.reply, meta: { tools: [...new Set(r.tools)], steps: r.steps, files: r.files, charts: r.charts, thinking: raw?.think === true } }]);
       } catch (e) { console.error('saving the chat failed', e); }
-      send({ type: 'done', reply: r.reply, tools: [...new Set(r.tools)], steps: r.steps, files: r.files, charts: r.charts, chatId: saved?.chatId ?? null, title: saved?.title ?? null, usage: { inputTokens: r.inputTokens, outputTokens: r.outputTokens, calls: r.calls } });
+      send({ type: 'done', reply: r.reply, tools: [...new Set(r.tools)], steps: r.steps, files: r.files, charts: r.charts, proposal: r.proposal, chatId: saved?.chatId ?? null, title: saved?.title ?? null, usage: { inputTokens: r.inputTokens, outputTokens: r.outputTokens, calls: r.calls } });
     } catch (e) {
       if (!stop.signal.aborted) { console.error('claude chat failed', e); send({ type: 'error', error: aiProblem(e).message }); }
     }
@@ -170,6 +172,17 @@ aiRouter.post('/chat', express.text({ type: '*/*', limit: '40mb' }), async (req,
     console.error('claude chat failed', e);
     const p = aiProblem(e);
     if (!res.headersSent) res.status(p.status).json({ error: p.message }); else res.end();
+  }
+});
+
+// Pressing Confirm on a bulk log preview. Nothing from the chat is trusted: every entry is checked again (same customer rules as the Activity Log page, no
+// future dates, same-day repeats skipped) and saved as the signed-in person. It only adds entries; it never edits or deletes.
+aiRouter.post('/log/confirm', async (req, res) => {
+  try { res.json(await saveEntries(req.rep!, req.body?.entries)); }
+  catch (e) {
+    if (e instanceof LogInputError) return res.status(400).json({ error: e.message });
+    console.error('bulk log failed', e);
+    res.status(500).json({ error: 'Saving the log failed. Nothing was saved. Try again.' });
   }
 });
 
