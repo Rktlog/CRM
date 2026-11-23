@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useCloseDropdowns } from '../lib/useCloseDropdowns';
+import { useFitTables } from '../lib/useFitTables';
 import { HOME, visibleGroups, groupKeyForPath } from '../lib/navMenu';
 import { RequestBadge } from './RequestsPanel';
 import { useNewRequestCount } from '../lib/productRequests';
@@ -13,6 +14,7 @@ export default function Layout() {
   const { signOut, name, role } = useAuth();
   useCloseDropdowns();   // tick-box dropdowns close when you click anywhere outside them
   const { pathname } = useLocation();
+  useFitTables(pathname);   // table boxes fill the space left on the screen
   const groups = visibleGroups(role);
   const newRequests = useNewRequestCount(role);   // for managers: how many special product requests are new
   const here = groupKeyForPath(pathname);
