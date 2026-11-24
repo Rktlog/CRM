@@ -10,6 +10,7 @@ import TsQueue from '../components/TsQueue';
 import TsActions from '../components/TsActions';
 import TsStand from '../components/TsStand';
 import TsAppointments from '../components/TsAppointments';
+import BadgeScan from '../components/BadgeScan';
 import TsChecklist from '../components/TsChecklist';
 import TsFeedback from '../components/TsFeedback';
 import TsAsk from '../components/TsAsk';
@@ -38,6 +39,7 @@ export default function TradeShow() {
   const [exporting, setExporting] = useState(false);
   const [editing, setEditing] = useState(false);
   const [starting, setStarting] = useState<null | 'order' | 'quote' | 'lead'>(null);
+  const [scanning, setScanning] = useState(false);
   const [lead, setLead] = useState({ brands: '', notes: '' });
   const [busy, setBusy] = useState(false);
   const [matches, setMatches] = useState<Customer[] | null>(null);
@@ -73,6 +75,7 @@ export default function TradeShow() {
       <div className="acct-region" style={{ marginBottom: 12 }}>{shortDay(s.startsOn)}{s.endsOn !== s.startsOn ? ` to ${shortDay(s.endsOn)}` : ''}{s.venue ? ` · ${s.venue}` : ''}{s.stand ? ` · stand ${s.stand}` : ''}{s.staff ? ` · ${s.staff}` : ''} · references start "{s.refName}"
         {isManager && !editing && <> · <button type="button" className="link-btn" onClick={() => setEditing(true)}>Edit</button></>}
         {' · '}<Link to="/trade-shows/compare">Compare shows</Link>{' · '}<button type="button" className="link-btn" disabled={exporting} onClick={exportAll}>{exporting ? 'Preparing…' : 'Export to Excel'}</button></div>
+      {scanning && <BadgeScan showId={id} onClose={() => setScanning(false)} onSaved={() => { setScanning(false); setTab('leads'); load(); }} />}
       {editing && <TsShowForm show={s} onSaved={() => { setEditing(false); load(); }} onCancel={() => setEditing(false)} />}
 
       {!s.archived && !starting && (
@@ -80,6 +83,7 @@ export default function TradeShow() {
           <button type="button" className="btn" onClick={() => open('order')}>New order</button>
           <button type="button" className="btn secondary" onClick={() => open('quote')}>New quote</button>
           <button type="button" className="btn secondary" onClick={() => open('lead')}>New lead</button>
+          <button type="button" className="btn secondary" onClick={() => setScanning(true)}>Scan badge</button>
         </div>
       )}
       {starting && (
