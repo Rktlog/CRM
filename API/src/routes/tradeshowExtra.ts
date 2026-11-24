@@ -2,6 +2,7 @@ import express, { Router } from 'express';
 import * as ts from '../lib/tradeshow';
 import * as x from '../lib/tradeshowExtra';
 import * as ai from '../lib/tradeshowClaude';
+import * as badge from '../lib/tradeshowBadge';
 
 // Trade shows, part 2 (mounted next to the part 1 routes, under /tradeshow). Managers set up offers, freight rates and old shows; everyone signed in can use them at a show.
 //   GET/POST /shows/:id/offers    PATCH/DELETE /shows/:id/offers/:oid    POST /shows/:id/offers/copy { fromShowId }
@@ -13,6 +14,7 @@ import * as ai from '../lib/tradeshowClaude';
 //   POST /history-shows           PUT /shows/:id/history        old shows, for the comparison
 //   GET /compare?series=          the Sales Comparison, year on year
 //   POST /shows/:id/import/read   an Excel file in (sent as text, JSON inside), what Claude found out    POST /shows/:id/import/save
+//   POST /badge/read              { image (base64), mime }  a photo of a visitor badge in (sent as text, JSON inside), the printed words out, plus customers that look the same. Saves nothing; the photo is never kept.
 //   POST /ask                     { showId?, question, history? }  Ask Claude
 export const tradeshowExtraRouter = Router();
 const fail = (res: any, e: unknown, what: string) => {
@@ -61,4 +63,5 @@ r.get('/compare', h('comparison', async (q, s) => s.json(await x.getComparison(q
 
 r.post('/shows/:id/import/read', big, h('read workbook', async (q, s) => s.json(await ai.readWorkbook(rep(q), q.params.id, parse(q).file ?? {}))));
 r.post('/shows/:id/import/save', big, h('save workbook findings', async (q, s) => s.json(await ai.saveImport(rep(q), q.params.id, parse(q)))));
+r.post('/badge/read', express.text({ type: '*/*', limit: '8mb' }), h('read badge', async (q, s) => s.json(await badge.readBadge(rep(q), parse(q)))));
 r.post('/ask', h('ask Claude', async (q, s) => s.json(await ai.askClaude(rep(q), q.body ?? {}))));

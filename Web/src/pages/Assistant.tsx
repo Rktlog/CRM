@@ -3,10 +3,11 @@ import { apiGet, apiPut, apiPatch, apiDelete, apiDownload } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import DictationTextarea from '../components/DictationTextarea';
 import { Markdown } from '../lib/markdown';
-import { streamChat, MadeFile, SendMessage, Step, Chart, LogProposal, OrderProposal, TemplateProposal } from '../lib/aiStream';
+import { streamChat, MadeFile, SendMessage, Step, Chart, LogProposal, OrderProposal, LeadProposal, AppointmentProposal, TemplateProposal } from '../lib/aiStream';
 import TemplatePreview from '../components/TemplatePreview';
 import LogPreview from '../components/LogPreview';
 import OrderPreview from '../components/OrderPreview';
+import LeadPreview, { AppointmentPreview } from '../components/LeadPreview';
 import { ACCEPT, Pending, acceptFiles, readFile, sizeLabel } from '../lib/attachments';
 import { chartSrc, downloadSvg, downloadPng } from '../lib/chartDownload';
 
@@ -16,7 +17,7 @@ import { chartSrc, downloadSvg, downloadPng } from '../lib/chartDownload';
 // reopen and delete them. Managers set the company's instructions and the reply settings under Settings.
 
 type Att = { name: string; type: string; size: number; data?: string };   // data is there only for files attached in this visit
-type Msg = { role: 'user' | 'assistant'; content: string; attachments?: Att[]; files?: MadeFile[]; tools?: string[]; steps?: Step[]; charts?: Chart[]; proposal?: LogProposal | null; orderProposal?: OrderProposal | null; templateProposal?: TemplateProposal | null; stopped?: boolean; thinking?: boolean };
+type Msg = { role: 'user' | 'assistant'; content: string; attachments?: Att[]; files?: MadeFile[]; tools?: string[]; steps?: Step[]; charts?: Chart[]; proposal?: LogProposal | null; orderProposal?: OrderProposal | null; leadProposal?: LeadProposal | null; appointmentProposal?: AppointmentProposal | null; templateProposal?: TemplateProposal | null; stopped?: boolean; thinking?: boolean };
 type ChatSummary = { id: string; title: string; updatedAt: string; messages: number };
 type Settings = { enabled: boolean; maxReplyTokens: number; perRequestTokens: number; userDailyTokens: number; monthlyTokens: number; monthlyUsd: number; usdPerMInput: number; usdPerMOutput: number; thinkingBudgetTokens: number; chatRetentionDays: number; instructions: string };
 type Status = { configured: boolean; settings: Settings; instructionsSet: boolean; usage: { userDayTokens: number; monthTokens: number; monthCostUsd: number | null }; blocked: string | null };
@@ -149,7 +150,7 @@ function AssistantPage() {
           if (e.type === 'text') { acc += e.delta; setLive(acc); setStatusLine(''); }
           else if (e.type === 'reset') { acc = ''; setLive(''); }
           else if (e.type === 'status') setStatusLine(e.text);
-          else if (e.type === 'done') { setMessages([...history, { role: 'assistant', content: e.reply, files: e.files, tools: e.tools, steps: e.steps, charts: e.charts, proposal: e.proposal, orderProposal: e.orderProposal, templateProposal: e.templateProposal, thinking: think }]); if (e.chatId) setChatId(e.chatId); acc = ''; }
+          else if (e.type === 'done') { setMessages([...history, { role: 'assistant', content: e.reply, files: e.files, tools: e.tools, steps: e.steps, charts: e.charts, proposal: e.proposal, orderProposal: e.orderProposal, leadProposal: e.leadProposal, appointmentProposal: e.appointmentProposal, templateProposal: e.templateProposal, thinking: think }]); if (e.chatId) setChatId(e.chatId); acc = ''; }
           else if (e.type === 'error') setError(e.error);
         },
       });
@@ -337,6 +338,8 @@ function AssistantPage() {
                   ))}
                   {m.proposal && m.proposal.rows.length > 0 && <LogPreview proposal={m.proposal} />}
                   {m.orderProposal && m.orderProposal.lines.length > 0 && <OrderPreview proposal={m.orderProposal} />}
+                  {m.leadProposal && <LeadPreview proposal={m.leadProposal} />}
+                  {m.appointmentProposal && <AppointmentPreview proposal={m.appointmentProposal} />}
                   {m.templateProposal && <TemplatePreview proposal={m.templateProposal} />}
                   {m.files && m.files.length > 0 && (
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>

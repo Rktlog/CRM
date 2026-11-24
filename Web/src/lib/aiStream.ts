@@ -10,13 +10,16 @@ export type Chart = { title: string; svg: string };
 export type LogRow = { accountId: string; accountName: string; state: string; type: 'call' | 'email' | 'visit' | 'remark'; date: string; note: string; effects: string[]; status: 'ready' | 'duplicate' };
 export type OrderLine = { sku: string; name: string; brand: string | null; qty: number; price: number; lineTotal: number; stock: string; warning: string | null };
 export type OrderProposal = { showId: string; showName: string; accountId: string; customer: string; region: string | null; kind: 'order' | 'quote'; lines: OrderLine[]; goods: number; problems: { what: string; reason: string; choices?: { id: string; label: string }[] }[] };
+export type Problem = { what: string; reason: string; choices?: { id: string; label: string }[] };
+export type LeadProposal = { showId: string; showName: string; accountId: string | null; customer: string; region: string | null; isNew: boolean; address: string | null; contact: { name: string | null; email: string | null; phone: string | null }; brands: string | null; notes: string | null; similar: { id: string; label: string }[]; problems: Problem[] };
+export type AppointmentProposal = { showId: string; showName: string; stockist: string; accountId: string | null; linkedTo: string | null; contact: string | null; state: string | null; day: string | null; time: string | null; who: string | null; comments: string | null; targetRange: string | null; warnings: string[]; problems: Problem[] };
 export type TemplateProposal = { name: string; subject: string; body: string; newLinks: { name: string; url: string }[]; reusedLinks: string[]; preview: { subject: string; body: string } };
 export type LogProposal = { rows: LogRow[]; problems: { name: string; reason: string; choices?: { id: string; name: string; state: string }[] }[] };
 export type ChatEvent =
   | { type: 'status'; text: string }
   | { type: 'text'; delta: string }
   | { type: 'reset' }
-  | { type: 'done'; reply: string; tools: string[]; steps: Step[]; files: MadeFile[]; charts: Chart[]; proposal: LogProposal | null; orderProposal?: OrderProposal | null; templateProposal?: TemplateProposal | null; chatId: string | null; title: string | null; usage: { inputTokens: number; outputTokens: number; calls: number } }
+  | { type: 'done'; reply: string; tools: string[]; steps: Step[]; files: MadeFile[]; charts: Chart[]; proposal: LogProposal | null; orderProposal?: OrderProposal | null; leadProposal?: LeadProposal | null; appointmentProposal?: AppointmentProposal | null; templateProposal?: TemplateProposal | null; chatId: string | null; title: string | null; usage: { inputTokens: number; outputTokens: number; calls: number } }
   | { type: 'error'; error: string };
 export type SendMessage = { role: 'user' | 'assistant'; content: string; attachments?: { name: string; type: string; data: string }[] };
 

@@ -55,6 +55,7 @@ import { renderChart, specFromRows, ChartError, ChartSpec, ChartType } from './a
 import * as XLSX from 'xlsx';
 import { MAX_ENTRIES, previewEntries, previewSummary, LogProposal } from './aiLog';
 import { MAX_ITEMS, orderSummary, previewShowOrder, type OrderProposal } from './aiShowOrder';
+import { appointmentSummary, leadSummary, previewAppointment, previewLead, type AppointmentProposal, type LeadProposal } from './aiShowLead';
 import { previewNewTemplate, templateSummary, type TemplateProposal } from './aiTemplate';
 
 // What the assistant can look up. Almost everything is read only. The one thing that writes is log_activity, and it only saves after the person presses
@@ -67,6 +68,8 @@ export type Ctx = {
   addChart?: (c: { title: string; svg: string }) => void;                      // shows a chart in the chat
   addProposal?: (p: LogProposal) => void;                                      // shows a bulk log preview with a Confirm button (log_activity). Saves nothing.
   addTemplateProposal?: (p: TemplateProposal) => void;                          // shows a new email template preview with a Save template button (save_template). Saves nothing.
+  addLeadProposal?: (p: LeadProposal) => void;                                 // shows a trade show lead preview with a Save lead button (show_lead). Saves nothing.
+  addAppointmentProposal?: (p: AppointmentProposal) => void;                   // shows a trade show appointment preview with a Save appointment button (show_appointment). Saves nothing.
   addOrderProposal?: (p: OrderProposal) => void;                               // shows a trade show order preview with a Create draft button (show_order). Saves nothing.
   attachments?: Attachment[];                                                  // the files the person has attached in this chat, for the data sets that read them
 };
@@ -247,6 +250,39 @@ Rules: never guess a quantity, a colour or a customer. If something is unclear t
         },
       },
       required: ['items'],
+    },
+  },
+  {
+    name: 'show_lead',
+    description: `Take a trade show LEAD from what a rep says or types ("Lead at the Sydney show: Little Gifts Co, Mia Chen, mia@littlegifts.test, 0400 000 000, liked Miffy and Liewood"), or from a photo of a visitor's badge the rep attached (read the printed words yourself; never decode a QR code). This only builds a PREVIEW. A card with a Save lead button is shown in the chat and NOTHING is saved until the rep presses it. You can never save, edit or delete a lead.
+Give: customer (the business name, exactly as the rep said or as printed), accountId (once settled), show (a name or part of one; leave it out when one show is running), contact (the person's name), email, phone, address, brands (the brands they liked), notes. If the business is not in Radar and the rep says it is a new customer, set newCustomer true and give state (NSW, VIC, QLD, WA, SA, TAS, NT, ACT or NZ).
+Rules: never guess a name, email, phone, state or brand. If something is unclear the preview lists a problem with choices: ask the rep which one, then call show_lead again with everything. A new customer is only made when the rep presses Save. Do not use this for orders (use show_order) or appointments (use show_appointment).`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        customer: { type: 'string', description: 'The business name' }, accountId: { type: 'string', description: 'The customer id, once settled' },
+        show: { type: 'string', description: 'The trade show name, or part of it. Leave out when only one show is running.' },
+        newCustomer: { type: 'boolean', description: 'true only when the rep says this is a new customer that Radar does not have' },
+        state: { type: 'string', description: 'The state, needed for a new customer' },
+        contact: { type: 'string' }, email: { type: 'string' }, phone: { type: 'string' }, address: { type: 'string' },
+        brands: { type: 'string', description: 'The brands they liked' }, notes: { type: 'string' },
+      },
+      required: ['customer'],
+    },
+  },
+  {
+    name: 'show_appointment',
+    description: `Book a trade show APPOINTMENT on the show's Appointments tab ("book Tiny Tots Boutique on Wednesday at 10:30 for Sam, they want to see the Miffy range"). It is not a Google Calendar event. This only builds a PREVIEW. A card with a Save appointment button is shown in the chat and NOTHING is saved until the rep presses it. You can only add one. You can never change, cancel or delete an appointment.
+Give: stockist (the business name), show (a name or part of one; leave it out when one show is running), day and time (the words the rep used, like "Wednesday" and "10:30am"), who (who from our team meets them), contact, state, comments, targetRange (what they want to see).
+Rules: never guess a day, a time or a name. If the preview lists a problem with choices, ask the rep which one and call show_appointment again with everything.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        stockist: { type: 'string', description: 'The business the appointment is with' }, accountId: { type: 'string' }, show: { type: 'string' },
+        day: { type: 'string', description: 'The day, as the rep said it' }, time: { type: 'string', description: 'The time, as the rep said it' }, who: { type: 'string', description: 'Who on our team meets them' },
+        contact: { type: 'string' }, state: { type: 'string' }, comments: { type: 'string' }, targetRange: { type: 'string', description: 'The range they want to see' },
+      },
+      required: ['stockist'],
     },
   },
   {
@@ -478,6 +514,18 @@ export async function runTool(name: string, input: any, ctx: Ctx): Promise<strin
         const p = await previewShowOrder(ctx.rep, { customer: input?.customer, accountId: input?.accountId, show: input?.show, kind: input?.kind, items: input?.items }, ctx.today);
         if ('lines' in p) ctx.addOrderProposal(p);
         return out(orderSummary(p), 20000);
+      }
+      case 'show_lead': {
+        if (!ctx.addLeadProposal) return out({ error: 'Taking a lead cannot be done here' });
+        const p = await previewLead(ctx.rep, { customer: input?.customer, accountId: input?.accountId, show: input?.show, newCustomer: input?.newCustomer === true, state: input?.state, contact: input?.contact, email: input?.email, phone: input?.phone, address: input?.address, brands: input?.brands, notes: input?.notes }, ctx.today);
+        if ('showId' in p) ctx.addLeadProposal(p);
+        return out(leadSummary(p), 20000);
+      }
+      case 'show_appointment': {
+        if (!ctx.addAppointmentProposal) return out({ error: 'Booking an appointment cannot be done here' });
+        const p = await previewAppointment(ctx.rep, { stockist: input?.stockist, accountId: input?.accountId, show: input?.show, day: input?.day, time: input?.time, who: input?.who, contact: input?.contact, state: input?.state, comments: input?.comments, targetRange: input?.targetRange }, ctx.today);
+        if ('showId' in p) ctx.addAppointmentProposal(p);
+        return out(appointmentSummary(p), 20000);
       }
       case 'save_template': {
         if (!ctx.addTemplateProposal) return out({ error: 'Saving a template cannot be done here' });
