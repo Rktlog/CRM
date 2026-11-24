@@ -70,8 +70,8 @@ export async function uploadSalesOrder(repId: string, buf: Buffer, fileName: str
     const L = so.lines;
     await prisma.$queryRaw`insert into crm.lw_order_lines (order_id, line_no, display, style_no, style_name, colour_code, colour, size, barcode, sku, product_sku, qty, currency, wsp, discount, price, amount, rrp, delivery_window)
       select ${id}::uuid, * from unnest(${L.map(l => l.lineNo)}::int[], ${L.map(l => l.display)}::boolean[], ${L.map(l => l.styleNo)}::text[], ${L.map(l => l.styleName)}::text[], ${L.map(l => l.colourCode)}::text[], ${L.map(l => l.colour)}::text[], ${L.map(l => l.size)}::text[],
-        ${L.map(l => l.barcode)}::text[], ${L.map(l => l.sku)}::text[], ${L.map(productOf)}::text[], ${L.map(l => l.qty)}::int[], ${L.map(l => l.currency)}::text[], ${L.map(l => dec(l.wsp))}::numeric[], ${L.map(l => dec(l.discount))}::numeric[], ${L.map(l => dec(l.price))}::numeric[],
-        ${L.map(l => dec(l.amount))}::numeric[], ${L.map(l => dec(l.rrp))}::numeric[], ${L.map(l => l.deliveryWindow)}::text[])`;
+        ${L.map(l => l.barcode)}::text[], ${L.map(l => l.sku)}::text[], ${L.map(productOf)}::text[], ${L.map(l => l.qty)}::int[], ${L.map(l => l.currency)}::text[], ${L.map(l => dec(l.wsp))}::text[]::numeric[], ${L.map(l => dec(l.discount))}::text[]::numeric[], ${L.map(l => dec(l.price))}::text[]::numeric[],
+        ${L.map(l => dec(l.amount))}::text[]::numeric[], ${L.map(l => dec(l.rrp))}::text[]::numeric[], ${L.map(l => l.deliveryWindow)}::text[])`;
     // a PDF already on it is checked again against the new figures
     const [c] = await prisma.$queryRaw<{ confirmation_check: ConfirmationCheck | null }[]>`select confirmation_check from crm.lw_orders where id = ${id}::uuid`;
     if (c?.confirmation_check?.pdf) await prisma.$queryRaw`update crm.lw_orders set confirmation_check = ${JSON.stringify(compareConfirmation(so, c.confirmation_check.pdf))}::jsonb where id = ${id}::uuid`;
@@ -222,7 +222,7 @@ export async function syncLiewoodPos(d: Deps = realDeps, o: { max?: number } = {
           { const m = new Map<string, (typeof rows)[number]>(); for (const r of rows) { const k = `${r[0]}|${r[1]}|${r[5]}`, h = m.get(k); if (h) h[6] += r[6]; else m.set(k, [...r]); } rows.splice(0, rows.length, ...m.values()); }   // one row per document and SKU
           await prisma.$queryRaw`delete from crm.lw_po_docs where po_number = ${po}`;
           if (rows.length) await prisma.$queryRaw`insert into crm.lw_po_docs (po_number, kind, doc_key, doc_number, doc_date, status, sku, qty)
-            select ${po}, t.kind, t.doc_key, t.doc_number, t.doc_date::date, t.status, t.sku, t.qty from unnest(${rows.map(r => r[0])}::text[], ${rows.map(r => r[1])}::text[], ${rows.map(r => r[2])}::text[], ${rows.map(r => r[3])}::text[], ${rows.map(r => r[4])}::text[], ${rows.map(r => r[5])}::text[], ${rows.map(r => dec(r[6]))}::numeric[]) as t(kind, doc_key, doc_number, doc_date, status, sku, qty)
+            select ${po}, t.kind, t.doc_key, t.doc_number, t.doc_date::date, t.status, t.sku, t.qty from unnest(${rows.map(r => r[0])}::text[], ${rows.map(r => r[1])}::text[], ${rows.map(r => r[2])}::text[], ${rows.map(r => r[3])}::text[], ${rows.map(r => r[4])}::text[], ${rows.map(r => r[5])}::text[], ${rows.map(r => dec(r[6]))}::text[]::numeric[]) as t(kind, doc_key, doc_number, doc_date, status, sku, qty)
 `;
           await prisma.$queryRaw`insert into crm.lw_po_state (po_number, dear_id, status, fields, ok, error, fetched_at) values (${po}, ${id}, ${purchase.status}, ${purchase.fields}::text[], true, null, now())
             on conflict (po_number) do update set dear_id = excluded.dear_id, status = excluded.status, fields = excluded.fields, ok = true, error = null, fetched_at = now()`;
