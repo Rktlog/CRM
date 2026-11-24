@@ -31,7 +31,7 @@ export default function Liewood() {
     setBusy(true);
     try {
       const r = await sendFile<Uploaded>(`/liewood/orders${replace ? '?replace=1' : ''}`, file);
-      const notes = [r.notInDear ? `${r.notInDear} of its products are not in DEAR yet` : '', ...r.problems.slice(0, 3)].filter(Boolean);
+      const notes = [r.notInDear ? `${r.notInDear} of its products are not in DEAR yet` : '', r.range && r.range.added ? `${r.range.added} new SKU${r.range.added === 1 ? '' : 's'} added to the range` : '', ...r.problems.slice(0, 3)].filter(Boolean);
       setMsg({ ok: true, text: `${r.soNumber} ${r.replaced ? 'updated' : 'added'}: ${r.lines} lines, ${r.units.toLocaleString('en-AU')} units.${notes.length ? ' ' + notes.join('. ') + '.' : ''} Opening it…` });
       load();
       setTimeout(() => nav(`/liewood/${r.id}`), 900);
@@ -54,7 +54,7 @@ export default function Liewood() {
   const shown = (orders ?? []).filter(o => showClosed || !o.closed), closedCount = (orders ?? []).filter(o => o.closed).length;
   return (
     <>
-      <h1>Liewood</h1>
+      <h1 style={{ display: 'flex', gap: 14, alignItems: 'baseline', flexWrap: 'wrap' }}>Liewood <Link to="/liewood/range" style={{ fontSize: 15, fontWeight: 400 }}>Range and pricing →</Link></h1>
       <div className="acct-region" style={{ marginBottom: 14, maxWidth: 700 }}>
         Each Liewood sales order, checked against its DEAR purchase order. An invoice from Liewood on the PO means it is confirmed coming; the stock received against each invoice is checked line by line, and anything missing is flagged.
       </div>
