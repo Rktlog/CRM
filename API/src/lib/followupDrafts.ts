@@ -1,6 +1,6 @@
 import { prisma } from './prisma';
 import { melDay, openQuotes, PREPAYMENT } from './receivables';
-import { accessTokenFrom, canDraft, cleanAddress, createDraft, draftLink, getThreadMeta, privateExclusion, searchThreadIds } from './gmail/google';
+import { accessTokenFrom, canDraft, cleanAddress, createDraft, draftLink, getMessageBody, getThreadMeta, privateExclusion, searchThreadIds } from './gmail/google';
 import { decrypt } from './gmail/crypto';
 import { findReplyTarget, makeReminderDraft, type LookupDeps, type ReplyQuery, type ReplyTarget } from './gmail/threadReply';
 
@@ -10,7 +10,7 @@ import { findReplyTarget, makeReminderDraft, type LookupDeps, type ReplyQuery, t
 // 2 days, so a missed day is caught up, but a quote that has been overdue for weeks is never swept up when this is first switched on).
 // The 1st follow-up is the CRM's own rule: a week after the order for a customer who pays first.
 // What it does: makes a draft in Gmail, nothing else. When the quote's own email conversation is in the sales mailbox, the reminder is drafted as a reply
-// inside it (so it sits under the quote that was sent, with the attachment); otherwise it is a new email (see lib/gmail/threadReply.ts). It never sends anything, never marks the follow-up done (a person does that after
+// inside it (so it sits under the quote that was sent, with the attachment), with that email copied underneath like a normal Gmail reply; otherwise it is a new email (see lib/gmail/threadReply.ts). It never sends anything, never marks the follow-up done (a person does that after
 // chasing), and keeps no copy of the email: only that a draft was made, for which quote, and to whom.
 // Gmail needs the mailbox connected with "Allow drafts" (the gmail.compose permission).
 
@@ -68,6 +68,7 @@ export type RunResult = {
 export type Deps = {
   openQuotes: typeof openQuotes; accessTokenFrom: typeof accessTokenFrom; createDraft: typeof createDraft; decrypt: typeof decrypt; today: () => string;
   findReplyTarget: (token: string, q: ReplyQuery) => Promise<ReplyTarget | null>;
+  getBody: typeof getMessageBody;
 };
 // Where a quote's own conversation is looked for: the emails already saved for the shop that name the quote, then a Gmail search (never Private ones).
 const realLookup: LookupDeps = {
@@ -78,7 +79,7 @@ const realLookup: LookupDeps = {
   searchThreads: async (token, number) => /^[A-Za-z0-9-]{3,20}$/.test(number) ? searchThreadIds(token, `"${number}" ${privateExclusion()}`.trim(), 10) : [],
   getThread: getThreadMeta,
 };
-const realDeps: Deps = { openQuotes, accessTokenFrom, createDraft, decrypt, today: () => melDay(), findReplyTarget: (token, q) => findReplyTarget(realLookup, token, q) };
+const realDeps: Deps = { openQuotes, accessTokenFrom, createDraft, decrypt, today: () => melDay(), findReplyTarget: (token, q) => findReplyTarget(realLookup, token, q), getBody: getMessageBody };
 
 export async function loadSettings(): Promise<{ enabled: boolean; mailbox: string }> {
   const [s] = await prisma.$queryRaw<{ enabled: boolean; mailbox_email: string }[]>`select enabled, mailbox_email from crm.followup_draft_settings where id = 1`;
@@ -143,7 +144,7 @@ export async function runFollowUpDrafts(opts: { dryRun?: boolean; deps?: Partial
     if (!claim) { res.alreadyDone++; res.eligible--; continue; }
     try {
       const m = reminderMessage(p.name, p.r.number);
-      const made = await makeReminderDraft({ createDraft: d.createDraft, findReplyTarget: d.findReplyTarget }, token, { to: p.to, subject: m.subject, body: m.body, repId: conn.rep_id, accountId: p.accountId, number: p.r.number, addresses: p.addresses });
+      const made = await makeReminderDraft({ createDraft: d.createDraft, findReplyTarget: d.findReplyTarget, getBody: d.getBody }, token, { to: p.to, subject: m.subject, body: m.body, repId: conn.rep_id, accountId: p.accountId, number: p.r.number, addresses: p.addresses });
       await prisma.$executeRaw`update crm.followup_drafts set status = 'created', gmail_draft_id = ${made.id}, gmail_message_id = ${made.messageId}, error = null, updated_at = now() where id = ${claim.id}::uuid`;
       res.created++; if (made.threaded) res.threaded++;
     } catch (e) {
