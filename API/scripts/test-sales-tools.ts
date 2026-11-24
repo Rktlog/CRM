@@ -1,7 +1,7 @@
 // Tests for Sales Tools: the fill-in words, the checks on a saved template and link, and that the built-in templates still give exactly today's emails.
 // No database and no internet. All names, numbers and links are made up.
 // Run:  npx tsx scripts/test-sales-tools.ts
-import { DEFAULTS, SAMPLE, checkTemplate, cleanLink, fill, isBuiltIn, isCustomKey, joinAnd } from '../src/lib/salesToolsCore';
+import { DEFAULTS, SAMPLE, checkTemplate, planTemplate, cleanLink, fill, isBuiltIn, isCustomKey, joinAnd } from '../src/lib/salesToolsCore';
 import { bodyToHtml, bodyToText } from '../src/lib/emailHtml';
 
 let pass = 0, fail = 0;
@@ -100,6 +100,26 @@ ok('so a saved link with brackets still reads as one link', bodyToHtml(fill('[Li
 console.log('--- 5. keys');
 ok('built-in keys', isBuiltIn('payment_reminder') && isBuiltIn('abandoned_cart') && isBuiltIn('order_email') && !isBuiltIn('x'));
 ok('custom keys', isCustomKey('c-0a1b2c3d') && !isCustomKey('c-xyz') && !isCustomKey('payment_reminder') && !isCustomKey("c-0a1b2c3d'; drop"));
+
+console.log('--- 6. the assistant saving a NEW template (a preview only: planTemplate saves nothing)');
+const taken = ['Payment reminder', 'Abandoned cart', 'Order email', 'Miffy tote'];
+const good = { name: 'Engelite preorder', subject: 'NEW | Gifting Bears by Engelite', body: 'Hi [Name],\n\nSee the [Link: Engelite deck | presentation] for details.', links: [{ name: 'Engelite deck', url: 'https://docs.example.test/d/xyz/edit' }] };
+const g = planTemplate(good, links, taken) as any;
+ok('a good template gives a plan with the new link', g.plan && g.plan.newLinks.length === 1 && g.plan.newLinks[0].name === 'Engelite deck', JSON.stringify(g));
+ok('the preview fills in the made-up customer and shows the link', g.plan.preview.body.startsWith('Hi Morgana,') && g.plan.preview.body.includes('[presentation](https://docs.example.test/d/xyz/edit)'), g.plan?.preview?.body);
+eq('the wording is kept exactly', [g.plan.subject, g.plan.body], [good.subject, good.body]);
+ok('an already saved link needs no new link', (planTemplate({ ...good, body: 'Hi [Name], [Link: Engelite preorder | see it]', links: [] }, links, taken) as any).plan.newLinks.length === 0);
+ok('the same link sent again with the same address is not a second copy', (planTemplate({ ...good, links: [{ name: 'engelite PREORDER', url: 'https://docs.example.test/d/abc/edit' }], body: 'x [Link: Engelite preorder]' }, links, taken) as any).plan.newLinks.length === 0);
+ok('a saved link name with a different address is refused', JSON.stringify(planTemplate({ ...good, links: [{ name: 'Engelite preorder', url: 'https://other.example.test/' }], body: 'x' }, links, taken)).includes('different address'));
+ok('a name already used by a template is refused (the assistant only adds)', JSON.stringify(planTemplate({ ...good, name: 'payment REMINDER' }, links, taken)).includes('already a template'));
+ok('a built-in name is refused too', JSON.stringify(planTemplate({ ...good, name: 'Miffy tote' }, links, taken)).includes('already a template'));
+ok('no name, no subject, no body are all refused', 'problems' in (planTemplate({}, links, taken) as any) && (planTemplate({}, links, taken) as any).problems.length >= 3);
+ok('a link name that is not given anywhere is refused', JSON.stringify(planTemplate({ ...good, links: [] }, links, taken)).includes('no saved link with that name'));
+ok('a link that is not https is refused', JSON.stringify(planTemplate({ ...good, links: [{ name: 'Engelite deck', url: 'http://x.example.test' }] }, links, taken)).includes('https://'));
+ok('a mistyped fill-in word is refused', JSON.stringify(planTemplate({ ...good, body: 'Hi [Nmae]', links: [] }, links, taken)).includes('[Nmae]'));
+ok('more than 5 new links is refused', JSON.stringify(planTemplate({ ...good, links: Array.from({ length: 6 }, (_, i) => ({ name: 'L' + i, url: 'https://a.example.test/' + i })), body: 'x' }, links, taken)).includes('At most 5'));
+ok('the same new link name twice is refused', JSON.stringify(planTemplate({ ...good, links: [{ name: 'A', url: 'https://a.example.test/1' }, { name: 'a', url: 'https://a.example.test/2' }], body: 'x [Link: A]' }, links, taken)).includes('used twice'));
+ok('nothing in the input is changed (it saves nothing and keeps no state)', JSON.stringify(good).includes('Engelite deck') && links.length === 1);
 
 console.log(`\npassed: ${pass}   failed: ${fail}`);
 process.exit(fail ? 1 : 0);

@@ -8,6 +8,8 @@ import { listChats, getChat, renameChat, deleteChat, deleteAllChats, saveTurn, p
 import { melDay } from '../lib/receivables';
 import { saveEntries, LogInputError } from '../lib/aiLog';
 import { createDraft } from '../lib/aiShowOrder';
+import { saveNewTemplate } from '../lib/aiTemplate';
+import { ToolsError } from '../lib/salesTools';
 import { TsError } from '../lib/tradeshow';
 
 // Claude inside the CRM. Every call: signed in, key set, inside the limits (switch, per person per day, team per month,
@@ -25,6 +27,7 @@ import { TsError } from '../lib/tradeshow';
 //   GET/PUT /ai/prefs         how you like the assistant to answer (the "About me" box)
 //   GET    /ai/files/:id      a file the assistant made, for the person who asked
 //   POST   /ai/show-order/confirm { showId, accountId, kind, lines: [{ sku, qty }] }   starts a DRAFT trade show order from an assistant preview (never confirms or emails it).
+//   POST   /ai/template/confirm { name, subject, body, newLinks }   saves a NEW email template (and its new links) from an assistant preview. Only adds; never changes or deletes one.
 //   POST   /ai/log/confirm    { entries: [{ accountId, type, date, note }] }  saves the Activity Log entries the person confirmed in a bulk log preview, as them.
 //   POST   /ai/tidy-note      { text } -> { text }   the same note with spelling, punctuation and speech-to-text slips fixed
 export const aiRouter = Router();
@@ -166,7 +169,7 @@ aiRouter.post('/chat', express.text({ type: '*/*', limit: '40mb' }), async (req,
         const toSave = chatId ? [asMsg(history[history.length - 1])] : history.map(asMsg);
         saved = await saveTurn(req.rep!.id, chatId, history[0].content, chatId ? keep : null, [...toSave, { role: 'assistant' as const, content: r.reply, meta: { tools: [...new Set(r.tools)], steps: r.steps, files: r.files, charts: r.charts, thinking: raw?.think === true } }]);
       } catch (e) { console.error('saving the chat failed', e); }
-      send({ type: 'done', reply: r.reply, tools: [...new Set(r.tools)], steps: r.steps, files: r.files, charts: r.charts, proposal: r.proposal, orderProposal: r.orderProposal, chatId: saved?.chatId ?? null, title: saved?.title ?? null, usage: { inputTokens: r.inputTokens, outputTokens: r.outputTokens, calls: r.calls } });
+      send({ type: 'done', reply: r.reply, tools: [...new Set(r.tools)], steps: r.steps, files: r.files, charts: r.charts, proposal: r.proposal, orderProposal: r.orderProposal, templateProposal: r.templateProposal, chatId: saved?.chatId ?? null, title: saved?.title ?? null, usage: { inputTokens: r.inputTokens, outputTokens: r.outputTokens, calls: r.calls } });
     } catch (e) {
       if (!stop.signal.aborted) { console.error('claude chat failed', e); send({ type: 'error', error: aiProblem(e).message }); }
     }
@@ -197,6 +200,16 @@ aiRouter.post('/show-order/confirm', async (req, res) => {
     if (e instanceof TsError) return res.status(e.status).json({ error: e.message });
     console.error('assistant order failed', e);
     res.status(500).json({ error: 'Making the draft failed. Nothing was saved. Try again.' });
+  }
+});
+
+// Pressing Save template on an email template preview: everything is checked again, then the new links and the template are saved as the signed-in person.
+aiRouter.post('/template/confirm', async (req, res) => {
+  try { res.status(201).json(await saveNewTemplate(req.rep!, req.body)); }
+  catch (e) {
+    if (e instanceof ToolsError) return res.status(e.status).json({ error: e.message });
+    console.error('assistant template failed', String((e as Error)?.message ?? e).slice(0, 200));
+    res.status(500).json({ error: 'Saving the template failed. Try again.' });
   }
 });
 

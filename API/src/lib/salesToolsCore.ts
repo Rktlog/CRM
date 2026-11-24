@@ -133,3 +133,34 @@ export function cleanLink(nameIn: unknown, urlIn: unknown): { name: string; url:
   if (u.username || u.password) return { error: 'The link has a name or password in it. Use the plain link.' };
   return { name, url: u.href.replace(/\(/g, '%28').replace(/\)/g, '%29') };
 }
+
+// ---- the assistant saving a NEW template ----
+export type TemplateAsk = { name?: unknown; subject?: unknown; body?: unknown; links?: unknown };
+export type TemplatePlan = { name: string; subject: string; body: string; newLinks: LinkRef[]; reusedLinks: string[]; preview: { subject: string; body: string } };
+export const MAX_NEW_LINKS = 5;
+/** Works out what saving a new template would do, without saving anything: the problems (empty means it can go ahead), the links that would be added, and the preview.
+ *  `savedLinks` and `takenNames` (the names of every template, built-in ones included) come from the database. */
+export function planTemplate(ask: TemplateAsk, savedLinks: LinkRef[], takenNames: string[]): { plan: TemplatePlan } | { problems: string[] } {
+  const problems: string[] = [];
+  const name = String(ask?.name ?? '').trim().replace(/\s+/g, ' ');
+  if (!name) problems.push('The template needs a name.');
+  else if (name.length > 60) problems.push('The name is too long (60 characters at most).');
+  else if (takenNames.some(n => norm(n) === norm(name))) problems.push(`There is already a template called "${name}". The assistant only adds new templates. Choose another name, or change that one on the Sales Tools page.`);
+  const subject = String(ask?.subject ?? '').trim(), body = String(ask?.body ?? '').replace(/\r\n?/g, '\n').replace(/\s+$/, '');
+
+  const asked = Array.isArray(ask?.links) ? (ask.links as any[]).filter(l => l && typeof l === 'object') : [];
+  if (asked.length > MAX_NEW_LINKS) problems.push(`At most ${MAX_NEW_LINKS} new links at a time.`);
+  const newLinks: LinkRef[] = [], reused: string[] = [];
+  for (const l of asked.slice(0, MAX_NEW_LINKS)) {
+    const c = cleanLink(l.name, l.url);
+    if ('error' in c) { problems.push(`Link "${String(l.name ?? '').slice(0, 60)}": ${c.error}`); continue; }
+    const have = savedLinks.find(x => norm(x.name) === norm(c.name));
+    if (have) { if (have.url === c.url) reused.push(have.name); else problems.push(`A link called "${have.name}" is already saved with a different address. Use another name for the new one.`); continue; }
+    if (newLinks.some(x => norm(x.name) === norm(c.name))) { problems.push(`The link name "${c.name}" is used twice.`); continue; }
+    newLinks.push(c);
+  }
+  const all = [...savedLinks, ...newLinks];
+  problems.push(...checkTemplate(subject, body, all));
+  if (problems.length) return { problems };
+  return { plan: { name, subject, body, newLinks, reusedLinks: reused, preview: { subject: fill(subject, SAMPLE, all).text, body: fill(body, SAMPLE, all).text } } };
+}

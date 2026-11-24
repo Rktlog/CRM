@@ -3,7 +3,8 @@ import { apiGet, apiPut, apiPatch, apiDelete, apiDownload } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import DictationTextarea from '../components/DictationTextarea';
 import { Markdown } from '../lib/markdown';
-import { streamChat, MadeFile, SendMessage, Step, Chart, LogProposal, OrderProposal } from '../lib/aiStream';
+import { streamChat, MadeFile, SendMessage, Step, Chart, LogProposal, OrderProposal, TemplateProposal } from '../lib/aiStream';
+import TemplatePreview from '../components/TemplatePreview';
 import LogPreview from '../components/LogPreview';
 import OrderPreview from '../components/OrderPreview';
 import { ACCEPT, Pending, acceptFiles, readFile, sizeLabel } from '../lib/attachments';
@@ -11,16 +12,16 @@ import { chartSrc, downloadSvg, downloadPng } from '../lib/chartDownload';
 
 // Claude, inside the CRM. Ask anything, in words or with the microphone. It looks things up in your data, summarises,
 // forecasts, prices, draws charts, writes reports (Excel, CSV, Word, PDF) and reads files you attach. It reads only what you
-// can already see; what it writes is Activity Log entries and draft trade show orders, and only after a preview is confirmed. Chats are saved for you alone, in the list on the left, and you can search, rename,
+// can already see; what it writes is Activity Log entries, draft trade show orders and new email templates, and only after a preview is confirmed. Chats are saved for you alone, in the list on the left, and you can search, rename,
 // reopen and delete them. Managers set the company's instructions and the reply settings under Settings.
 
 type Att = { name: string; type: string; size: number; data?: string };   // data is there only for files attached in this visit
-type Msg = { role: 'user' | 'assistant'; content: string; attachments?: Att[]; files?: MadeFile[]; tools?: string[]; steps?: Step[]; charts?: Chart[]; proposal?: LogProposal | null; orderProposal?: OrderProposal | null; stopped?: boolean; thinking?: boolean };
+type Msg = { role: 'user' | 'assistant'; content: string; attachments?: Att[]; files?: MadeFile[]; tools?: string[]; steps?: Step[]; charts?: Chart[]; proposal?: LogProposal | null; orderProposal?: OrderProposal | null; templateProposal?: TemplateProposal | null; stopped?: boolean; thinking?: boolean };
 type ChatSummary = { id: string; title: string; updatedAt: string; messages: number };
 type Settings = { enabled: boolean; maxReplyTokens: number; perRequestTokens: number; userDailyTokens: number; monthlyTokens: number; monthlyUsd: number; usdPerMInput: number; usdPerMOutput: number; thinkingBudgetTokens: number; chatRetentionDays: number; instructions: string };
 type Status = { configured: boolean; settings: Settings; instructionsSet: boolean; usage: { userDayTokens: number; monthTokens: number; monthCostUsd: number | null }; blocked: string | null };
 
-const TOOL_WORDS: Record<string, string> = { find_accounts: 'Accounts', account_details: 'The customer', order_details: 'The order', open_quotes: 'Open quotes', product_lookup: 'Products', run_report: 'Report data', create_file: 'A file', query_data: 'CRM data', calculate: 'Calculation', make_chart: 'A chart', show_order: 'The trade show order', log_activity: 'Log preview' };
+const TOOL_WORDS: Record<string, string> = { save_template: 'Email template', find_accounts: 'Accounts', account_details: 'The customer', order_details: 'The order', open_quotes: 'Open quotes', product_lookup: 'Products', run_report: 'Report data', create_file: 'A file', query_data: 'CRM data', calculate: 'Calculation', make_chart: 'A chart', show_order: 'The trade show order', log_activity: 'Log preview' };
 const SUGGESTIONS = [
   'Summarise our open quotes older than 30 days and tell me who to chase first',
   'Who owes us money, and how overdue is it?',
@@ -148,7 +149,7 @@ function AssistantPage() {
           if (e.type === 'text') { acc += e.delta; setLive(acc); setStatusLine(''); }
           else if (e.type === 'reset') { acc = ''; setLive(''); }
           else if (e.type === 'status') setStatusLine(e.text);
-          else if (e.type === 'done') { setMessages([...history, { role: 'assistant', content: e.reply, files: e.files, tools: e.tools, steps: e.steps, charts: e.charts, proposal: e.proposal, orderProposal: e.orderProposal, thinking: think }]); if (e.chatId) setChatId(e.chatId); acc = ''; }
+          else if (e.type === 'done') { setMessages([...history, { role: 'assistant', content: e.reply, files: e.files, tools: e.tools, steps: e.steps, charts: e.charts, proposal: e.proposal, orderProposal: e.orderProposal, templateProposal: e.templateProposal, thinking: think }]); if (e.chatId) setChatId(e.chatId); acc = ''; }
           else if (e.type === 'error') setError(e.error);
         },
       });
@@ -249,7 +250,7 @@ function AssistantPage() {
         </div>
       </div>
       <div className="acct-region" style={{ marginBottom: 10, maxWidth: 780 }}>
-        Ask anything. It can look things up in your CRM, summarise, forecast, price, draw charts, write reports (Excel, CSV, Word, PDF) and read files you attach. It reads only what you can already see. It can fill in the Activity Log for you, but only after you check a preview and press Confirm. At a trade show, tell it an order (customer, products, colours, quantities) and it prepares a draft order for you to check.
+        Ask anything. It can look things up in your CRM, summarise, forecast, price, draw charts, write reports (Excel, CSV, Word, PDF) and read files you attach. It reads only what you can already see. It can fill in the Activity Log for you, but only after you check a preview and press Confirm. At a trade show, tell it an order (customer, products, colours, quantities) and it prepares a draft order for you to check. Give it an email and it can save it as a template for the sales team, after you check a preview and press Save template.
         Your chats are saved for you alone{status && s && s.chatRetentionDays > 0 ? ` and kept for ${s.chatRetentionDays} days` : ''}.
       </div>
 
@@ -336,6 +337,7 @@ function AssistantPage() {
                   ))}
                   {m.proposal && m.proposal.rows.length > 0 && <LogPreview proposal={m.proposal} />}
                   {m.orderProposal && m.orderProposal.lines.length > 0 && <OrderPreview proposal={m.orderProposal} />}
+                  {m.templateProposal && <TemplatePreview proposal={m.templateProposal} />}
                   {m.files && m.files.length > 0 && (
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
                       {m.files.map(f => <button key={f.id} type="button" className="btn secondary" onClick={() => apiDownload(`/ai/files/${f.id}`, f.name).catch(e => setError(e.message))}>⬇ {f.name} ({sizeLabel(f.size)})</button>)}

@@ -55,6 +55,7 @@ import { renderChart, specFromRows, ChartError, ChartSpec, ChartType } from './a
 import * as XLSX from 'xlsx';
 import { MAX_ENTRIES, previewEntries, previewSummary, LogProposal } from './aiLog';
 import { MAX_ITEMS, orderSummary, previewShowOrder, type OrderProposal } from './aiShowOrder';
+import { previewNewTemplate, templateSummary, type TemplateProposal } from './aiTemplate';
 
 // What the assistant can look up. Almost everything is read only. The one thing that writes is log_activity, and it only saves after the person presses
 // Confirm on the preview. Each tool checks the same territory rule as the rest of the app, so the assistant never shows someone another
@@ -65,6 +66,7 @@ export type Ctx = {
   addFile?: (f: { name: string; mime: string; buffer: Buffer }) => Promise<MadeFile>;   // keeps a file the assistant made, for the person to download
   addChart?: (c: { title: string; svg: string }) => void;                      // shows a chart in the chat
   addProposal?: (p: LogProposal) => void;                                      // shows a bulk log preview with a Confirm button (log_activity). Saves nothing.
+  addTemplateProposal?: (p: TemplateProposal) => void;                          // shows a new email template preview with a Save template button (save_template). Saves nothing.
   addOrderProposal?: (p: OrderProposal) => void;                               // shows a trade show order preview with a Create draft button (show_order). Saves nothing.
   attachments?: Attachment[];                                                  // the files the person has attached in this chat, for the data sets that read them
 };
@@ -245,6 +247,25 @@ Rules: never guess a quantity, a colour or a customer. If something is unclear t
         },
       },
       required: ['items'],
+    },
+  },
+  {
+    name: 'save_template',
+    description: `Prepare a NEW saved email template for the sales team ("save this as a template called Engelite preorder"). This only builds a PREVIEW: a Save template button is shown in the chat and NOTHING is saved until the person presses it. It can only add a new template. It cannot change or delete one, and it cannot touch the payment reminder, abandoned cart or order email (a manager changes those on the Sales Tools page).
+Keep the person's wording EXACTLY. Only change: the customer's first name becomes [Name] (for example "Hi Morgana" becomes "Hi [Name]"), an order or quote number becomes [Number], and every web link becomes [Link: name | the words shown] (or [Link: name] to show the name itself). For each web link in the text, give a short plain name (like "Engelite preorder") in links with its address. A link that is already saved is used by its name. Never put a web address in the body itself.
+Rules: do not make up wording, do not tidy or shorten it, and never invent a link address. If there is no subject, ask for one. If the preview lists problems, fix them (or ask) and call save_template again with the COMPLETE template.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'The template name, e.g. "Engelite preorder"' },
+        subject: { type: 'string', description: 'The subject line (it can use [Name], [Number] and [Brands], but no links)' },
+        body: { type: 'string', description: 'The email text, using [Name], [Number], [Brands] and [Link: name | words]' },
+        links: {
+          type: 'array', description: 'Web links in the body that are not saved yet: a short name and the address',
+          items: { type: 'object', properties: { name: { type: 'string' }, url: { type: 'string' } }, required: ['name', 'url'] },
+        },
+      },
+      required: ['name', 'subject', 'body'],
     },
   },
   {
@@ -457,6 +478,12 @@ export async function runTool(name: string, input: any, ctx: Ctx): Promise<strin
         const p = await previewShowOrder(ctx.rep, { customer: input?.customer, accountId: input?.accountId, show: input?.show, kind: input?.kind, items: input?.items }, ctx.today);
         if ('lines' in p) ctx.addOrderProposal(p);
         return out(orderSummary(p), 20000);
+      }
+      case 'save_template': {
+        if (!ctx.addTemplateProposal) return out({ error: 'Saving a template cannot be done here' });
+        const p = await previewNewTemplate({ name: input?.name, subject: input?.subject, body: input?.body, links: input?.links });
+        if ('plan' in p) ctx.addTemplateProposal(p.plan);
+        return out(templateSummary(p), 20000);
       }
       case 'calculate': {
         try { return out({ results: runCalculations(input?.calculations) }); }
