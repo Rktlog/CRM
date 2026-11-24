@@ -2,7 +2,7 @@ import { ReactNode } from 'react';
 import { Link, NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 
-// Small pieces the Marketing screens share.
+// Small pieces the Email Builder screens share.
 const TONES = {
   ok: { background: '#e3efe9', color: '#2f6b5e' }, warn: { background: '#fbefd9', color: '#9a6212' },
   bad: { background: '#f7e1da', color: '#a2402a' }, muted: { background: '#eceee6', color: '#5b6573' },
@@ -12,21 +12,21 @@ export function Pill({ tone = 'muted', children }: { tone?: keyof typeof TONES; 
 }
 
 const TABS = [
-  { to: '/marketing', label: 'Dashboard', end: true }, { to: '/marketing/campaigns', label: 'Campaigns' }, { to: '/marketing/audience', label: 'Audience' },
+  { to: '/marketing/campaigns', label: 'Campaigns' }, { to: '/marketing/audience', label: 'Audience' },
   { to: '/marketing/templates', label: 'Templates' }, { to: '/marketing/automations', label: 'Automatic emails' }, { to: '/marketing/settings', label: 'Settings' },
 ];
 export function MarketingNav() {
   return (
-    <div className="tab-bar" style={{ margin: '4px 0 14px', flexWrap: 'wrap' }} aria-label="Marketing">
-      {TABS.map(t => <NavLink key={t.to} to={t.to} end={t.end} className={({ isActive }) => 'tab' + (isActive ? ' active' : '')}>{t.label}</NavLink>)}
+    <div className="tab-bar" style={{ margin: '4px 0 14px', flexWrap: 'wrap' }} aria-label="Email Builder">
+      {TABS.map(t => <NavLink key={t.to} to={t.to} className={({ isActive }) => 'tab' + (isActive ? ' active' : '')}>{t.label}</NavLink>)}
     </div>
   );
 }
 
-// Marketing is for managers. Anyone else is told, not shown a broken page.
+// The Email Builder is for managers. Anyone else is told, not shown a broken page.
 export function ManagersOnly({ children }: { children: ReactNode }) {
   const { role } = useAuth();
-  if (role && role !== 'manager') return <div className="empty-state">Marketing is for managers.</div>;
+  if (role && role !== 'manager') return <div className="empty-state">The Email Builder is for managers.</div>;
   return <>{children}</>;
 }
 
