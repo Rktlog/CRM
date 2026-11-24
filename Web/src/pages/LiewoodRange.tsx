@@ -128,7 +128,7 @@ export default function LiewoodRange() {
         {err && <div className="save-msg err" role="alert">{err}</div>}
         {!err && !data && <div className="acct-region">Loading…</div>}
         {data && data.orderSkusNotInRange > 0 && (
-          <div className="save-msg err" style={{ maxWidth: 900 }}>{data.orderSkusNotInRange} SKU{data.orderSkusNotInRange === 1 ? ' is' : 's are'} on uploaded Liewood sales orders but not in the range: no season file has {data.orderSkusNotInRange === 1 ? 'it' : 'them'}. Add the season's Product Data file and Customer Forecast Form.</div>
+          <div className="save-msg err" style={{ maxWidth: 900 }}>{data.orderSkusNotInRange} SKU{data.orderSkusNotInRange === 1 ? ' is' : 's are'} on uploaded Liewood sales orders but not in the range. Import the Product Range List for older SKUs, and add the season's Product Data file and Customer Forecast Form for new ones.</div>
         )}
         {data && items.length === 0 && <div className="empty-state">The range is empty.{isManager ? ' Import the Product Range List above to start it.' : ''}</div>}
         {items.length > 0 && (

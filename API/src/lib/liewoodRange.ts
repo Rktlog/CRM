@@ -70,7 +70,7 @@ export async function importRangeList(repId: string, buf: Buffer): Promise<Range
       select t.*, 'master', ${repId}::uuid from unnest(${R.map(x => x.sku)}::text[], ${R.map(x => x.ean)}::text[], ${R.map(x => x.name)}::text[], ${R.map(x => x.colour)}::text[], ${R.map(x => x.season)}::text[],
         ${R.map(x => x.essential)}::text[], ${R.map(x => x.subbrand)}::text[], ${R.map(x => x.category)}::text[], ${R.map(x => x.subCategory)}::text[], ${R.map(x => x.productType)}::text[],
         ${R.map(x => x.orderIncrement)}::int[], ${R.map(x => x.dropEur)}::text[], ${R.map(x => x.dropAus)}::text[], ${R.map(x => x.ranged)}::text[], ${R.map(x => x.status)}::text[],
-        ${R.map(x => dec(x.wspEur))}::numeric[], ${R.map(x => dec(x.proposedRrp))}::numeric[])
+        ${R.map(x => dec(x.wspEur))}::text[]::numeric[], ${R.map(x => dec(x.proposedRrp))}::text[]::numeric[])
         as t(sku, ean, name, colour, season, essential, subbrand, category, sub_category, product_type, order_increment, drop_eur, drop_aus, ranged, status, wsp_eur, proposed_rrp)
       on conflict (sku) do update set ean = excluded.ean, name = excluded.name, colour = excluded.colour, season = excluded.season, essential = excluded.essential, subbrand = excluded.subbrand,
         category = excluded.category, sub_category = excluded.sub_category, product_type = excluded.product_type, order_increment = excluded.order_increment, drop_eur = excluded.drop_eur,
@@ -133,7 +133,7 @@ export async function importSeasonFile(buf: Buffer, fileName: string): Promise<S
         insert into crm.lw_catalogue as c (sku, ean, style_no, style_name, colour_code, colour, size, season_code, essentials, development, drop_delivery, sales_multiple, wsp_eur_stock, wsp_eur_pre, rrp_eur, brand, lw_category, lw_sub_category, lw_product_type, product_file, product_at)
         select t.*, ${file}, now() from unnest(${P.map(x => x.sku)}::text[], ${P.map(x => x.ean)}::text[], ${P.map(x => x.styleNo)}::text[], ${P.map(x => x.styleName)}::text[], ${P.map(x => x.colourCode)}::text[],
           ${P.map(x => x.colour)}::text[], ${P.map(x => x.size)}::text[], ${P.map(x => x.seasonCode)}::text[], ${P.map(x => x.essentials)}::text[], ${P.map(x => x.development)}::text[], ${P.map(x => x.dropDelivery)}::text[],
-          ${P.map(x => x.salesMultiple)}::int[], ${P.map(x => dec(x.wspEurStock))}::numeric[], ${P.map(x => dec(x.wspEurPre))}::numeric[], ${P.map(x => dec(x.rrpEur))}::numeric[], ${P.map(x => x.brand)}::text[],
+          ${P.map(x => x.salesMultiple)}::int[], ${P.map(x => dec(x.wspEurStock))}::text[]::numeric[], ${P.map(x => dec(x.wspEurPre))}::text[]::numeric[], ${P.map(x => dec(x.rrpEur))}::text[]::numeric[], ${P.map(x => x.brand)}::text[],
           ${P.map(x => x.category)}::text[], ${P.map(x => x.subCategory)}::text[], ${P.map(x => x.productType)}::text[])
           as t(sku, ean, style_no, style_name, colour_code, colour, size, season_code, essentials, development, drop_delivery, sales_multiple, wsp_eur_stock, wsp_eur_pre, rrp_eur, brand, lw_category, lw_sub_category, lw_product_type)
         on conflict (sku) do update set ean = coalesce(excluded.ean, c.ean), style_no = excluded.style_no, style_name = excluded.style_name, colour_code = excluded.colour_code, colour = excluded.colour,
@@ -146,7 +146,7 @@ export async function importSeasonFile(buf: Buffer, fileName: string): Promise<S
         insert into crm.lw_catalogue as c (sku, ean, f_style_name, f_colour, f_size, f_category, f_sub_category, f_product_type, f_eta, f_increment, rrp_aud, ws_aud, forecast_file, forecast_at)
         select t.*, ${file}, now() from unnest(${F.map(x => x.sku)}::text[], ${F.map(x => x.ean)}::text[], ${F.map(x => x.styleName)}::text[], ${F.map(x => x.colour)}::text[], ${F.map(x => x.size)}::text[],
           ${F.map(x => x.category)}::text[], ${F.map(x => x.subCategory)}::text[], ${F.map(x => x.productType)}::text[], ${F.map(x => x.eta)}::text[], ${F.map(x => x.increment)}::int[],
-          ${F.map(x => dec(x.rrpAud))}::numeric[], ${F.map(x => dec(x.wsAud))}::numeric[])
+          ${F.map(x => dec(x.rrpAud))}::text[]::numeric[], ${F.map(x => dec(x.wsAud))}::text[]::numeric[])
           as t(sku, ean, f_style_name, f_colour, f_size, f_category, f_sub_category, f_product_type, f_eta, f_increment, rrp_aud, ws_aud)
         on conflict (sku) do update set ean = coalesce(c.ean, excluded.ean), f_style_name = excluded.f_style_name, f_colour = excluded.f_colour, f_size = excluded.f_size, f_category = excluded.f_category,
           f_sub_category = excluded.f_sub_category, f_product_type = excluded.f_product_type, f_eta = excluded.f_eta, f_increment = excluded.f_increment, rrp_aud = excluded.rrp_aud, ws_aud = excluded.ws_aud,
