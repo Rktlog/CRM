@@ -66,18 +66,36 @@ export function EmailComposerModal({ open, onClose, target, name, defaultTo, def
   const [sigMode, setSigMode] = useState<SigMode>('none');
   const [files, setFiles] = useState<FileRow[]>([]);
   const [fileNote, setFileNote] = useState<string | null>(null);
+  const [choices, setChoices] = useState<{ key: string; name: string }[]>([]);   // saved templates (Sales Tools) this email can start from
+  const [savedLinks, setSavedLinks] = useState<{ id: string; name: string; url: string }[]>([]);   // saved links (Sales Tools)
+  const [toolNote, setToolNote] = useState<string | null>(null);
   const clientId = useRef(newId());   // one per email: pressing Send twice can only ever send it once
   const sending = useRef(false);      // locks the Send button the instant it is pressed, before the screen has had time to update
   const filesRef = useRef<FileRow[]>([]); filesRef.current = files;
   const targetBody = target.kind === 'account' ? { accountId: target.accountId } : target.kind === 'order' ? { orderId: target.orderId } : { cartKey: target.cartKey };
   const query = target.kind === 'account' ? `accountId=${target.accountId}` : target.kind === 'order' ? `orderId=${target.orderId}` : `cartKey=${encodeURIComponent(target.cartKey)}`;
 
+  async function useTemplate(key: string) {
+    if (!key) return;
+    const typed = body.trim() && body !== defaultBody;
+    if (typed && !window.confirm('Replace what you have written with this template?')) return;
+    setToolNote(null);
+    try {
+      const t: { subject: string; body: string; missing: string[] } = await apiPost('/email-send/apply-template', { ...targetBody, key });
+      setSubject(t.subject); setBody(t.body);
+      if (t.missing?.length) setToolNote(`These links are not saved any more, so only their names were put in: ${t.missing.join(', ')}.`);
+    } catch (e) { setToolNote(msg(e)); }
+  }
+  const addLink = (id: string) => { const l = savedLinks.find(x => x.id === id); if (l) setBody(prev => `${prev.replace(/\s+$/, '')}${prev.trim() ? '\n\n' : ''}[${l.name}](${l.url})`); };
   const loadStatus = () => apiGet('/email-send/status', { fresh: true }).then((s: Status) => setStatus(s)).catch((e: unknown) => setError(msg(e)));
   useEffect(() => {
     if (!open) return;
     setStep('compose'); setError(null); setUnknown([]); setConfirmed(false); setResult(null); setDraftLink(null); setEditingSig(false); setFiles([]); setFileNote(null); setSig(null);
     setTo(defaultTo ?? ''); setCc(''); setSubject(defaultSubject); setBody(defaultBody); clientId.current = newId();
     void loadStatus();
+    setChoices([]); setSavedLinks([]); setToolNote(null);
+    if (!replyThreadId) apiGet(`/email-send/templates?${query}`, { fresh: true }).then((c: { key: string; name: string }[]) => setChoices(Array.isArray(c) ? c : [])).catch(() => undefined);
+    apiGet('/sales-tools/links', { fresh: true }).then((d: { links: { id: string; name: string; url: string }[] }) => setSavedLinks(d.links ?? [])).catch(() => undefined);
     if (!defaultTo) apiGet(`/email-send/known?${query}`, { fresh: true }).then((d: { known: string[] }) => setTo(prev => prev || (d.known[0] ?? ''))).catch(() => undefined);
     // the team's template for a cart, and the order number and a greeting for an order (not for a reply: that answers what they wrote)
     if (!replyThreadId && target.kind !== 'account') apiGet(`/email-send/template?${query}`, { fresh: true }).then((t: { subject: string; body: string }) => {
@@ -182,6 +200,25 @@ export function EmailComposerModal({ open, onClose, target, name, defaultTo, def
             <label className="modal-field">To<input value={to} onChange={e => setTo(e.target.value)} placeholder="name@shop.com.au, separate several with commas" /></label>
             <label className="modal-field">Cc (optional)<input value={cc} onChange={e => setCc(e.target.value)} /></label>
             <label className="modal-field">Subject<input value={subject} onChange={e => setSubject(e.target.value)} maxLength={300} /></label>
+            {(choices.length > 0 || savedLinks.length > 0) && (
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', margin: '2px 0 8px' }}>
+                {choices.length > 0 && !replyThreadId && (
+                  <label className="acct-region" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>Start from a saved email
+                    <select aria-label="Start from a saved email" value="" onChange={e => { void useTemplate(e.target.value); e.target.value = ''; }}>
+                      <option value="">Choose…</option>{choices.map(c => <option key={c.key} value={c.key}>{c.name}</option>)}
+                    </select>
+                  </label>
+                )}
+                {savedLinks.length > 0 && (
+                  <label className="acct-region" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>Add a saved link
+                    <select aria-label="Add a saved link" value="" onChange={e => { addLink(e.target.value); e.target.value = ''; }}>
+                      <option value="">Choose…</option>{savedLinks.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                    </select>
+                  </label>
+                )}
+              </div>
+            )}
+            {toolNote && <div className="save-msg err" role="alert" style={{ marginBottom: 6 }}>{toolNote}</div>}
             <label className="modal-field">Email
               <DictationTextarea value={body} onChange={setBody} rows={10} placeholder="Write it, or press the microphone and say it" />
             </label>

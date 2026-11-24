@@ -29,6 +29,7 @@ import { liewoodRouter } from './routes/liewood';
 import { tradeshowRouter } from './routes/tradeshow';
 import { tradeshowExtraRouter } from './routes/tradeshowExtra';
 import { promosRouter } from './routes/promos';
+import { salesToolsRouter } from './routes/salesTools';
 import { dropboxRouter, dropboxCallbackRouter } from './routes/dropbox';
 import { mediaRouter } from './routes/media';
 import { emailSendRouter } from './routes/emailSend';
@@ -105,6 +106,7 @@ app.use('/ai', requireAuth, aiRouter);
 app.use('/ordering', requireAuth, orderingRouter);   // the Ordering page (managers): what to order, from the database
 app.use('/mkt', requireAuth, marketingDashboardRouter);   // the marketing dashboard (managers only)
 app.use('/liewood', requireAuth, liewoodRouter);   // Liewood orders against their DEAR purchase orders
+app.use('/sales-tools', requireAuth, salesToolsRouter);   // saved links and email templates for the sales team
 app.use('/promos', requireAuth, promosRouter);   // promos: the list, the promos given to each customer and allocated to their orders, and the orders that used each one
 app.use('/tradeshow', requireAuth, tradeshowExtraRouter);   // trade shows part 2: offers, freight rates, payments, appointments, checklist, feedback, history, comparison, Ask Claude (before tradeshowRouter)
 app.use('/tradeshow', requireAuth, tradeshowRouter);   // trade shows: orders, leads, follow-ups

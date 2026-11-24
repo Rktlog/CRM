@@ -13,7 +13,9 @@ import { sendRawMessage } from './gmail/alertSend';
 import { gmailSignature, replyHeaders, createDraftRaw, type SigResult, type ReplyHeaders } from './gmail/composeApi';
 import { bodyToHtml, bodyToText, buildMime, escapeHtml, htmlToText, sanitizeHtml, type Attachment } from './emailHtml';
 import { AttachError, forgetAttachments, loadAttachments } from './emailAttachments';
-import { cartTemplate, orderTemplate, type Template } from './emailTemplates';
+import { cartTemplate, firstNames, orderTemplateSaved, type Template } from './emailTemplates';
+import * as tools from './salesTools';
+import type { Vars } from './salesToolsCore';
 import { canSeeAccount } from './territory';
 import { parseFollowUp } from './followup';
 
@@ -307,8 +309,33 @@ export async function getGmailSignature(rep: Rep, d: Deps = realDeps): Promise<G
 export async function templateFor(rep: Rep, q: { accountId?: unknown; cartKey?: unknown; orderId?: unknown }, d: Deps = realDeps): Promise<Template> {
   const t = await resolveTarget(rep, q.accountId, q.cartKey, d, q.orderId);
   if (t.kind === 'cart') return cartTemplate(t.cartKey);
-  if (t.kind === 'order') return orderTemplate(t.orderNumber ?? '', t.orderContact);
+  if (t.kind === 'order') return orderTemplateSaved(t.orderNumber ?? '', t.orderContact);
   return { subject: '', body: '' };
+}
+
+/** Who the email is for and what it is about, in the words a template needs: the contact's first names, the order number, the brands in a cart. */
+async function varsFor(t: Resolved): Promise<Vars & { hasNumber: boolean }> {
+  if (t.kind === 'order') return { names: firstNames(t.orderContact), number: t.orderNumber, hasNumber: !!t.orderNumber };
+  if (t.kind === 'account') {
+    const [a] = await prisma.$queryRaw<{ contact_name: string | null }[]>`select contact_name from crm.accounts where id = ${t.accountId}::uuid`;
+    return { names: firstNames(a?.contact_name), number: null, hasNumber: false };
+  }
+  const key = t.cartKey ?? '', [at, email] = [key.split('|')[0] ?? '', (key.split('|')[1] ?? '').toLowerCase()];
+  const lines = await prisma.$queryRaw<{ contact: string; product_name: string }[]>`select contact, product_name from crm.abandoned_cart_lines where abandoned_at = ${at}::timestamp and lower(btrim(email)) = ${email}`;
+  const names = [...new Set(lines.flatMap(l => firstNames(l.contact)))].slice(0, 4);
+  const found = lines.length ? await prisma.$queryRaw<{ brand: string | null }[]>`select distinct brand from crm.products where lower(name) = any(${lines.map(l => l.product_name.toLowerCase())}::text[]) and brand is not null and btrim(brand) <> ''` : [];
+  return { names, number: null, brands: found.map(f => String(f.brand).trim()), hasNumber: false };
+}
+/** The saved templates the person can start this email from (the ones that need a number are left out when there is none). */
+export async function templateChoices(rep: Rep, q: { accountId?: unknown; cartKey?: unknown; orderId?: unknown }, d: Deps = realDeps) {
+  const t = await resolveTarget(rep, q.accountId, q.cartKey, d, q.orderId);
+  return tools.templatesFor(await varsFor(t));
+}
+/** One saved template filled in for this customer, to put in the email window. The person can still change every word. */
+export async function applyTemplate(rep: Rep, q: { accountId?: unknown; cartKey?: unknown; orderId?: unknown; key?: unknown }, d: Deps = realDeps) {
+  const t = await resolveTarget(rep, q.accountId, q.cartKey, d, q.orderId);
+  try { return await tools.renderAny(String(q.key ?? ''), await varsFor(t)); }
+  catch (e) { if (e instanceof tools.ToolsError) throw new SendError(e.message, e.status); throw e; }
 }
 
 /** An Email activity on the account, with what logging one by hand does: a new lead becomes approached, and "follow up in 3 weeks" sets the reminder. */

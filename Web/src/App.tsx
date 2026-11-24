@@ -45,6 +45,7 @@ import TradeShowOrder from './pages/TradeShowOrder';
 import TradeShowCompare from './pages/TradeShowCompare';
 import TradeShowLead from './pages/TradeShowLead';
 import Promos from './pages/Promos';
+import SalesTools from './pages/SalesTools';
 import PromoDetail from './pages/PromoDetail';
 
 function RequireAuth({ children }: { children: JSX.Element }) {
@@ -109,6 +110,7 @@ function Routed() {
         <Route path="activity" element={<ActivityLog />} />
         <Route path="assistant" element={<Assistant />} />
         <Route path="promos" element={<Promos />} />
+        <Route path="sales-tools" element={<SalesTools />} />
         <Route path="promos/:id" element={<PromoDetail />} />
         <Route path="ordering" element={<Ordering />} />
         {/* the old address for this page */}
