@@ -3,6 +3,7 @@
 // Words in square brackets are filled in for each email:
 //   [Name]          the contact's first name (or "there" if there is none)       [Number]   the quote or order number
 //   [Brands]        for the abandoned cart: "some great Brand and Brand Items"    [Link: Name]  a saved link, shown as its name
+//   [Link: Name | some words]   a saved link, shown as "some words" (the address is still changed in one place, on the Links tab)
 // A link already written as [words](https://address) is left alone.
 
 export const joinAnd = (l: string[]): string => (l.length <= 1 ? (l[0] ?? '') : `${l.slice(0, -1).join(', ')} and ${l[l.length - 1]}`);
@@ -12,6 +13,7 @@ export const PLACEHOLDER_HELP: { tag: string; means: string }[] = [
   { tag: '[Number]', means: 'the quote or order number' },
   { tag: '[Brands]', means: 'abandoned cart: "some great (brands) Items", from what is in the cart' },
   { tag: '[Link: name]', means: 'a link saved on the Links tab, shown as its name' },
+  { tag: '[Link: name | words]', means: 'the same link, shown as the words you choose' },
 ];
 
 export type BuiltInKey = 'payment_reminder' | 'abandoned_cart' | 'order_email';
@@ -61,8 +63,9 @@ Look forward to seeing your order come through!`,
 export type Vars = { names?: string[]; number?: string | null; brands?: string[] };
 export type LinkRef = { name: string; url: string };
 const TOKEN = /\[(Name|Number|Brands)\](?!\()/gi;
-const LINKTOKEN = /\[Link:\s*([^\]\n]{1,80}?)\s*\](?!\()/gi;
-const ANY = /\[([^\]\n]{1,80})\](?!\()/g;
+const LINKTOKEN = /\[Link:\s*([^\]|\[\n]{1,80}?)\s*(?:\|\s*([^\]\[\n]{1,120}?)\s*)?\](?!\()/gi;
+const ANY = /\[([^\]\n]{1,220})\](?!\()/g;
+const LINKWORDS = /^link:\s*([^|]+?)\s*(?:\|\s*(.*?)\s*)?$/i;
 const norm = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
 
 /** Fill in one piece of text. A [Link: name] that is not saved is shown as just the name, and is returned in `missing`. */
@@ -75,10 +78,11 @@ export function fill(text: string, v: Vars, links: LinkRef[] = []): { text: stri
       if (w === 'number') return v.number ?? '';
       return brands.length ? `some great ${joinAnd(brands.slice(0, 3))} Items` : 'some great items';
     })
-    .replace(LINKTOKEN, (_m, n: string) => {
+    .replace(LINKTOKEN, (_m, n: string, words: string | undefined) => {
       const l = links.find(x => norm(x.name) === norm(n));
-      if (!l) { missing.push(n); return n; }
-      return `[${l.name}](${l.url})`;
+      const shown = words?.trim() || l?.name || n;
+      if (!l) { missing.push(n); return shown; }
+      return `[${shown}](${l.url})`;
     });
   return { text: out, missing };
 }
@@ -96,7 +100,7 @@ export function checkTemplate(subject: string, body: string, links: LinkRef[]): 
     for (const m of text.matchAll(ANY)) {
       const inner = m[1]!.trim(), tag = `[${inner}]`;
       if (/^(name|number|brands)$/i.test(inner)) continue;
-      const l = /^link:\s*(.+)$/i.exec(inner);
+      const l = LINKWORDS.exec(inner);
       if (l) {
         if (inSubject) { if (!seen.has(tag)) problems.push(`${tag} cannot be in the subject. Links go in the email.`); }
         else if (!links.some(x => norm(x.name) === norm(l[1]!)) && !seen.has(tag)) problems.push(`${tag}: there is no saved link with that name. Add it on the Links tab first.`);

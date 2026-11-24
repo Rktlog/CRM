@@ -1,4 +1,4 @@
-import { TextareaHTMLAttributes, useEffect, useRef, useState } from 'react';
+import { Ref, TextareaHTMLAttributes, useEffect, useRef, useState } from 'react';
 import { createDictation, getRecognition, DictationState } from '../lib/dictation';
 import { apiPost } from '../lib/api';
 
@@ -8,9 +8,9 @@ import { apiPost } from '../lib/api';
 // Once there is some text, a Tidy button asks Claude to fix spelling, punctuation and speech-to-text slips. It never
 // adds anything, and Undo puts back exactly what was there.
 
-type Props = Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'onChange'> & { value: string; onChange: (v: string) => void; tidy?: boolean };
+type Props = Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'onChange'> & { value: string; onChange: (v: string) => void; tidy?: boolean; inputRef?: Ref<HTMLTextAreaElement> };
 
-export default function DictationTextarea({ value, onChange, style, onFocus, tidy = true, ...rest }: Props) {
+export default function DictationTextarea({ value, onChange, style, onFocus, tidy = true, inputRef, ...rest }: Props) {
   const [state, setState] = useState<DictationState>({ listening: false, error: null });
   const [tidying, setTidying] = useState(false);
   const [before, setBefore] = useState<string | null>(null);   // what was there before Tidy, for Undo
@@ -48,6 +48,7 @@ export default function DictationTextarea({ value, onChange, style, onFocus, tid
       {state.listening && <style>{'@keyframes dictationPulse{0%{box-shadow:0 0 0 0 rgba(190,60,40,.55)}100%{box-shadow:0 0 0 10px rgba(190,60,40,0)}}'}</style>}
       <textarea
         {...rest}
+        ref={inputRef}
         value={value}
         onChange={e => { setBefore(null); onChange(e.target.value); }}
         onFocus={e => { if (state.listening) controller().stop(); onFocus?.(e); }}

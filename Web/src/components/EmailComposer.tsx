@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { apiDelete, apiGet, apiPost, apiPut } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import DictationTextarea from './DictationTextarea';
+import { AddLink } from './LinkTools';
 
 // Write an email to a customer and send it from Radar, in one place, with the log written for you.
 // - It goes out from YOUR Gmail, after you press Send on a read-only review. Radar never sends anything else.
@@ -69,6 +70,7 @@ export function EmailComposerModal({ open, onClose, target, name, defaultTo, def
   const [choices, setChoices] = useState<{ key: string; name: string }[]>([]);   // saved templates (Sales Tools) this email can start from
   const [savedLinks, setSavedLinks] = useState<{ id: string; name: string; url: string }[]>([]);   // saved links (Sales Tools)
   const [toolNote, setToolNote] = useState<string | null>(null);
+  const bodyBox = useRef<HTMLTextAreaElement>(null);
   const clientId = useRef(newId());   // one per email: pressing Send twice can only ever send it once
   const sending = useRef(false);      // locks the Send button the instant it is pressed, before the screen has had time to update
   const filesRef = useRef<FileRow[]>([]); filesRef.current = files;
@@ -86,7 +88,6 @@ export function EmailComposerModal({ open, onClose, target, name, defaultTo, def
       if (t.missing?.length) setToolNote(`These links are not saved any more, so only their names were put in: ${t.missing.join(', ')}.`);
     } catch (e) { setToolNote(msg(e)); }
   }
-  const addLink = (id: string) => { const l = savedLinks.find(x => x.id === id); if (l) setBody(prev => `${prev.replace(/\s+$/, '')}${prev.trim() ? '\n\n' : ''}[${l.name}](${l.url})`); };
   const loadStatus = () => apiGet('/email-send/status', { fresh: true }).then((s: Status) => setStatus(s)).catch((e: unknown) => setError(msg(e)));
   useEffect(() => {
     if (!open) return;
@@ -200,29 +201,21 @@ export function EmailComposerModal({ open, onClose, target, name, defaultTo, def
             <label className="modal-field">To<input value={to} onChange={e => setTo(e.target.value)} placeholder="name@shop.com.au, separate several with commas" /></label>
             <label className="modal-field">Cc (optional)<input value={cc} onChange={e => setCc(e.target.value)} /></label>
             <label className="modal-field">Subject<input value={subject} onChange={e => setSubject(e.target.value)} maxLength={300} /></label>
-            {(choices.length > 0 || savedLinks.length > 0) && (
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', margin: '2px 0 8px' }}>
-                {choices.length > 0 && !replyThreadId && (
-                  <label className="acct-region" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>Start from a saved email
-                    <select aria-label="Start from a saved email" value="" onChange={e => { void useTemplate(e.target.value); e.target.value = ''; }}>
-                      <option value="">Choose…</option>{choices.map(c => <option key={c.key} value={c.key}>{c.name}</option>)}
-                    </select>
-                  </label>
-                )}
-                {savedLinks.length > 0 && (
-                  <label className="acct-region" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>Add a saved link
-                    <select aria-label="Add a saved link" value="" onChange={e => { addLink(e.target.value); e.target.value = ''; }}>
-                      <option value="">Choose…</option>{savedLinks.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                    </select>
-                  </label>
-                )}
-              </div>
-            )}
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', margin: '2px 0 8px' }}>
+              {choices.length > 0 && !replyThreadId && (
+                <label className="acct-region" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>Start from a saved email
+                  <select aria-label="Start from a saved email" value="" onChange={e => { void useTemplate(e.target.value); e.target.value = ''; }}>
+                    <option value="">Choose…</option>{choices.map(c => <option key={c.key} value={c.key}>{c.name}</option>)}
+                  </select>
+                </label>
+              )}
+              <AddLink getBox={() => bodyBox.current} value={body} onChange={setBody} links={savedLinks} mode="email" />
+            </div>
             {toolNote && <div className="save-msg err" role="alert" style={{ marginBottom: 6 }}>{toolNote}</div>}
             <label className="modal-field">Email
-              <DictationTextarea value={body} onChange={setBody} rows={10} placeholder="Write it, or press the microphone and say it" />
+              <DictationTextarea inputRef={bodyBox} value={body} onChange={setBody} rows={10} placeholder="Write it, or press the microphone and say it" />
             </label>
-            <div className="acct-region" style={{ margin: '-4px 0 8px', fontSize: 12 }}>To make a link, type the words in square brackets and the web address after them in round brackets, like [Rhino Rhino B2B Portal](https://rhinorhino.dearportal.com/).</div>
+            <div className="acct-region" style={{ margin: '-4px 0 8px', fontSize: 12 }}>To make a link, select the words and press Add link.</div>
 
             <div style={{ margin: '4px 0 10px' }}>
               <label className="acct-region" style={{ display: 'inline-flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>

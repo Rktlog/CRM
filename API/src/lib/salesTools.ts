@@ -69,7 +69,7 @@ export async function editLink(rep: Rep, id: string, b: any): Promise<SavedLink>
 async function templatesUsing(linkName: string): Promise<{ name: string }[]> {
   const all = await prisma.$queryRaw<{ name: string; body: string }[]>`select name, body from crm.email_templates`;
   const want = linkName.trim().replace(/\s+/g, ' ').toLowerCase();
-  return all.filter(t => [...t.body.matchAll(/\[Link:\s*([^\]\n]{1,80}?)\s*\](?!\()/gi)].some(m => m[1]!.trim().replace(/\s+/g, ' ').toLowerCase() === want));
+  return all.filter(t => [...t.body.matchAll(/\[Link:\s*([^\]|\[\n]{1,80}?)\s*(?:\|[^\]\[\n]*)?\](?!\()/gi)].some(m => m[1]!.trim().replace(/\s+/g, ' ').toLowerCase() === want));
 }
 /** Managers only, and a link a saved template uses cannot be deleted (it would break that template). */
 export async function deleteLink(rep: Rep, id: string): Promise<void> {

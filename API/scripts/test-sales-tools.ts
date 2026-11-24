@@ -68,10 +68,17 @@ const sent = fill('Hi [Name], see [Link: Engelite preorder] now', { names: ['Pat
 ok('in the HTML email the saved link is a clickable name', bodyToHtml(sent).includes('<a href="https://docs.example.test/d/abc/edit"') && bodyToHtml(sent).includes('>Engelite preorder</a>'), bodyToHtml(sent));
 eq('in plain text (the reminder draft) it reads "name (address)"', bodyToText(sent), 'Hi Pat, see Engelite preorder (https://docs.example.test/d/abc/edit) now');
 
+eq('[Link: name | words] shows the words, with the saved address', fill('Please [Link: Engelite preorder | see the presentation] today', {}, links).text, 'Please [see the presentation](https://docs.example.test/d/abc/edit) today');
+eq('...in any case and spacing', fill('[link:engelite  PREORDER|  see it ]', {}, links).text, '[see it](https://docs.example.test/d/abc/edit)');
+eq('words for a link that is not saved: the words are shown and the name is reported', fill('[Link: Gone | read this]', {}, links), { text: 'read this', missing: ['Gone'] });
+eq('a changed address reaches every template that uses the link', fill('[Link: Engelite preorder | a] [Link: Engelite preorder]', {}, [{ name: 'Engelite preorder', url: 'https://new.example.test/x' }]).text, '[a](https://new.example.test/x) [Engelite preorder](https://new.example.test/x)');
+
 console.log('--- 3. checking a template before it is saved');
 eq('a good template', checkTemplate('Order [Number]', 'Hi [Name],\n\nSee [Link: Engelite preorder].', links), []);
 ok('an empty subject and email are refused', checkTemplate('', '  ', links).length === 2);
 ok('an unknown fill-in word is named', checkTemplate('x', 'Hi [Nmae]', links).join(' ').includes('[Nmae] is not one of the fill-in words'));
+eq('[Link: name | words] passes when the link is saved', checkTemplate('x', 'Please [Link: Engelite preorder | see the presentation].', links), []);
+ok('[Link: name | words] with an unsaved name is named', checkTemplate('x', '[Link: Nope | words]', links).join(' ').includes('[Link: Nope | words]'));
 ok('a link that is not saved is named', checkTemplate('x', 'See [Link: Nope]', links).join(' ').includes('no saved link with that name'));
 ok('a link in the subject is refused', checkTemplate('See [Link: Engelite preorder]', 'x', links).join(' ').includes('cannot be in the subject'));
 ok('[Name](address) is not mistaken for a fill-in word', checkTemplate('x', 'Go [here](https://a.example.test)', links).length === 0);
