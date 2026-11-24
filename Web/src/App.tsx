@@ -39,6 +39,7 @@ import Ordering from './pages/Ordering';
 import ProductRequests from './pages/ProductRequests';
 import Liewood from './pages/Liewood';
 import LiewoodOrder from './pages/LiewoodOrder';
+import LiewoodRange from './pages/LiewoodRange';
 import TradeShows from './pages/TradeShows';
 import TradeShow from './pages/TradeShow';
 import TradeShowOrder from './pages/TradeShowOrder';
@@ -83,6 +84,7 @@ function Routed() {
         <Route path="catalogue" element={<Catalogue />} />
         <Route path="product-requests" element={<ProductRequests />} />
         <Route path="liewood" element={<Liewood />} />
+        <Route path="liewood/range" element={<LiewoodRange />} />
         <Route path="liewood/:id" element={<LiewoodOrder />} />
         <Route path="trade-shows" element={<TradeShows />} />
         <Route path="trade-shows/compare" element={<TradeShowCompare />} />

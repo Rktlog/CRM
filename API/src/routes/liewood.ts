@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { attachConfirmation, deleteOrder, getConfirmation, getOrder, LiewoodError, listOrders, MAX_PDF, MAX_SHEET, syncLiewoodPos, updateOrder, uploadSalesOrder } from '../lib/liewood';
+import { importRangeList, importSeasonFile, listRange, MAX_RANGE_FILE, updateRangeItem } from '../lib/liewoodRange';
 
 // Liewood orders (Products, Liewood). Everyone signed in can look; managers add, change and delete.
 //   GET    /liewood/orders                       every order with its stage
@@ -10,6 +11,10 @@ import { attachConfirmation, deleteOrder, getConfirmation, getOrder, LiewoodErro
 //   POST   /liewood/orders/:id/confirmation      the PDF order confirmation as the body
 //   GET    /liewood/orders/:id/confirmation      the PDF back
 //   POST   /liewood/check                        read the linked POs from DEAR now (at most once a minute)
+//   GET    /liewood/range                        every SKU in the Liewood range, with DEAR's RRP and stock and the quantities on the uploaded orders (EUR prices for managers only)
+//   POST   /liewood/range/import                 the Product Range List tab (Excel or CSV) as the body: starts or refreshes the range
+//   POST   /liewood/range/season-file            Liewood's Product Data file or the Customer Forecast Form as the body
+//   PATCH  /liewood/range                        { sku, dropAus, ranged, status, proposedRrp, notes }
 export const liewoodRouter = Router();
 
 const fail = (res: any, e: unknown, what: string) => {
@@ -53,6 +58,22 @@ liewoodRouter.get('/orders/:id/confirmation', async (req, res) => {
     res.setHeader('Content-Disposition', `inline; filename="${name.replace(/[^\w.\- ]+/g, '_')}"`);
     res.send(pdf);
   } catch (e) { fail(res, e, 'pdf'); }
+});
+liewoodRouter.get('/range', async (req, res) => { try { res.json(await listRange(req.rep!.role === 'manager')); } catch (e) { fail(res, e, 'range'); } });
+liewoodRouter.post('/range/import', async (req, res) => {
+  try {
+    if (!managersOnly(req, res)) return;
+    res.json(await importRangeList(req.rep!.id, await readBody(req as unknown as AsyncIterable<Uint8Array>, MAX_RANGE_FILE + 1)));
+  } catch (e) { fail(res, e, 'range import'); }
+});
+liewoodRouter.post('/range/season-file', async (req, res) => {
+  try {
+    if (!managersOnly(req, res)) return;
+    res.json(await importSeasonFile(await readBody(req as unknown as AsyncIterable<Uint8Array>, MAX_RANGE_FILE + 1), decode(req.headers['x-file-name'])));
+  } catch (e) { fail(res, e, 'season file'); }
+});
+liewoodRouter.patch('/range', async (req, res) => {
+  try { if (!managersOnly(req, res)) return; await updateRangeItem(req.rep!.id, req.body ?? {}); res.json({ ok: true }); } catch (e) { fail(res, e, 'range update'); }
 });
 let lastCheck = 0;
 liewoodRouter.post('/check', async (req, res) => {

@@ -3,6 +3,7 @@
 import * as XLSX from 'xlsx';
 import { prisma } from './prisma';
 import { sendAlert } from './alerts';
+import { feedAfterOrder, type FeedResult } from './liewoodRange';
 import { LiewoodError, compareConfirmation, etaEnd, orderStage, parsePdfReply, parseSalesOrder, readDearPurchase, tallyPo, type ConfirmationCheck, type DearPo, type OrderStage, type PdfTotals, type PoDoc, type TallyLine } from './liewoodCore';
 
 export { LiewoodError };
@@ -47,14 +48,14 @@ export function rowsOfSheet(buf: Buffer): unknown[][] {
   if (!name) throw new LiewoodError('That Excel file is empty.');
   return XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[name]!, { header: 1, raw: true, defval: null }).slice(0, 5000);
 }
-export type Uploaded = { id: string; soNumber: string; replaced: boolean; lines: number; units: number; notInDear: number; problems: string[] };
+export type Uploaded = { id: string; soNumber: string; replaced: boolean; lines: number; units: number; notInDear: number; problems: string[]; range: FeedResult | null };
 /** Saves a Liewood sales order from its Excel export. The same order again is refused unless replace is asked for; replacing keeps the name, ETA, PO and PDF. */
 export async function uploadSalesOrder(repId: string, buf: Buffer, fileName: string, replace: boolean): Promise<Uploaded> {
   if (!buf.length) throw new LiewoodError('That file is empty.');
   if (buf.length > MAX_SHEET) throw new LiewoodError('That file is bigger than 10 MB. Use the sales order export from Liewood.', 413);
   if (buf.subarray(0, 5).toString('latin1') === '%PDF-') throw new LiewoodError('That is the PDF. Add the Excel sales order first, then the PDF confirmation on the order.');
   const so = parseSalesOrder(rowsOfSheet(buf));
-  return guard(async () => {
+  const saved = await guard(async () => {
     const [have] = await prisma.$queryRaw<{ id: string }[]>`select id from crm.lw_orders where so_number = ${so.orderNo}`;
     if (have && !replace) throw new LiewoodError(`${so.orderNo} has already been uploaded. Choose to replace it if this is a newer version.`, 409);
     const skus = so.lines.map(l => l.sku), codes = so.lines.map(l => l.barcode).filter((b): b is string => !!b);
@@ -76,6 +77,8 @@ export async function uploadSalesOrder(repId: string, buf: Buffer, fileName: str
     if (c?.confirmation_check?.pdf) await prisma.$queryRaw`update crm.lw_orders set confirmation_check = ${JSON.stringify(compareConfirmation(so, c.confirmation_check.pdf))}::jsonb where id = ${id}::uuid`;
     return { id, soNumber: so.orderNo, replaced: !!have, lines: L.length, units: so.totalUnits, notInDear: L.filter(l => !l.display && !productOf(l)).length, problems: so.problems };
   });
+  // the order's SKUs go into the Liewood range, filled in from the season files (this never stops the upload)
+  return { ...saved, range: await feedAfterOrder(so.lines.filter(l => !l.display).map(l => l.sku)) };
 }
 /** Keeps the PDF confirmation with the order, and checks its order number and totals against the sales order (Claude reads them; nothing else is sent). */
 export async function attachConfirmation(id: unknown, buf: Buffer, fileName: string, d: Deps = realDeps): Promise<ConfirmationCheck> {

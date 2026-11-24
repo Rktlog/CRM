@@ -15,7 +15,21 @@ export type Order = {
   invoices: { number: string | null; date: string | null; units: number; allUnits: number; received: number | null; receivedOn: string | null }[];
   shortages: { invoice: string; sku: string; invoiced: number; received: number }[]; extraOnPo: { sku: string; qty: number }[]; lines: OrderLine[]; updatedAt: string;
 };
-export type Uploaded = { id: string; soNumber: string; replaced: boolean; lines: number; units: number; notInDear: number; problems: string[] };
+export type Uploaded = { id: string; soNumber: string; replaced: boolean; lines: number; units: number; notInDear: number; problems: string[]; range: { added: number; updated: number } | null };
+
+// The Liewood range (Products, Liewood, Range)
+export type PriceCheck = 'match' | 'differs' | 'not_in_dear' | 'no_proposed';
+export type RangeItem = {
+  sku: string; ean: string | null; name: string | null; colour: string | null; season: string | null; essential: string | null; subbrand: string | null; category: string | null; subCategory: string | null;
+  productType: string | null; orderIncrement: number | null; dropEur: string | null; dropAus: string | null; ranged: string | null; status: string | null; wspEur?: number | null; proposedRrp: number | null;
+  notes: string | null; source: string; inDear: boolean; dearRrp: number | null; available: number | null; onOrder: number | null; check: PriceCheck; ordered: { so: string; qty: number }[]; orderedTotal: number;
+};
+export type RangeView = { items: RangeItem[]; files: { kind: 'product_data' | 'forecast'; file: string; skus: number; at: string }[]; catalogueSkus: number; orderSkusNotInRange: number };
+export type RangeImport = { rows: number; added: number; updated: number; noSku: number; duplicates: string[]; problems: string[] };
+export type SeasonImport = { kind: 'product_data' | 'forecast'; file: string; tabs: string[]; skus: number; onOrders: number; fed: { added: number; updated: number }; problems: string[] };
+export const PRICE_CHECK: Record<PriceCheck, { label: string; tone: string }> = {
+  match: { label: 'Matches DEAR', tone: 'teal' }, differs: { label: 'DEAR differs', tone: 'rust' }, not_in_dear: { label: 'Not in DEAR', tone: 'neutral' }, no_proposed: { label: 'No proposed RRP', tone: 'amber' },
+};
 
 export const ORDER_STAGE: Record<OrderStage, { label: string; tone: string }> = {
   confirmed: { label: 'Confirmed, no PO yet', tone: 'neutral' }, on_po: { label: 'On PO, not invoiced', tone: 'amber' }, part_invoiced: { label: 'Partly invoiced', tone: 'amber' },
