@@ -172,7 +172,7 @@ export async function syncProductCartons(products?: any[], o: { dryRun?: boolean
           supplier_cost = case when ${suppliersPresent}::boolean then v.cost else p.supplier_cost end,
           supplier_cost_currency = case when ${suppliersPresent}::boolean then v.cur else p.supplier_cost_currency end,
           supplier_name = case when ${suppliersPresent}::boolean then v.sup else p.supplier_name end
-        from unnest(${b.map(x => x.sku)}::text[], ${b.map(x => x.inner)}::int[], ${b.map(x => x.outer)}::int[], ${b.map(x => x.cost?.cost ?? null)}::numeric[], ${b.map(x => x.cost?.currency ?? null)}::text[], ${b.map(x => x.cost?.supplier ?? null)}::text[]) as v(sku, inq, ouq, cost, cur, sup)
+        from unnest(${b.map(x => x.sku)}::text[], ${b.map(x => x.inner)}::int[], ${b.map(x => x.outer)}::int[], ${b.map(x => x.cost?.cost == null ? null : String(x.cost.cost))}::text[]::numeric[], ${b.map(x => x.cost?.currency ?? null)}::text[], ${b.map(x => x.cost?.supplier ?? null)}::text[]) as v(sku, inq, ouq, cost, cur, sup)
         where p.sku = v.sku and (
           (${cartonsPresent}::boolean and (p.inner_carton_qty is distinct from v.inq or p.outer_carton_qty is distinct from v.ouq))
           or (${suppliersPresent}::boolean and (p.supplier_cost is distinct from v.cost or p.supplier_cost_currency is distinct from v.cur or p.supplier_name is distinct from v.sup)))
