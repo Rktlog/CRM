@@ -2,12 +2,11 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { apiGet } from '../lib/api';
 import { errMsg, type Product } from '../lib/tradeshow';
-import { Thumb } from './ProductPic';
+import { Thumb, Facts } from './ProductPic';
 
 // "Show range": a catalogue of one brand's products with pictures, so a rep can show a customer what else there is, compare two or three items side by side,
 // and add what they pick to the order. The window stays open, so several can be added one after another.
 type Range = { brands: { brand: string; n: number }[]; stand: string[]; products: Product[] };
-const money = (n: number) => `$${n.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const MAX_COMPARE = 3;
 
 export default function ShowRange({ showId, initialBrand, onAdd, onClose }: { showId: string | undefined; initialBrand: string; onAdd: (p: Product) => void; onClose: () => void }) {
@@ -39,10 +38,10 @@ export default function ShowRange({ showId, initialBrand, onAdd, onClose }: { sh
 
   const card = (p: Product) => (
     <div key={p.sku} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 8, background: '#fff', display: 'grid', gap: 6, alignContent: 'start' }}>
-      <div style={{ aspectRatio: '1 / 1', width: '100%' }}><BigPic p={p} /></div>
+      <div style={{ aspectRatio: '4 / 3', width: '100%' }}><BigPic p={p} /></div>
       <div style={{ fontSize: 13.5, lineHeight: 1.25 }}><b>{p.name}</b></div>
       <div className="acct-region" style={{ fontSize: 12 }}>{p.sku}{p.increment && p.increment > 1 ? ` · packs of ${p.increment}` : ''}</div>
-      <div style={{ fontSize: 13 }}>{p.price === null ? <span style={{ color: 'var(--rust)' }}>no price</span> : money(p.price)} · <span style={{ color: p.free > 0 ? 'var(--teal)' : 'var(--rust)' }}>{Math.max(p.free, 0)} free</span></div>
+      <Facts p={p} compact />
       {onStand(p.brand) && <span className="pill teal" style={{ justifySelf: 'start' }}>On the stand</span>}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
         <button type="button" className="btn" style={{ padding: '4px 10px' }} disabled={p.price === null} onClick={() => add(p)}>Add</button>
@@ -73,11 +72,10 @@ export default function ShowRange({ showId, initialBrand, onAdd, onClose }: { sh
           <div style={{ display: 'grid', gridTemplateColumns: `repeat(${picked.length}, minmax(0, 1fr))`, gap: 12 }}>
             {picked.map(p => (
               <div key={p.sku} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 10, background: '#fff', display: 'grid', gap: 6, alignContent: 'start' }}>
-                <div style={{ aspectRatio: '1 / 1', width: '100%' }}><BigPic p={p} /></div>
+                <div style={{ aspectRatio: '4 / 3', width: '100%' }}><BigPic p={p} /></div>
                 <b>{p.name}</b>
                 <div className="acct-region">{p.sku}{p.increment && p.increment > 1 ? ` · packs of ${p.increment}` : ''}</div>
-                <div>{p.price === null ? <span style={{ color: 'var(--rust)' }}>No wholesale price</span> : money(p.price)}</div>
-                <div style={{ color: p.free > 0 ? 'var(--teal)' : 'var(--rust)' }}>{Math.max(p.free, 0)} free</div>
+                <Facts p={p} />
                 <div style={{ display: 'flex', gap: 6 }}><button type="button" className="btn" disabled={p.price === null} onClick={() => add(p)}>Add</button>{added[p.sku] ? <span className="acct-region">Added{added[p.sku]! > 1 ? ` ×${added[p.sku]}` : ''}</span> : null}</div>
               </div>
             ))}
@@ -89,7 +87,7 @@ export default function ShowRange({ showId, initialBrand, onAdd, onClose }: { sh
             {data && (brand || q) && !loading && data.products.length === 0 && <div className="acct-region">Nothing found.</div>}
             {data && data.products.length > 0 && <>
               <div className="acct-region" style={{ margin: '0 0 8px', fontSize: 12.5 }}>{data.products.length === 60 ? 'The first 60. Search to narrow it down.' : `${data.products.length} products`}. Tick Compare on two or three to see them side by side.</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(165px, 1fr))', gap: 10, opacity: loading ? 0.6 : 1 }}>{data.products.map(card)}</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 10, opacity: loading ? 0.6 : 1 }}>{data.products.map(card)}</div>
             </>}
           </>
         )}
