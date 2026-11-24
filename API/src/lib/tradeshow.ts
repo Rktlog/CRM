@@ -7,7 +7,7 @@ import { wholesalePrice } from './pricing';
 import * as hand from './tsHandoff';
 import { autoFreight, chargeSkus, dearReference, orderPlus, withOffers, writeLines } from './tradeshowOrderPlus';
 import {
-  TsError, barcodeCandidates, cleanReference, splitColour, cleanText, dearCsv, defaultReference, firstFollowUp, followUpsClosed, gstRateFor, holdsStock, incrementProblem, nameKey, orderStage,
+  TsError, cleanReference, splitColour, cleanText, dearCsv, defaultReference, firstFollowUp, followUpsClosed, gstRateFor, holdsStock, incrementProblem, nameKey, orderStage,
   parseDay, parseDiscount, plusDays, parseNewCustomer, phoneKey, QUOTE_STAGE, round2, salesEmail, STAGE_LABEL, stockView, totals, type DearLink, type Discount, type OrderStage,
 } from './tradeshowCore';
 
@@ -48,8 +48,20 @@ const stageOf = (o: Linked): OrderStage => orderStage(o.status, dearOf(o));
 // ---------- products and stock ----------
 export type ProductHit = { sku: string; name: string; brand: string | null; price: number | null; increment: number | null; image: string | null; status: string | null; available: number; pending: number; free: number; incoming: { qty: number; date: string | null; po: string | null } | null; eta: string | null };
 /** Units on trade show orders that DEAR has not allocated yet, by SKU (sent orders not yet confirmed in DEAR). */
-async function pendingBySku(skus: string[], exceptOrder: string | null = null): Promise<Map<string, number>> {
+// What other orders have already taken is the slowest part of every stock figure. For screens that only SHOW stock (search, other colours, the range) the answer
+// is kept for 15 seconds, so several reps looking at the same products do not each make the database do it again. Saving an order always asks fresh.
+const pendingCache = new Map<string, { at: number; m: Map<string, number> }>();
+const PENDING_TTL = 15_000;
+export const _forgetPending = () => pendingCache.clear();
+async function pendingBySku(skus: string[], exceptOrder: string | null = null, fresh = false): Promise<Map<string, number>> {
   if (!skus.length) return new Map();
+  const key = [...new Set(skus.map(s => s.toUpperCase()))].sort().join('|') + '#' + (exceptOrder ?? '');
+  if (!fresh) { const hit = pendingCache.get(key); if (hit && Date.now() - hit.at < PENDING_TTL) return hit.m; }
+  const m = await pendingFresh(skus, exceptOrder);
+  if (!fresh) { if (pendingCache.size > 300) pendingCache.clear(); pendingCache.set(key, { at: Date.now(), m }); }
+  return m;
+}
+async function pendingFresh(skus: string[], exceptOrder: string | null): Promise<Map<string, number>> {
   // only the sent orders that have one of these SKUs are matched to DEAR (matching every order to every DEAR quote is the slow part)
   const only = ` where o.kind = 'order' and o.status = 'sent' and ($2::uuid is null or o.id <> $2::uuid) and exists (select 1 from crm.ts_order_lines x where x.order_id = o.id and upper(x.sku) = any($1::text[]))`;
   const rows = await prisma.$queryRawUnsafe<(Linked & { sku: string; qty: number })[]>(`${linkedCte(only)}
@@ -59,7 +71,7 @@ async function pendingBySku(skus: string[], exceptOrder: string | null = null): 
   for (const r of rows) if (holdsStock(r.kind, stageOf(r))) m.set(r.sku.toUpperCase(), (m.get(r.sku.toUpperCase()) ?? 0) + Number(r.qty));
   return m;
 }
-async function stockFacts(skus: string[], exceptOrder: string | null = null) {
+async function stockFacts(skus: string[], exceptOrder: string | null = null, fresh = false) {
   const up = [...new Set(skus.map(s => s.toUpperCase()))];
   // the four lookups are independent, so they run together (one wait instead of four)
   const [prods, dearEtaRows, pos, pending] = up.length ? await Promise.all([
@@ -71,7 +83,7 @@ async function stockFacts(skus: string[], exceptOrder: string | null = null) {
       where upper(pl.sku) = any(${up}::text[]) and pl.quantity_ordered - pl.quantity_received > 0
         and upper(coalesce(p.status, '')) not in ('VOIDED', 'CREDITED', 'DRAFT') and upper(coalesce(p.status, '')) not like 'COMPLETED%'
       order by p.required_by nulls last`,
-    pendingBySku(up, exceptOrder),
+    pendingBySku(up, exceptOrder, fresh),
   ]) : [[], [], [], new Map<string, number>()] as const;
   const dearEta = new Map(dearEtaRows.map(r => [r.sku, r.e!]));
   const incoming = new Map<string, { qty: number; date: string | null; po: string | null }>();
@@ -95,14 +107,22 @@ export async function searchProducts(q: unknown): Promise<ProductHit[]> {
   return rows.map(r => facts.get(r.sku.toUpperCase())!).filter(Boolean);
 }
 
-/** The one product whose barcode is exactly this (a scan), or whose SKU is. */
-export async function productByBarcode(code: unknown): Promise<ProductHit | null> {
-  const want = barcodeCandidates(String(code ?? ''));
-  if (!want.length) return null;
-  const rows = await prisma.$queryRaw<{ sku: string }[]>`select sku from crm.products where (barcode = any(${want}::text[]) or upper(sku) = any(${want.map(x => x.toUpperCase())}::text[])) and coalesce(status, '') not in ('Deprecated') order by (barcode = any(${want}::text[])) desc limit 1`;
-  if (!rows.length) return null;
-  const facts = await guard(() => stockFacts([rows[0]!.sku]));
-  return facts.get(rows[0]!.sku.toUpperCase()) ?? null;
+/** One brand's products with pictures, price and stock, for showing a customer the range (and comparing). With no brand it gives just the list of brands. */
+const brandCache: { at: number; list: { brand: string; n: number }[] } = { at: 0, list: [] };
+export async function productRange(brandIn: unknown, showId?: unknown, qIn?: unknown): Promise<{ brands: { brand: string; n: number }[]; stand: string[]; products: ProductHit[] }> {
+  const brand = String(brandIn ?? '').trim().slice(0, 80), q = String(qIn ?? '').trim().slice(0, 60);
+  const sid = typeof showId === 'string' && UUID.test(showId) ? showId : '00000000-0000-0000-0000-000000000000';
+  const [brands, stand, rows] = await Promise.all([
+    Date.now() - brandCache.at < 600_000 && brandCache.list.length ? Promise.resolve(brandCache.list)
+      : prisma.$queryRaw<{ brand: string; n: number }[]>`select brand, count(*)::int as n from crm.products where brand is not null and btrim(brand) <> '' and coalesce(status, '') not in ('Deprecated') group by brand order by brand`
+        .then(l => { brandCache.at = Date.now(); brandCache.list = l; return l; }),
+    hand.getStandBrands(sid),
+    brand || q ? prisma.$queryRaw<{ sku: string }[]>`select sku from crm.products where coalesce(status, '') not in ('Deprecated')
+      and (${brand} = '' or lower(brand) = lower(${brand})) and (${q} = '' or name ilike ${'%' + q.replace(/[%_\\]/g, m => '\\' + m) + '%'} or sku ilike ${'%' + q.replace(/[%_\\]/g, m => '\\' + m) + '%'})
+      order by name limit 60` : Promise.resolve([] as { sku: string }[]),
+  ]);
+  const facts = rows.length ? await guard(() => stockFacts(rows.map(r => r.sku))) : new Map<string, ProductHit>();
+  return { brands, stand, products: rows.map(r => facts.get(r.sku.toUpperCase())!).filter(Boolean) };
 }
 
 export type VariantHit = ProductHit & { colour: string; onStand: boolean };
@@ -129,7 +149,9 @@ export async function productVariants(sku: unknown, showId?: unknown): Promise<{
 // ---------- range on the stand ----------
 export async function getStand(showId: unknown) {
   const sid = idOk(showId, 'That show');
-  return { ready: await hand.standReady(), brands: await hand.getStandBrands(sid), allBrands: (await hand.standReady()) ? await hand.allBrands() : [] };
+  const ready = await hand.standReady();
+  const [brands, allBrands] = await Promise.all([hand.getStandBrands(sid), ready ? hand.allBrands() : Promise.resolve([] as string[])]);   // one trip each, side by side
+  return { ready, brands, allBrands };
 }
 export async function saveStand(rep: Rep, showId: unknown, brands: unknown): Promise<void> {
   const sid = idOk(showId, 'That show');
@@ -286,7 +308,7 @@ export async function saveOrder(rep: Rep, id: unknown, b: any): Promise<void> {
       if (!Array.isArray(b.lines) || b.lines.length > 300) throw new TsError('Too many lines.');
       lines = b.lines.map((l: any) => ({ sku: String(l?.sku ?? '').trim(), qty: Number(l?.qty), comment: cleanText(l?.comment, 200), kind: l?.kind === 'bundle' ? 'bundle' as const : 'normal' as const, offerId: typeof l?.offerId === 'string' && UUID.test(l.offerId) ? l.offerId : null }));
       for (const l of lines!) if (!l.sku || !Number.isInteger(l.qty) || l.qty < 1 || l.qty > 100000) throw new TsError(`Check the quantity for ${l.sku || 'a line'} (a whole number of 1 or more).`);
-      const facts = await stockFacts(lines!.map(l => l.sku), oid);
+      const facts = await stockFacts(lines!.map(l => l.sku), oid, true);
       const priced = lines!.map(l => { const f = facts.get(l.sku.toUpperCase()); if (!f) throw new TsError(`Radar has no product ${l.sku}.`); if (f.price === null) throw new TsError(`${f.sku} has no wholesale price in DEAR.`); return { ...l, sku: f.sku, name: f.name, brand: f.brand, price: f.price }; });
       await writeLines(oid, await withOffers(o.show_id, priced as any));
     }
@@ -366,7 +388,7 @@ async function emailSales(rep: Rep, oid: string, d: { alert: typeof sendAlert })
   const [a] = await prisma.$queryRaw<any[]>`select name, region, payment_terms from crm.accounts where id = ${o.account_id}::uuid`;
   const lines = (await linesOf([oid])).get(oid) ?? [];
   const t = orderTotals(o, lines.map(l => ({ qty: l.qty, price: Number(l.price), pct: Number(l.pct) || 0 })));
-  const facts = await stockFacts(lines.map(l => l.sku), oid);
+  const facts = await stockFacts(lines.map(l => l.sku), oid, true);
   const ch = await chargeSkus();
   const plus = await orderPlus(o, lines, t, stageOf(o));
   const charges = [...(ch.freight ? [{ sku: ch.freight, name: 'Freight', amount: t.freight }] : []), ...(ch.surcharge ? [{ sku: ch.surcharge, name: 'Credit card surcharge', amount: t.surcharge }] : [])];
@@ -425,24 +447,31 @@ export async function getOrder(id: unknown) {
   const oid = idOk(id, 'That order');
   return guard(async () => {
     const o = await orderRow(oid);
-    await noteDearMatch(o);
-    const show = await showRow(o.show_id);
-    const lines = (await linesOf([oid])).get(oid) ?? [];
+    // Every database call costs a round trip (160 to 245 ms), so the ones that do not depend on each other run together: two waits instead of ten.
+    const noted = noteDearMatch(o);   // may add one log line, so the log is read after it
+    const [show, lines, [a], log, followUps, handoffReady, handoff] = await Promise.all([
+      showRow(o.show_id),
+      linesOf([oid]).then(m => m.get(oid) ?? []),
+      prisma.$queryRawUnsafe<CustomerHit[]>(`select ${CUSTOMER_COLS} from crm.accounts where id = $1::uuid`, o.account_id),
+      noted.then(() => logOf({ orderId: oid })),
+      followUpsOf({ orderId: oid }),
+      hand.handoffReady(),
+      hand.getHandoff(oid),
+    ]);
     const t = orderTotals(o, lines.map(l => ({ qty: l.qty, price: Number(l.price), pct: Number(l.pct) || 0 })));
-    const facts = await stockFacts(lines.map(l => l.sku), oid);
-    const [a] = await prisma.$queryRawUnsafe<CustomerHit[]>(`select ${CUSTOMER_COLS} from crm.accounts where id = $1::uuid`, o.account_id);
     const stage = stageOf(o);
+    const [facts, plus] = await Promise.all([stockFacts(lines.map(l => l.sku), oid), orderPlus(o, lines, t, stage, a?.region ?? null)]);
     return {
       id: o.id, number: o.number, kind: o.kind, status: o.status, stage, stageLabel: STAGE_LABEL[stage], show: showOut(show), customer: a, newCustomer: o.new_customer,
       orderDate: day(o.order_date)!, reference: o.reference, customerPo: o.customer_po, notes: o.notes, repId: o.rep_id, repName: o.rep_name,
       contact: { name: o.contact_name, email: o.contact_email, phone: o.contact_phone, address: o.delivery_address },
       discount: discountOf(o), freight: Number(o.freight), cardPayment: o.card_payment, cardSurchargePct: num(o.card_surcharge_pct), gstRate: Number(o.gst_rate),
       lines: lines.map((l, i) => { const f = facts.get(l.sku.toUpperCase()); return { lineNo: l.line_no, kind: l.line_kind, offerId: l.offer_id, pct: Number(l.pct) || 0, sku: l.sku, name: l.name, brand: l.brand, qty: l.qty, price: Number(l.price), comment: l.comment, lineTotal: t.lineTotals[i],
-        increment: f?.increment ?? null, packNote: incrementProblem(l.qty, f?.increment), stock: f ? stockView(l.qty, f.available, f.pending, f.incoming, f.eta) : null }; }),
+        increment: f?.increment ?? null, packNote: incrementProblem(l.qty, f?.increment), stock: f ? stockView(l.qty, f.available, f.pending, f.incoming, f.eta) : null, image: f?.image ?? null }; }),
       totals: t, dear: o.dear_number ? { number: o.dear_number, status: o.dear_status, id: o.dear_id, linkedByHand: !!o.dear_quote_id } : null,
-      emailedAt: o.emailed_at, emailError: o.email_error, emailVersion: o.email_version, cancelReason: o.cancel_reason, ...(await orderPlus(o, lines, t, stage)),
-      log: await logOf({ orderId: oid }), followUps: await followUpsOf({ orderId: oid }), followUpsClosed: followUpsClosed(o.kind, stage),
-      handoffReady: await hand.handoffReady(), handoff: await hand.getHandoff(oid),
+      emailedAt: o.emailed_at, emailError: o.email_error, emailVersion: o.email_version, cancelReason: o.cancel_reason, ...plus,
+      log, followUps, followUpsClosed: followUpsClosed(o.kind, stage),
+      handoffReady, handoff,
     };
   });
 }
@@ -692,11 +721,12 @@ export async function getShow(id: unknown) {
     const show = await showRow(sid);
     await refreshLeads(sid);
     const orders = await linkedOrders('ol.show_id = $1::uuid order by ol.created_at desc', sid);
-    for (const o of orders) await noteDearMatch(o);
-    const lines = await linesOf(orders.map(o => o.id));
-    const fu = await prisma.$queryRaw<{ order_id: string | null; lead_id: string | null; due_on: Date; rep: string | null }[]>`select f.order_id, f.lead_id, f.due_on, r.name as rep from crm.ts_followups f left join crm.reps r on r.id = f.rep_id where f.done_on is null`;
+    const noted = Promise.all(orders.map(o => noteDearMatch(o)));   // all at once, not one trip per order
+    const linesP = noted.then(() => linesOf(orders.map(o => o.id)));
+    const fuP = prisma.$queryRaw<{ order_id: string | null; lead_id: string | null; due_on: Date; rep: string | null }[]>`select f.order_id, f.lead_id, f.due_on, r.name as rep from crm.ts_followups f left join crm.reps r on r.id = f.rep_id where f.done_on is null`;
     const nextFu = (k: 'order_id' | 'lead_id', id: string) => { const f = fu.find(x => x[k] === id); return f ? { dueOn: day(f.due_on)!, who: f.rep ?? 'Sales team' } : null; };
-    const leads = await prisma.$queryRaw<any[]>`select l.*, a.name as customer, a.region, r.name as rep_name from crm.ts_leads l join crm.accounts a on a.id = l.account_id left join crm.reps r on r.id = l.rep_id where l.show_id = ${sid}::uuid order by l.created_at desc`;
+    const leadsP = prisma.$queryRaw<any[]>`select l.*, a.name as customer, a.region, r.name as rep_name from crm.ts_leads l join crm.accounts a on a.id = l.account_id left join crm.reps r on r.id = l.rep_id where l.show_id = ${sid}::uuid order by l.created_at desc`;
+    const [lines, fu, leads] = await Promise.all([linesP, fuP, leadsP]);
     return {
       show: showOut(show),
       orders: orders.map(o => { const st = stageOf(o), t = orderTotals(o, (lines.get(o.id) ?? []).map(l => ({ qty: l.qty, price: Number(l.price), pct: Number(l.pct) || 0 })));
@@ -716,19 +746,20 @@ async function showResults(sid: string, show: ShowRow, orders: Linked[], lines: 
   const sum = (a: Linked[]) => round2(a.reduce((s, o) => s + val(o).goodsAfter, 0));
   // new customers: made at the show, or with no real order before the show
   const accIds = [...new Set(ord.map(o => o.account_id))];
-  const before = accIds.length ? await prisma.$queryRaw<{ account_id: string }[]>`select distinct account_id from crm.quotes q where q.account_id = any(${accIds}::uuid[]) and q.sent_at < ${day(show.starts_on)}::date
-      and ((q.source = 'rhino-history' or q.number like 'Q%') and q.paid or (q.source is distinct from 'rhino-history' and q.number not like 'Q%' and upper(coalesce(q.fulfillment_status, '')) <> all(${NOT_A_SALE}::text[])))` : [];
-  const had = new Set(before.map(b => b.account_id));
+  const beforeP = accIds.length ? prisma.$queryRaw<{ account_id: string }[]>`select distinct account_id from crm.quotes q where q.account_id = any(${accIds}::uuid[]) and q.sent_at < ${day(show.starts_on)}::date
+      and ((q.source = 'rhino-history' or q.number like 'Q%') and q.paid or (q.source is distinct from 'rhino-history' and q.number not like 'Q%' and upper(coalesce(q.fulfillment_status, '')) <> all(${NOT_A_SALE}::text[])))` : Promise.resolve([] as { account_id: string }[]);
   const isNew = (o: Linked) => o.new_customer || !had.has(o.account_id);
   const by = (k: (o: Linked) => string) => { const m = new Map<string, { orders: number; value: number }>(); for (const o of ord) { const e = m.get(k(o)) ?? { orders: 0, value: 0 }; e.orders++; e.value = round2(e.value + val(o).goodsAfter); m.set(k(o), e); } return [...m].map(([name, v]) => ({ name, ...v })).sort((a, b) => b.value - a.value); };
   const brands = new Map<string, number>(), skus = new Map<string, { name: string; units: number; value: number }>();
   for (const o of ord) { const t = val(o); (lines.get(o.id) ?? []).forEach((l, i) => { brands.set(l.brand || 'Unbranded', round2((brands.get(l.brand || 'Unbranded') ?? 0) + t.lineTotals[i]!)); const e = skus.get(l.sku) ?? { name: l.name, units: 0, value: 0 }; e.units += l.qty; e.value = round2(e.value + t.lineTotals[i]!); skus.set(l.sku, e); }); }
   const top = [...skus].sort((a, b) => b[1].units - a[1].units).slice(0, 25);
-  const facts = await stockFacts(top.map(([s]) => s));
+  const factsP = stockFacts(top.map(([s]) => s));
   const cost = round2([show.cost_stand, show.cost_travel, show.cost_samples, show.cost_other].reduce((s, c) => s + (Number(c) || 0), 0));
   const value = sum(ord);
   // leads
-  const leads = await prisma.$queryRaw<{ id: string; account_id: string; status: string; taken_on: Date }[]>`select id, account_id, status, taken_on from crm.ts_leads where show_id = ${sid}::uuid`;
+  const leadsP = prisma.$queryRaw<{ id: string; account_id: string; status: string; taken_on: Date }[]>`select id, account_id, status, taken_on from crm.ts_leads where show_id = ${sid}::uuid`;
+  const [before, facts, leads] = await Promise.all([beforeP, factsP, leadsP]);   // three independent lookups, side by side
+  const had = new Set(before.map(b => b.account_id));
   const won = leads.filter(l => l.status === 'won');
   let wonSales = 0;
   if (won.length) {

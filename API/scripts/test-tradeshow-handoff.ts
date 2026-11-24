@@ -1,6 +1,6 @@
-// Tests the plain rules behind paying at a trade show: the email wording, the screenshot checks, and barcode matching. No database, no email.
+// Tests the plain rules behind paying at a trade show: the email wording and the screenshot checks. No database, no email.
 // Run:  npx tsx scripts/test-tradeshow-handoff.ts
-import { barcodeCandidates, paymentLines, salesEmail, splitColour } from '../src/lib/tradeshowCore';
+import { paymentLines, salesEmail, splitColour } from '../src/lib/tradeshowCore';
 import { parseProof, PROOF_MAX_BYTES } from '../src/lib/tsHandoff';
 
 let pass = 0, fail = 0;
@@ -32,11 +32,6 @@ const base = { number: 'TS-0007', kind: 'order' as const, reference: 'LIS MEL AU
 const m = salesEmail({ ...base, payment: { mode: 'paid', method: 'bank', amount: 66, proofName: 'p.jpg' } });
 ok('the whole email: subject says PAID and how, body has the payment and the total', /PAID by bank transfer/.test(m.subject) && /PAYMENT: PAID AT THE SHOW/.test(m.body) && /TOTAL inc GST: \$66\.00/.test(m.body), m.subject);
 ok('an unpaid email has no PAID in the subject', !/PAID/.test(salesEmail({ ...base, payment: { mode: 'later', method: null, amount: null, proofName: null } }).subject));
-
-console.log('--- barcodes');
-ok('a plain EAN-13 is tried as it is, and a UPC-A with its leading zero', barcodeCandidates('9300000000017').includes('9300000000017') && barcodeCandidates('036000291452').includes('0036000291452') && barcodeCandidates('0036000291452').includes('036000291452'));
-ok('spaces are ignored; nonsense gives nothing', barcodeCandidates(' 9300 0000 00017 ')[0] === '9300000000017' && barcodeCandidates('').length === 0 && barcodeCandidates("'; drop table x; --").length === 0 && barcodeCandidates('ab').length === 0);
-ok('a SKU-style code (letters and dashes) is kept as it is', barcodeCandidates('LW-1234').join() === 'LW-1234');
 
 console.log('--- the same item in other colours (read from the names)');
 const sc = (n: string) => JSON.stringify(splitColour(n));

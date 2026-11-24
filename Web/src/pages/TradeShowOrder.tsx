@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPatch, apiPost, apiPutText } from '../lib/api';
 import { blobToBase64, shrinkImage } from '../lib/shrinkImage';
-import BarcodeScanner, { scannerAvailable } from '../components/BarcodeScanner';
+import { Thumb, PicLightbox } from '../components/ProductPic';
+import ShowRange from '../components/ShowRange';
 import { PaymentPicker, PaymentSummary, type Pay } from '../components/TsPayment';
 import { useMe } from '../lib/useMe';
 import TsLogFollowUps from '../components/TsLogFollowUps';
@@ -48,7 +49,8 @@ export default function TradeShowOrder() {
   const latest = useRef(0);
   const [pay, setPay] = useState<Pay>({ mode: 'later', method: 'bank', file: null });
   const payInit = useRef(false);   // the saved choice is read once; after that the page's own choice stands (saving the order reloads it)
-  const [scanning, setScanning] = useState(false);
+  const [showRange, setShowRange] = useState(false);
+  const [big, setBig] = useState<Product | null>(null);
   const linesRef = useRef<Line[]>([]);
   const [lastSku, setLastSku] = useState<string | null>(null);   // the product just added: its other colours are suggested
   const [variants, setVariants] = useState<{ colour: string | null; others: Variant[] } | null>(null);
@@ -106,17 +108,6 @@ export default function TradeShowOrder() {
   function changePay(p: Pay) {
     setPay(p);
     if (o && p.mode === 'paid' && (p.method === 'card') !== o.cardPayment) void save({ cardPayment: p.method === 'card' });   // the total moves with the surcharge
-  }
-  /** One scan: the product with that barcode is added, or its quantity grows by one pack (or by 1). The scanner stays open for the next one. */
-  async function onScan(code: string): Promise<{ ok: boolean; text: string }> {
-    const d: { product: Product | null } = await apiGet(`/tradeshow/products/by-barcode?code=${encodeURIComponent(code)}`, { fresh: true });
-    const p = d.product;
-    if (!p) return { ok: false, text: `Barcode ${code} is not a product in Radar.` };
-    if (p.price === null) return { ok: false, text: `${p.name}: no wholesale price, so it can't be added.` };
-    const step = p.increment && p.increment > 1 ? p.increment : 1;
-    const now = (linesRef.current.find(l => l.sku === p.sku && l.kind === 'normal')?.qty ?? 0) + step;
-    add(p);
-    return { ok: true, text: `Added: ${p.name} (+${step}), now ${now}${p.free < now ? `. Only ${Math.max(p.free, 0)} free in stock` : ''}` };
   }
   function add(p: Product) {
     setLines(ls => { const i = ls.findIndex(l => l.sku === p.sku && l.kind === 'normal'); const step = p.increment && p.increment > 1 ? p.increment : 1; return i >= 0 ? ls.map((l, j) => (j === i ? { ...l, qty: l.qty + step } : l)) : [...ls, { sku: p.sku, name: p.name, brand: p.brand, kind: 'normal' as const, offerId: null, qty: step, comment: '', price: p.price ?? 0, increment: p.increment, available: p.available, pending: p.pending, incoming: p.incoming, eta: p.eta }]; });
@@ -180,9 +171,10 @@ export default function TradeShowOrder() {
         <div className="section" style={{ marginBottom: 14 }}>
           <div style={{ display: 'flex', gap: 8, maxWidth: 640, alignItems: 'center' }}>
             <input style={{ ...field, flex: 1, minWidth: 0, fontSize: 16 }} placeholder="Add a product: SKU, name, barcode or brand" value={q} onChange={e => setQ(e.target.value)} />
-            {scannerAvailable() && <button type="button" className="btn secondary" onClick={() => setScanning(true)}>Scan barcode</button>}
+            <button type="button" className="btn secondary" onClick={() => setShowRange(true)}>Show range</button>
           </div>
-          {scanning && <BarcodeScanner onScan={onScan} onClose={() => setScanning(false)} />}
+          {showRange && <ShowRange showId={o.show.id} initialBrand={(lines[lines.length - 1]?.brand) ?? ''} onAdd={add} onClose={() => setShowRange(false)} />}
+          {big && <PicLightbox p={big} onClose={() => setBig(null)} onAdd={() => add(big)} />}
           {variants && variants.others.length > 0 && !q.trim() && (
             <div style={{ maxWidth: 640, marginTop: 8, padding: '8px 10px', border: '1px dashed var(--line)', borderRadius: 6 }}>
               <div className="acct-region" style={{ fontSize: 12.5, marginBottom: 6 }}>Other colours of this item <span style={{ opacity: 0.8 }}>(worked out from the product names)</span></div>
@@ -191,7 +183,7 @@ export default function TradeShowOrder() {
                   const offer = o.offers.find(x => x.active && x.kind === 'pct' && x.pct && ((v.brand && x.brands.some(b => b.toLowerCase() === v.brand!.toLowerCase())) || x.skus.some(k => k.toUpperCase() === v.sku.toUpperCase())));
                   return (
                     <button key={v.sku} type="button" className="btn secondary" disabled={v.price === null} onClick={() => add(v)} title={`${v.name} (${v.sku})`} style={{ textAlign: 'left', padding: '6px 10px' }}>
-                      <b style={{ textTransform: 'capitalize' }}>{v.colour}</b> <span style={{ fontSize: 12.5 }}>{v.price === null ? 'no price' : $(v.price)} · <span style={{ color: v.free > 0 ? 'var(--teal)' : 'var(--rust)' }}>{Math.max(v.free, 0)} free</span></span>
+                      <Thumb src={v.image} name={v.name} size={36} /> <b style={{ textTransform: 'capitalize' }}>{v.colour}</b> <span style={{ fontSize: 12.5 }}>{v.price === null ? 'no price' : $(v.price)} · <span style={{ color: v.free > 0 ? 'var(--teal)' : 'var(--rust)' }}>{Math.max(v.free, 0)} free</span></span>
                       {v.onStand && <span className="pill teal" style={{ marginLeft: 6 }}>On the stand</span>}
                       {offer && <div style={{ fontSize: 12, color: 'var(--teal)' }}>{offer.name}: {offer.pct}% off</div>}
                     </button>
@@ -204,6 +196,7 @@ export default function TradeShowOrder() {
             <div style={{ border: '1px solid var(--line)', borderRadius: 6, maxWidth: 640, background: 'var(--panel)', marginTop: 4, maxHeight: 340, overflowY: 'auto' }}>
               {hits.map(p => (
                 <button key={p.sku} type="button" onClick={() => add(p)} disabled={p.price === null} style={{ display: 'flex', gap: 10, width: '100%', textAlign: 'left', padding: '8px 12px', border: 0, borderBottom: '1px solid var(--line)', background: 'none', font: 'inherit', cursor: 'pointer', alignItems: 'center' }}>
+                  <Thumb src={p.image} name={p.name} size={48} onOpen={() => setBig(p)} />
                   <span style={{ flex: 1 }}><b>{p.name}</b>{p.brand && stand.has(p.brand.toLowerCase()) && <> <span className="pill teal">On the stand</span></>}<div className="acct-region" style={{ fontSize: 12.5 }}>{p.sku}{p.brand ? ` · ${p.brand}` : ''}{p.increment && p.increment > 1 ? ` · packs of ${p.increment}` : ''}</div></span>
                   <span style={{ textAlign: 'right', fontSize: 13, whiteSpace: 'nowrap' }}>{p.price === null ? <span style={{ color: 'var(--rust)' }}>no wholesale price</span> : $(p.price)}<div style={{ color: p.free > 0 ? 'var(--teal)' : 'var(--rust)', fontSize: 12.5 }}>{stockText(p)}</div></span>
                 </button>
@@ -215,7 +208,7 @@ export default function TradeShowOrder() {
 
       <div style={{ overflowX: 'auto', border: '1px solid var(--line)', borderRadius: 4, background: 'var(--panel)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr><th style={th}>Product</th><th style={{ ...th, textAlign: 'right' }}>Qty</th><th style={{ ...th, textAlign: 'right' }}>Price ex GST</th><th style={{ ...th, textAlign: 'right' }}>Off</th><th style={{ ...th, textAlign: 'right' }}>Line ex GST</th><th style={th}>Stock</th>{draft && mine && <th style={th} />}</tr></thead>
+          <thead><tr><th style={{ ...th, width: 56 }} /><th style={th}>Product</th><th style={{ ...th, textAlign: 'right' }}>Qty</th><th style={{ ...th, textAlign: 'right' }}>Price ex GST</th><th style={{ ...th, textAlign: 'right' }}>Off</th><th style={{ ...th, textAlign: 'right' }}>Line ex GST</th><th style={th}>Stock</th>{draft && mine && <th style={th} />}</tr></thead>
           <tbody>
             {(draft ? A!.lines : o.lines).map((l: any, i: number) => {
               const gift = l.kind === 'gift', edit = draft && mine && !gift, src = lines[i];
@@ -223,6 +216,7 @@ export default function TradeShowOrder() {
               const offer = o.offers.find(x => x.id === l.offerId), pack = src ? packProblem(src.qty, src.increment) : null, off = tt.linePcts[i] ?? 0;
               return (
                 <tr key={`${l.kind}-${l.sku}-${i}`} style={gift ? { background: 'var(--bg-soft, rgba(0,0,0,0.03))' } : undefined}>
+                  <td style={{ ...td, width: 56 }}><Thumb src={l.image} name={l.name} size={44} onOpen={() => setBig({ sku: l.sku, name: l.name, brand: l.brand ?? null, price: l.price, free: src ? Math.max((src.available ?? 0) - (src.pending ?? 0), 0) : 0, image: l.image, increment: src?.increment ?? null } as Product)} /></td>
                   <td style={td}><b>{l.name}</b><div className="acct-region" style={{ fontSize: 12.5 }}>{l.sku}{pack ? <span style={{ color: 'var(--amber)' }}> · {pack}</span> : ''}{gift ? ` · free with ${offer?.name ?? 'an offer'}` : l.kind === 'bundle' ? ` · pack: ${offer?.name ?? 'bundle'}` : ''}</div>
                     {edit && src ? <input style={{ ...field, fontSize: 13, padding: '3px 6px', marginTop: 4, width: '100%' }} placeholder="Comment for DEAR (optional)" value={src.comment} onChange={e => { setLines(ls => ls.map((x, j) => (j === i ? { ...x, comment: e.target.value } : x))); setDirty(true); }} /> : !gift && l.comment && <div style={{ fontSize: 12.5 }}>{l.comment}</div>}</td>
                   <td style={num}>{edit && src ? <input inputMode="numeric" style={{ ...field, width: 70, textAlign: 'right' }} value={src.qty} onChange={e => { const n = Math.max(0, Math.floor(Number(e.target.value) || 0)); setLines(ls => ls.map((x, j) => (j === i ? { ...x, qty: n } : x))); setDirty(true); }} /> : l.qty}</td>

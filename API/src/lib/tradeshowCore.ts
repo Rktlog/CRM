@@ -188,16 +188,6 @@ export const phoneKey = (p: string | null | undefined) => { const d = String(p ?
 export const nameKey = (n: string | null | undefined) => String(n ?? '').toLowerCase().replace(/\b(pty|ltd|limited|the|t\/a|trading as)\b/g, '').replace(/[^a-z0-9]/g, '');
 export { t as cleanText };
 
-// ---------- scanning ----------
-/** A 12-digit UPC and the same code with a leading 0 (13 digits) are the same barcode; try each. Anything that is not plausibly a barcode gives nothing. */
-export function barcodeCandidates(code: string): string[] {
-  const c = code.replace(/\s+/g, '');
-  if (!/^[A-Za-z0-9\-.$/+% ]{3,64}$/.test(c)) return [];
-  const out = new Set([c]);
-  if (/^\d+$/.test(c)) { const bare = c.replace(/^0+/, ''); for (const n of [12, 13, 14]) if (bare.length <= n) out.add(bare.padStart(n, '0')); out.add(bare); }
-  return [...out];
-}
-
 // ---------- the same item in other colours ----------
 // Radar has no colour field, so the colour is read from the product name: a colour word at the start ("Pink Birthday Candle Set"), at the end ("Bunny
 // Small Pink") or after a dash or comma ("Bunny Small - Pink"). It is a best guess, so the page says "other colours (from the names)".

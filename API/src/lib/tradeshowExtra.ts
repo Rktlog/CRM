@@ -3,7 +3,7 @@
 import { prisma } from './prisma';
 import { cleanText, parseDay, round2, TsError, plusDays, type OrderStage } from './tradeshowCore';
 import { cleanFreightCfg, DEFAULT_FREIGHT, type Offer, type OfferItem } from './tsOffers';
-import { day, loadFreightCfg, loadOffers, paymentOf } from './tradeshowOrderPlus';
+import { day, forgetOffers, loadFreightCfg, loadOffers, paymentOf } from './tradeshowOrderPlus';
 import { addSystemLog, linesOf, linkedOrders, orderTotals, stageOf, type Rep } from './tradeshow';
 
 const isManager = (r: Rep) => r.role === 'manager';
@@ -41,7 +41,7 @@ export async function parseOffer(b: any): Promise<OfferInput> {
   return o;
 }
 export async function listOffers(showId: unknown): Promise<Offer[]> { return guard(() => loadOffers(idOk(showId, 'That show'))); }
-export async function saveOffer(rep: Rep, showId: unknown, b: any, id?: unknown): Promise<string> {
+async function saveOfferNow(rep: Rep, showId: unknown, b: any, id?: unknown): Promise<string> {
   mustManage(rep, 'set up offers');
   const sid = idOk(showId, 'That show'), o = await parseOffer(b);
   return guard(async () => {
@@ -59,12 +59,12 @@ export async function saveOffer(rep: Rep, showId: unknown, b: any, id?: unknown)
     return r!.id;
   });
 }
-export async function deleteOffer(rep: Rep, showId: unknown, id: unknown) {
+async function deleteOfferNow(rep: Rep, showId: unknown, id: unknown) {
   mustManage(rep, 'delete offers');
   await guard(() => prisma.$queryRaw`delete from crm.ts_offers where id = ${idOk(id, 'That offer')}::uuid and show_id = ${idOk(showId, 'That show')}::uuid`);
 }
 /** Next year's show starts from this year's offers: copies them (not the history) into another show. */
-export async function copyOffers(rep: Rep, toShowId: unknown, fromShowId: unknown): Promise<number> {
+async function copyOffersNow(rep: Rep, toShowId: unknown, fromShowId: unknown): Promise<number> {
   mustManage(rep, 'copy offers');
   const to = idOk(toShowId, 'That show'), from = idOk(fromShowId, 'The show to copy from');
   if (to === from) throw new TsError('Pick a different show to copy from.');
@@ -74,14 +74,14 @@ export async function copyOffers(rep: Rep, toShowId: unknown, fromShowId: unknow
 
 // ---------- freight rates ----------
 export async function getFreightCfg() { return guard(loadFreightCfg); }
-export async function saveFreightCfg(rep: Rep, v: unknown) {
+async function saveFreightCfgNow(rep: Rep, v: unknown) {
   mustManage(rep, 'change freight rates');
   let cfg; try { cfg = cleanFreightCfg(v); } catch (e: any) { throw new TsError(e.message); }
   await guard(() => prisma.$queryRaw`insert into crm.ts_freight_cfg (id, config, updated_by) values (1, ${JSON.stringify(cfg)}::jsonb, ${rep.id}::uuid)
     on conflict (id) do update set config = excluded.config, updated_by = excluded.updated_by, updated_at = now()`);
   return loadFreightCfg();
 }
-export async function resetFreightCfg(rep: Rep) { mustManage(rep, 'change freight rates'); await guard(() => prisma.$queryRaw`delete from crm.ts_freight_cfg where id = 1`); return { cfg: DEFAULT_FREIGHT, custom: false }; }
+async function resetFreightCfgNow(rep: Rep) { mustManage(rep, 'change freight rates'); await guard(() => prisma.$queryRaw`delete from crm.ts_freight_cfg where id = 1`); return { cfg: DEFAULT_FREIGHT, custom: false }; }
 
 // ---------- payments and the DEAR queue ----------
 const AU_DAY = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' });
@@ -348,3 +348,10 @@ async function liveShow(s: any): Promise<CompareShow> {
   return { ...base(s), days, bundles: [...packs].map(([name, qty]) => ({ name, qty })).sort((a, b) => b.qty - a.qty), byState: [...st].map(([state, v]) => ({ state, ...v })).sort((a, b) => b.sales - a.sales),
     totals: totalsOf(s, days, allV > 0 ? paidV / allV : null, signedAll), vsPrevious: { sales: null, orders: null, previousName: null } };
 }
+
+// Offers and freight rates are kept for a short time by the order page (lib/tradeshowOrderPlus.ts). Any change drops what was kept, so the next load sees it.
+export const saveOffer = async (...a: Parameters<typeof saveOfferNow>) => { try { return await saveOfferNow(...a); } finally { forgetOffers(); } };
+export const deleteOffer = async (...a: Parameters<typeof deleteOfferNow>) => { try { return await deleteOfferNow(...a); } finally { forgetOffers(); } };
+export const copyOffers = async (...a: Parameters<typeof copyOffersNow>) => { try { return await copyOffersNow(...a); } finally { forgetOffers(); } };
+export const saveFreightCfg = async (...a: Parameters<typeof saveFreightCfgNow>) => { try { return await saveFreightCfgNow(...a); } finally { forgetOffers(); } };
+export const resetFreightCfg = async (...a: Parameters<typeof resetFreightCfgNow>) => { try { return await resetFreightCfgNow(...a); } finally { forgetOffers(); } };
