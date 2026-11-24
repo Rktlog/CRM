@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AddLink, EmailPreview, FillButtons, type SavedLink } from '../components/LinkTools';
 import { apiGet, apiPost, clearApiCache } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 
@@ -119,6 +120,9 @@ function Templates() {
   const [prev, setPrev] = useState<{ subject: string; body: string; problems: string[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const box = useRef<HTMLTextAreaElement>(null);
+  const [links, setLinks] = useState<SavedLink[]>([]);
+  useEffect(() => { apiGet('/sales-tools/links', { fresh: true }).then((d: { links: SavedLink[] }) => setLinks(d.links ?? [])).catch(() => undefined); }, []);
 
   const load = useCallback(() => { apiGet('/sales-tools/templates', { fresh: true }).then(setData).catch(e => setError(msg(e))); }, []);
   useEffect(load, [load]);
@@ -177,11 +181,15 @@ function Templates() {
             {saved && <div className="save-msg" role="status">Saved. New emails follow it from now on.</div>}
             {(sel === 'new' || !cur?.builtIn) && <label className="modal-field">Name<input value={f.name} maxLength={60} disabled={locked} onChange={e => setF({ ...f, name: e.target.value })} placeholder="Engelite preorder" /></label>}
             <label className="modal-field">Subject<input value={f.subject} maxLength={200} disabled={locked} onChange={e => setF({ ...f, subject: e.target.value })} /></label>
-            <label className="modal-field">Email<textarea value={f.body} rows={16} maxLength={8000} disabled={locked} onChange={e => setF({ ...f, body: e.target.value })} style={{ width: '100%', font: 'inherit' }} /></label>
+            {!locked && (
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', margin: '4px 0 6px' }}>
+                <FillButtons getBox={() => box.current} value={f.body} onChange={v => setF(x => ({ ...x, body: v }))} />
+                <AddLink getBox={() => box.current} value={f.body} onChange={v => setF(x => ({ ...x, body: v }))} links={links} mode="template" />
+              </div>
+            )}
+            <label className="modal-field">Email<textarea ref={box} value={f.body} rows={14} maxLength={8000} disabled={locked} onChange={e => setF({ ...f, body: e.target.value })} style={{ width: '100%', font: 'inherit' }} /></label>
             <div className="acct-region" style={{ fontSize: 12.5, margin: '2px 0 8px' }}>
-              Words in square brackets are filled in for each email:{' '}
-              {data.help.map((h, i) => <span key={h.tag}>{i ? '; ' : ''}<code>{h.tag}</code> {h.means}</span>)}.
-              A link can also be written as [words](https://address).
+              Use the buttons above to put in the customer's name or a link. Select some words first and press Add link to make them the link. Radar fills in the details for each customer.
             </div>
             {prev && prev.problems.length > 0 && <div className="save-msg err" role="alert">{prev.problems.join(' ')}</div>}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
@@ -193,7 +201,7 @@ function Templates() {
                 <div className="acct-region">How it looks (made-up customer: Morgana, SQ10001, brands Engelite and Miffy)</div>
                 <div style={{ border: '1px solid var(--line)', borderRadius: 6, padding: 10, marginTop: 4 }}>
                   <div style={{ fontWeight: 600, marginBottom: 6 }}>{prev.subject}</div>
-                  <div style={{ whiteSpace: 'pre-wrap' }}>{prev.body}</div>
+                  <EmailPreview text={prev.body} />
                 </div>
               </div>
             )}
