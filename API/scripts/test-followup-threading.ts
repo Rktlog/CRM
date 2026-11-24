@@ -133,7 +133,7 @@ async function main() {
 
   // ===== 6. making the reminder draft =====
   console.log('--- 6. the reminder draft');
-  const target: ReplyTarget = { threadId: 't1', subject: 'Re: Sales Quote SQ36721', inReplyTo: '<m2@mail.test>', references: '<m1@mail.test> <m2@mail.test>', lastFrom: 'customer', found: 'log' };
+  const target: ReplyTarget = { threadId: 't1', subject: 'Re: Sales Quote SQ36721', inReplyTo: '<m2@mail.test>', references: '<m1@mail.test> <m2@mail.test>', lastFrom: 'customer', found: 'log', answers: { gmailId: 'm2', date: '', from: '' } };
   const input = { to: 'pat@shop.com.au', subject: 'Friendly Reminder: Payment Due for Sales Quote SQ36721', body: 'Hi Pat', ...Q };
   const drafts: any[] = [];
   const mk = (over: { find?: () => Promise<ReplyTarget | null>; create?: (m: any) => Promise<any> } = {}) => ({
@@ -161,7 +161,7 @@ async function main() {
   eq('no customer address: an empty To, to be filled in by a person', [drafts[0].to, drafts[0].allowEmptyTo], [[], true]);
 
   // ===== 7. the safety promise =====
-  console.log('--- 7. nothing is ever sent, and no email body is ever read');
+  console.log('--- 7. nothing is ever sent, and choosing the conversation reads no email body (copying the answered email underneath: scripts/test-followup-quote-copy.ts)');
   fakeGmail((c) => {
     if (c.method === 'POST' && c.url.endsWith('/drafts')) return reply(200, { id: 'd9', message: { id: 'g9', threadId: 't1' } });
     if (c.url.includes('/threads/t1')) return reply(200, { id: 't1', messages: [{ id: 'm1', labelIds: ['SENT'], internalDate: '1000', payload: { headers: [{ name: 'Message-ID', value: '<m1@mail.test>' }, { name: 'Subject', value: 'Sales Quote SQ36721' }, { name: 'From', value: 'sales@rhinorhino.com.au' }, { name: 'To', value: 'pat@shop.com.au' }] } }] });

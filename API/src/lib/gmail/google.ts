@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { tokenKeyOk } from './crypto';
 
 // Talks to Google, and keeps nothing. Plain web requests (no extra packages).
@@ -116,7 +117,11 @@ export async function getProfile(accessToken: string): Promise<{ emailAddress: s
 }
 // ---- Drafts: put an email in the rep's own Drafts folder. It is never sent from here. ----
 export type DraftInput = { to: string[]; cc?: string[]; subject: string; body: string; allowEmptyTo?: boolean;   // allowEmptyTo: only for drafts the CRM makes by itself, to be addressed by a person
-  threadId?: string; inReplyTo?: string; references?: string };   // a reply: the draft goes into this existing conversation (see lib/gmail/threadReply.ts)
+  threadId?: string; inReplyTo?: string; references?: string;   // a reply: the draft goes into this existing conversation (see lib/gmail/threadReply.ts)
+  quoted?: Quoted };                                             // the email being answered, shown underneath like a normal Gmail reply ("On ... wrote:")
+// The email a reply answers, copied under it the way Gmail does it. attribution is the "On Mon, Nov 16, 2026 at 11:01 AM Name <a@b> wrote:" line.
+export type Quoted = { attribution: string; html: string | null; text: string };
+export const MAX_QUOTED_BYTES = 1_500_000;   // an email bigger than this is not copied underneath: the reply is still made, just without it
 const MSG_ID = /^<[^<>\s]{1,200}>$/;          // a plain <id>: nothing that could add a header
 const THREAD_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const ADDRESS = /^[^\s<>@,;"()\[\]\\]+@[^\s<>@,;"()\[\]\\]+\.[^\s<>@,;"()\[\]\\]+$/;
@@ -133,6 +138,26 @@ function encodeSubject(subject: string): string {
   return parts.map(p => `=?UTF-8?B?${b64(Buffer.from(p, 'utf8'))}?=`).join('\r\n ');
 }
 // The whole email, ready for Gmail (base64url). Refuses anything with a line break in a header.
+const wrap64 = (text: string) => (b64(Buffer.from(text.replace(/\r\n|\r|\n/g, '\r\n'), 'utf8')).match(/.{1,76}/g) ?? []).join('\r\n');
+const escapeHtml = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+// Only what sits inside <body>, without scripts: the part of an email that can be placed inside another one.
+export function innerHtml(html: string): string {
+  const m = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  return (m ? m[1]! : html).replace(/<(script|head|title)[\s\S]*?<\/\1>/gi, '').replace(/<\/?(html|body|!doctype)[^>]*>/gi, '');
+}
+// The plain-text version: the reply, the "On ... wrote:" line, then the earlier email with "> " in front of each line.
+export function quotedText(body: string, q: Quoted): string {
+  const lines = q.text.replace(/\r\n|\r/g, '\n').replace(/\n+$/, '').split('\n').map(l => (l ? '> ' + l : '>'));
+  return `${body}\n\n${q.attribution}\n\n${lines.join('\n')}\n`;
+}
+// The HTML version, laid out exactly the way Gmail lays out its own replies, so Gmail folds the earlier email away under "..." in the same way.
+export function quotedHtml(body: string, q: Quoted): string {
+  const mine = escapeHtml(body).replace(/\r\n|\r|\n/g, '<br>');
+  const theirs = q.html != null ? innerHtml(q.html) : escapeHtml(q.text).replace(/\r\n|\r|\n/g, '<br>');
+  const attr = escapeHtml(q.attribution).replace(/&lt;([^&\s]+@[^&\s]+)&gt;/, (_m, a) => `&lt;<a href="mailto:${a}">${a}</a>&gt;`);
+  return `<div dir="ltr">${mine}</div><br><div class="gmail_quote gmail_quote_container"><div dir="ltr" class="gmail_attr">${attr}<br></div>`
+    + `<blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex">${theirs}</blockquote></div>\r\n`;
+}
 export function buildRawMessage(m: DraftInput): string {
   const to = m.to.map(cleanAddress), cc = (m.cc ?? []).map(cleanAddress);
   if ((!to.length && !m.allowEmptyTo) || to.some(a => !a) || cc.some(a => !a)) throw new Error('Check the email addresses');
@@ -140,12 +165,22 @@ export function buildRawMessage(m: DraftInput): string {
   const refs = (m.references ?? '').split(/\s+/).filter(Boolean);
   if ((m.inReplyTo && !MSG_ID.test(m.inReplyTo)) || refs.some(r => !MSG_ID.test(r)) || refs.length > 30) throw new Error('Check the reply headers');
   if (m.threadId && !THREAD_ID.test(m.threadId)) throw new Error('Check the conversation id');
+  if (m.quoted && /[\r\n]/.test(m.quoted.attribution)) throw new Error('The "wrote:" line cannot have a line break');
   // The two headers that make Gmail file a draft in the same conversation as the email it answers.
   const reply = m.inReplyTo ? [`In-Reply-To: ${m.inReplyTo}`, ...(refs.length ? [`References: ${refs.join('\r\n ')}`] : [])] : [];
-  const body = m.body.replace(/\r\n|\r|\n/g, '\r\n');
-  const wrapped = (b64(Buffer.from(body, 'utf8')).match(/.{1,76}/g) ?? []).join('\r\n');
-  const head = [...(to.length ? [`To: ${to.join(', ')}`] : []), ...(cc.length ? [`Cc: ${cc.join(', ')}`] : []), `Subject: ${encodeSubject(m.subject)}`, ...reply, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64'];
-  return b64url(Buffer.from(head.join('\r\n') + '\r\n\r\n' + wrapped + '\r\n', 'utf8'));
+  const head = [...(to.length ? [`To: ${to.join(', ')}`] : []), ...(cc.length ? [`Cc: ${cc.join(', ')}`] : []), `Subject: ${encodeSubject(m.subject)}`, ...reply, 'MIME-Version: 1.0'];
+  let rest: string;
+  if (!m.quoted) {
+    rest = ['Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '', wrap64(m.body), ''].join('\r\n');
+  } else {
+    // A reply with the earlier email underneath: a plain-text version and an HTML version of the same thing, like Gmail sends.
+    const boundary = `rr_${randomBytes(12).toString('hex')}`;
+    rest = [`Content-Type: multipart/alternative; boundary="${boundary}"`, '',
+      `--${boundary}`, 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '', wrap64(quotedText(m.body, m.quoted)),
+      `--${boundary}`, 'Content-Type: text/html; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '', wrap64(quotedHtml(m.body, m.quoted)),
+      `--${boundary}--`, ''].join('\r\n');
+  }
+  return b64url(Buffer.from(head.join('\r\n') + '\r\n' + rest, 'utf8'));
 }
 // The ONLY call this app makes to write to Gmail: create a draft (new, or a reply inside an existing conversation). There is no send anywhere in the CRM.
 export async function createDraft(accessToken: string, m: DraftInput): Promise<{ id: string; messageId: string; threadId: string }> {
@@ -200,9 +235,10 @@ export async function getMessageMeta(accessToken: string, id: string): Promise<G
   } catch (e) { if (e instanceof GoogleApiError && e.status === 404) return null; throw e; }
 }
 
-// ---- Replying inside an existing conversation. Only the HEADERS of its emails are read, never what they say. ----
+// ---- Replying inside an existing conversation. Only the HEADERS of its emails are read to choose it. The one email being answered is then
+// read in full (getMessageBody) so it can be copied underneath the reply; it goes into the draft and nowhere else, and is never saved. ----
 export type ThreadMessage = { id: string; labelIds: string[]; internalDate: string; headers: Record<string, string> };
-const THREAD_HEADERS = ['Message-ID', 'References', 'Subject', 'From', 'To', 'Cc', 'Reply-To'];
+const THREAD_HEADERS = ['Message-ID', 'References', 'Subject', 'From', 'To', 'Cc', 'Reply-To', 'Date'];
 // Every email in one conversation, headers only. null if the conversation has been deleted since.
 export async function getThreadMeta(accessToken: string, threadId: string): Promise<ThreadMessage[] | null> {
   if (!THREAD_ID.test(threadId)) return null;
@@ -248,4 +284,25 @@ export async function getMessageText(accessToken: string, id: string): Promise<s
     const b = await parse(await fetchImpl(`${API}/messages/${encodeURIComponent(id)}?format=full`, auth(accessToken)));
     return textFromPayload(b.payload);
   } catch (e) { if (e instanceof GoogleApiError && e.status === 404) return null; throw e; }
+}
+
+// The words of ONE email, as HTML and as plain text, to copy underneath a reply to it. Attachments are left out (Gmail leaves them out of a
+// reply too). null if it has been deleted since, or if it is too big to copy. Nothing is saved.
+export async function getMessageBody(accessToken: string, id: string): Promise<{ html: string | null; text: string } | null> {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return null;
+  let b: any;
+  try { b = await parse(await fetchImpl(`${API}/messages/${encodeURIComponent(id)}?format=full`, auth(accessToken))); }
+  catch (e) { if (e instanceof GoogleApiError && e.status === 404) return null; throw e; }
+  let html: string | null = null, plain: string | null = null;
+  const walk = (x: Part) => {
+    if (x.filename) return;   // an attachment, not the message
+    if (x.mimeType === 'text/html' && x.body?.data && html == null) html = fromB64Url(x.body.data);
+    else if (x.mimeType === 'text/plain' && x.body?.data && plain == null) plain = fromB64Url(x.body.data);
+    for (const c of x.parts ?? []) walk(c);
+  };
+  if (b?.payload) walk(b.payload);
+  const text = plain ?? textFromPayload(b?.payload);
+  if (html == null && !text.trim()) return null;
+  if (Buffer.byteLength(html ?? '') + Buffer.byteLength(text) > MAX_QUOTED_BYTES) return null;
+  return { html, text };
 }

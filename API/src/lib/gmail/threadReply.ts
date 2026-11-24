@@ -1,4 +1,4 @@
-import { GoogleApiError, type DraftInput, type ThreadMessage } from './google';
+import { GoogleApiError, type DraftInput, type Quoted, type ThreadMessage } from './google';
 
 // A payment reminder should sit in the SAME email conversation as the quote it is about, not start a new one.
 //
@@ -7,7 +7,10 @@ import { GoogleApiError, type DraftInput, type ThreadMessage } from './google';
 //   2. otherwise a Gmail search for the quote number, leaving out conversations marked Private.
 // It only uses a conversation that really involves THIS customer (one of their addresses is on a From, To, Cc or Reply-To), so a reminder can
 // never land in another customer's conversation. If nothing is found, or anything goes wrong, the draft is a new email, as it always was.
-// Only email HEADERS are read, never what an email says. Nothing is sent: the one thing written is the draft.
+// Choosing the conversation reads email HEADERS only. Once chosen, the one email being answered is read in full and copied underneath the reminder,
+// the way Gmail does it when you press Reply ("On Mon, Nov 16, 2026 at 11:01 AM ... wrote:"), so the customer sees the original quote email below.
+// That copy goes into the draft and nowhere else: it is never saved. If it cannot be read, the reply is still made, just without it.
+// Nothing is sent: the one thing written is the draft.
 
 const MSG_ID = /^<[^<>\s]{1,200}>$/;
 const NOT_USABLE = ['DRAFT', 'TRASH', 'SPAM'];
@@ -22,7 +25,8 @@ export function replySubject(s: string | undefined): string | null {
   return core ? `Re: ${core}` : null;
 }
 
-export type ReplyTarget = { threadId: string; subject: string; inReplyTo: string; references: string; lastFrom: 'customer' | 'us'; found: 'log' | 'search' };
+export type ReplyTarget = { threadId: string; subject: string; inReplyTo: string; references: string; lastFrom: 'customer' | 'us'; found: 'log' | 'search';
+  answers: { gmailId: string; date: string; from: string } };   // the email being replied to: its Gmail id, and its Date and From headers for the "wrote:" line
 export type ReplyQuery = { repId: string; accountId: string; number: string; addresses: string[] };
 export type LookupDeps = {
   logThreads: (q: { repId: string; accountId: string; number: string }) => Promise<string[]>;   // conversation ids from the saved emails, best first
@@ -45,7 +49,7 @@ export function targetFromThread(threadId: string, msgs: ThreadMessage[], custom
   const chain = [...new Set([...((last.headers['references'] ?? '').match(/<[^<>\s]{1,200}>/g) ?? []), id])];
   const refs = chain.length > 12 ? [chain[0]!, ...chain.slice(-11)] : chain;      // the first and the latest ones are what matters
   const lastFrom = addressesIn(last.headers['from']).some(a => customer.has(a)) ? 'customer' : 'us';
-  return { threadId, subject, inReplyTo: id, references: refs.join(' '), lastFrom };
+  return { threadId, subject, inReplyTo: id, references: refs.join(' '), lastFrom, answers: { gmailId: last.id, date: last.headers['date'] ?? '', from: last.headers['from'] ?? '' } };
 }
 
 // Never throws: a conversation that cannot be found or read simply means "start a new email".
@@ -73,15 +77,35 @@ export async function findReplyTarget(deps: LookupDeps, token: string, q: ReplyQ
 export type DraftDeps = {
   createDraft: (token: string, m: DraftInput) => Promise<{ id: string; messageId: string; threadId: string }>;
   findReplyTarget: (token: string, q: ReplyQuery) => Promise<ReplyTarget | null>;
+  getBody?: (token: string, gmailId: string) => Promise<{ html: string | null; text: string } | null>;   // the email being answered, to copy underneath
 };
+
+// The time zone the "wrote:" line is written in. The sales mailbox is read in Perth, so it matches what Gmail shows there.
+export const QUOTE_TIME_ZONE = 'Australia/Perth';
+// "On Mon, Nov 16, 2026 at 11:01 AM Sales Team <sales@example.com> wrote:", the same words Gmail puts above an email you reply to.
+export function attributionLine(date: string, from: string, timeZone = QUOTE_TIME_ZONE): string {
+  const who = from.replace(/[\r\n]+/g, ' ').replace(/"/g, '').trim().slice(0, 200) || 'Someone';
+  const t = Date.parse(date);
+  if (!Number.isFinite(t)) return `${who} wrote:`;
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+    .formatToParts(new Date(t)).map(x => [x.type, x.value]));
+  return `On ${p.weekday}, ${p.month} ${p.day}, ${p.year} at ${p.hour}:${p.minute} ${String(p.dayPeriod).toUpperCase()} ${who} wrote:`;
+}
+// The email being answered, ready to go underneath. null (no copy, the reply is still made) if it cannot be read.
+async function quoteFor(d: DraftDeps, token: string, t: ReplyTarget): Promise<Quoted | null> {
+  if (!d.getBody) return null;
+  try { const b = await d.getBody(token, t.answers.gmailId); return b ? { attribution: attributionLine(t.answers.date, t.answers.from), html: b.html, text: b.text } : null; }
+  catch { return null; }
+}
 // The one reminder draft for one quote: a reply in its conversation when there is one, otherwise a new email.
 export async function makeReminderDraft(d: DraftDeps, token: string, a: { to: string | null; subject: string; body: string } & ReplyQuery): Promise<{ id: string; messageId: string; threadId: string; threaded: boolean }> {
   const base: DraftInput = { to: a.to ? [a.to] : [], subject: a.subject, body: a.body, allowEmptyTo: true };
   let reply: ReplyTarget | null = null;
   try { reply = await d.findReplyTarget(token, { repId: a.repId, accountId: a.accountId, number: a.number, addresses: a.addresses }); } catch { reply = null; }
   if (reply) {
+    const quoted = await quoteFor(d, token, reply);
     try {
-      const made = await d.createDraft(token, { ...base, subject: reply.subject, threadId: reply.threadId, inReplyTo: reply.inReplyTo, references: reply.references });
+      const made = await d.createDraft(token, { ...base, subject: reply.subject, threadId: reply.threadId, inReplyTo: reply.inReplyTo, references: reply.references, ...(quoted ? { quoted } : {}) });
       return { ...made, threaded: made.threadId === reply.threadId };
     } catch (e) {
       if (!(e instanceof GoogleApiError) || ![400, 404].includes(e.status)) throw e;   // only "Gmail refused that conversation" falls back; a network error is left to the retry
