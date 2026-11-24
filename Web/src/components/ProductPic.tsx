@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { Product } from '../lib/tradeshow';
 
@@ -19,18 +19,34 @@ export function Thumb({ src, name, size = 44, onOpen }: { src: string | null | u
 
 const money = (n: number) => `$${n.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 /** One product, big, with its price and stock, and a button to add it. */
-export function PicLightbox({ p, onClose, onAdd }: { p: Pick<Product, 'sku' | 'name' | 'brand' | 'price' | 'free' | 'image' | 'increment'>; onClose: () => void; onAdd?: () => void }) {
+export function PicLightbox({ p, onClose, onAdd }: { p: Pick<Product, 'sku' | 'name' | 'brand' | 'price' | 'free' | 'image' | 'increment'> & Partial<Pick<Product, 'retail' | 'available' | 'pending' | 'incoming' | 'eta'>>; onClose: () => void; onAdd?: () => void }) {
   const [bad, setBad] = useState(false);
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-card" role="dialog" aria-label={p.name} onClick={e => e.stopPropagation()} style={{ maxWidth: 720, width: '94vw' }}>
         {p.image && !bad ? <img src={p.image} alt={p.name} onError={() => setBad(true)} style={{ maxWidth: '100%', maxHeight: '65vh', display: 'block', margin: '0 auto', borderRadius: 6 }} /> : <div className="acct-region" style={{ textAlign: 'center', padding: 30 }}>No picture for this product</div>}
         <div style={{ marginTop: 8 }}><b>{p.name}</b><div className="acct-region">{p.sku}{p.brand ? ` · ${p.brand}` : ''}{p.increment && p.increment > 1 ? ` · packs of ${p.increment}` : ''}</div>
-          <div style={{ marginTop: 4 }}>{p.price === null ? <span style={{ color: 'var(--rust)' }}>No wholesale price</span> : money(p.price)} · <span style={{ color: p.free > 0 ? 'var(--teal)' : 'var(--rust)' }}>{Math.max(p.free, 0)} free</span></div></div>
+          <div style={{ marginTop: 6, maxWidth: 360 }}><Facts p={{ ...p, available: p.available ?? p.free, pending: p.pending ?? 0, incoming: p.incoming ?? null, eta: p.eta ?? null }} /></div></div>
         <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
           {onAdd && <button type="button" className="btn" disabled={p.price === null} onClick={() => { onAdd(); onClose(); }}>Add to order</button>}
           <button type="button" className="btn secondary" onClick={onClose}>Close</button>
         </div>
       </div>
     </div>, document.body);
+}
+
+/** The facts a rep needs to quote a product: both prices, stock in hand, what is already promised, and the next stock coming in with its date. */
+export function Facts({ p, compact = false }: { p: Pick<Product, 'price' | 'free' | 'available' | 'pending' | 'incoming' | 'eta'> & { retail?: number | null }; compact?: boolean }) {
+  const row = (label: string, value: ReactNode) => <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}><span className="acct-region">{label}</span><span style={{ textAlign: 'right' }}>{value}</span></div>;
+  const next = p.incoming ? `${p.incoming.qty} on ${p.incoming.date ?? 'a date not set yet'}${p.incoming.po ? ` (${p.incoming.po})` : ''}` : p.eta ? `ETA ${p.eta}` : 'None due';
+  return (
+    <div style={{ display: 'grid', gap: 2, fontSize: compact ? 12.5 : 13.5 }}>
+      {row('Wholesale', p.price === null ? <span style={{ color: 'var(--rust)' }}>no price</span> : <b>{money(p.price)}</b>)}
+      {row('Retail', p.retail == null ? <span className="acct-region">not set</span> : money(p.retail))}
+      {row('In hand', Math.max(p.available, 0))}
+      {p.pending > 0 && row('Already on orders', p.pending)}
+      {row('Free to sell', <span style={{ color: p.free > 0 ? 'var(--teal)' : 'var(--rust)' }}>{Math.max(p.free, 0)}</span>)}
+      {row('Next stock in', next)}
+    </div>
+  );
 }

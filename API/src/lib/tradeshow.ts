@@ -3,7 +3,7 @@
 // DEAR order the sales team makes from it by its reference (the TS number in it), or linked by hand.
 import { prisma } from './prisma';
 import { sendAlert } from './alerts';
-import { wholesalePrice } from './pricing';
+import { wholesalePrice, retailPrice } from './pricing';
 import * as hand from './tsHandoff';
 import { autoFreight, chargeSkus, dearReference, orderPlus, withOffers, writeLines } from './tradeshowOrderPlus';
 import {
@@ -46,7 +46,7 @@ const dearOf = (o: Linked): DearLink => (o.dear_id ? { number: o.dear_number!, s
 const stageOf = (o: Linked): OrderStage => orderStage(o.status, dearOf(o));
 
 // ---------- products and stock ----------
-export type ProductHit = { sku: string; name: string; brand: string | null; price: number | null; increment: number | null; image: string | null; status: string | null; available: number; pending: number; free: number; incoming: { qty: number; date: string | null; po: string | null } | null; eta: string | null };
+export type ProductHit = { sku: string; name: string; brand: string | null; price: number | null; retail: number | null; increment: number | null; image: string | null; status: string | null; available: number; pending: number; free: number; incoming: { qty: number; date: string | null; po: string | null } | null; eta: string | null };
 /** Units on trade show orders that DEAR has not allocated yet, by SKU (sent orders not yet confirmed in DEAR). */
 // What other orders have already taken is the slowest part of every stock figure. For screens that only SHOW stock (search, other colours, the range) the answer
 // is kept for 15 seconds, so several reps looking at the same products do not each make the database do it again. Saving an order always asks fresh.
@@ -90,7 +90,7 @@ async function stockFacts(skus: string[], exceptOrder: string | null = null, fre
   for (const p of pos) if (!incoming.has(p.sku)) incoming.set(p.sku, { qty: Math.round(p.qty), date: p.due ? new Date(p.due).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : null, po: p.po });
   return new Map(prods.map(p => {
     const k = String(p.sku).toUpperCase(), avail = Math.floor(Number(p.available) || 0), pend = pending.get(k) ?? 0;
-    const hit: ProductHit = { sku: p.sku, name: p.name, brand: p.brand, price: wholesalePrice(p.prices), increment: p.order_increment ?? null, image: p.image_url ?? null, status: p.status,
+    const hit: ProductHit = { sku: p.sku, name: p.name, brand: p.brand, price: wholesalePrice(p.prices), retail: retailPrice(p.prices), increment: p.order_increment ?? null, image: p.image_url ?? null, status: p.status,
       available: avail, pending: pend, free: avail - pend, incoming: incoming.get(k) ?? null, eta: dearEta.get(k) ?? p.eta ?? null };
     return [k, hit] as [string, ProductHit];
   }));
