@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { apiGet } from '../lib/api';
 import { useMe } from '../lib/useMe';
 import TsShowForm from '../components/TsShowForm';
+import TsHidden from '../components/TsHidden';
 import { $, errMsg, shortDay, type FollowUpItem, type Show } from '../lib/tradeshow';
 
 // Trade Shows: every show, and the follow-ups from all of them (mine, the sales team's, or everyone's).
@@ -63,6 +64,7 @@ export default function TradeShows() {
         </div>
         {closed.length > 0 && <div className="acct-region" style={{ marginTop: 10, fontSize: 13 }}>Closed: {closed.map((s, i) => <span key={s.id}>{i ? ', ' : ''}<Link to={`/trade-shows/${s.id}`}>{s.name}</Link></span>)}</div>}
       </div>
+      {isManager && <TsHidden />}
       <div className="section">
         <div style={{ display: 'flex', gap: 12, alignItems: 'baseline', flexWrap: 'wrap' }}>
           <div className="panel-title" style={{ flex: 1 }}>Follow-ups</div>

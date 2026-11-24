@@ -4,6 +4,7 @@
 import { prisma } from './prisma';
 import { sendAlert } from './alerts';
 import { wholesalePrice, retailPrice } from './pricing';
+import { getHidden } from './tsHidden';
 import * as hand from './tsHandoff';
 import { autoFreight, chargeSkus, dearReference, orderPlus, withOffers, writeLines } from './tradeshowOrderPlus';
 import {
@@ -99,25 +100,30 @@ export async function searchProducts(q: unknown): Promise<ProductHit[]> {
   const term = String(q ?? '').trim();
   if (term.length < 2) return [];
   const like = `%${term.replace(/[%_\\]/g, m => '\\' + m)}%`;
+  const hid = await getHidden();   // brands and SKUs a manager has hidden from trade shows (kept for 30 seconds)
   const rows = await prisma.$queryRaw<{ sku: string }[]>`
     select sku from crm.products
-    where (sku ilike ${like} or name ilike ${like} or barcode = ${term} or brand ilike ${like}) and coalesce(status, '') not in ('Deprecated')
+    where (sku ilike ${like} or name ilike ${like} or barcode = ${term} or brand ilike ${like}) and coalesce(status, '') not in ('Deprecated') and coalesce(lifecycle, '') <> 'discontinued'
+      and coalesce(lower(brand), '') <> all(${hid.brandsLower}::text[]) and upper(sku) <> all(${hid.skusUpper}::text[])
     order by (upper(sku) = upper(${term}) or barcode = ${term}) desc, (sku ilike ${term + '%'}) desc, name limit 25`;
   const facts = await guard(() => stockFacts(rows.map(r => r.sku)));
   return rows.map(r => facts.get(r.sku.toUpperCase())!).filter(Boolean);
 }
 
 /** One brand's products with pictures, price and stock, for showing a customer the range (and comparing). With no brand it gives just the list of brands. */
-const brandCache: { at: number; list: { brand: string; n: number }[] } = { at: 0, list: [] };
+const brandCache: { at: number; v: number; list: { brand: string; n: number }[] } = { at: 0, v: -1, list: [] };
 export async function productRange(brandIn: unknown, showId?: unknown, qIn?: unknown): Promise<{ brands: { brand: string; n: number }[]; stand: string[]; products: ProductHit[] }> {
   const brand = String(brandIn ?? '').trim().slice(0, 80), q = String(qIn ?? '').trim().slice(0, 60);
   const sid = typeof showId === 'string' && UUID.test(showId) ? showId : '00000000-0000-0000-0000-000000000000';
+  const hid = await getHidden();
   const [brands, stand, rows] = await Promise.all([
-    Date.now() - brandCache.at < 600_000 && brandCache.list.length ? Promise.resolve(brandCache.list)
-      : prisma.$queryRaw<{ brand: string; n: number }[]>`select brand, count(*)::int as n from crm.products where brand is not null and btrim(brand) <> '' and coalesce(status, '') not in ('Deprecated') group by brand order by brand`
-        .then(l => { brandCache.at = Date.now(); brandCache.list = l; return l; }),
+    Date.now() - brandCache.at < 600_000 && brandCache.list.length && brandCache.v === hid.v ? Promise.resolve(brandCache.list)
+      : prisma.$queryRaw<{ brand: string; n: number }[]>`select brand, count(*)::int as n from crm.products where brand is not null and btrim(brand) <> '' and coalesce(status, '') not in ('Deprecated') and coalesce(lifecycle, '') <> 'discontinued'
+          and lower(brand) <> all(${hid.brandsLower}::text[]) and upper(sku) <> all(${hid.skusUpper}::text[]) group by brand order by brand`
+        .then(l => { brandCache.at = Date.now(); brandCache.v = hid.v; brandCache.list = l; return l; }),
     hand.getStandBrands(sid),
-    brand || q ? prisma.$queryRaw<{ sku: string }[]>`select sku from crm.products where coalesce(status, '') not in ('Deprecated')
+    brand || q ? prisma.$queryRaw<{ sku: string }[]>`select sku from crm.products where coalesce(status, '') not in ('Deprecated') and coalesce(lifecycle, '') <> 'discontinued'
+      and coalesce(lower(brand), '') <> all(${hid.brandsLower}::text[]) and upper(sku) <> all(${hid.skusUpper}::text[])
       and (${brand} = '' or lower(brand) = lower(${brand})) and (${q} = '' or name ilike ${'%' + q.replace(/[%_\\]/g, m => '\\' + m) + '%'} or sku ilike ${'%' + q.replace(/[%_\\]/g, m => '\\' + m) + '%'})
       order by name limit 60` : Promise.resolve([] as { sku: string }[]),
   ]);
@@ -136,8 +142,10 @@ export async function productVariants(sku: unknown, showId?: unknown): Promise<{
   if (!colour || base.length < 3) return { colour: null, others: [] };
   // the candidates share the base words and the brand; the names are then split again to be sure the base is the same
   const like = `%${base.replace(/[%_\\]/g, m => '\\' + m)}%`;
+  const hid = await getHidden();
   const rows = await prisma.$queryRaw<{ sku: string; name: string }[]>`
-    select sku, name from crm.products where brand is not distinct from ${me.brand} and upper(sku) <> upper(${s}) and name ilike ${like} and coalesce(status, '') not in ('Deprecated') order by name limit 60`;
+    select sku, name from crm.products where brand is not distinct from ${me.brand} and upper(sku) <> upper(${s}) and name ilike ${like} and coalesce(status, '') not in ('Deprecated') and coalesce(lifecycle, '') <> 'discontinued'
+      and coalesce(lower(brand), '') <> all(${hid.brandsLower}::text[]) and upper(sku) <> all(${hid.skusUpper}::text[]) order by name limit 60`;
   const same = rows.filter(r => { const x = splitColour(r.name); return x.base === base && x.colour && x.colour !== colour; });
   if (!same.length) return { colour, others: [] };
   const facts = await guard(() => stockFacts(same.map(r => r.sku)));

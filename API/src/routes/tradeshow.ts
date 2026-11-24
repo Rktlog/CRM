@@ -1,6 +1,7 @@
 import express, { Router } from 'express';
 import * as XLSX from 'xlsx';
 import * as ts from '../lib/tradeshow';
+import * as hid from '../lib/tsHidden';
 
 // Trade shows. Everyone signed in can write orders and take leads at a show; managers set up shows and give discounts.
 //   GET    /tradeshow/shows                      every show with its counts           POST /tradeshow/shows   PATCH/DELETE /tradeshow/shows/:id   (managers)
@@ -18,6 +19,7 @@ import * as ts from '../lib/tradeshow';
 //   PUT    /tradeshow/orders/:id/handoff         { mode: 'later' | 'paid', method, proof: { name, mime, data } }   how the customer pays (sent as text: the picture is big)
 //   GET    /tradeshow/orders/:id/proof           the payment screenshot       POST /tradeshow/orders/:id/actioned { done, note }   sales has dealt with it
 //   GET    /tradeshow/shows/:id/actions          what sales still has to do at the show (and the last few things done)
+//   GET/PUT /tradeshow/hidden            brands and SKUs left out of the trade show product list (managers change it). Discontinued products are always left out.
 //   POST   /tradeshow/leads                      GET/PATCH /tradeshow/leads/:id
 //   POST   /tradeshow/log                        { orderId | leadId, kind, note }
 //   GET    /tradeshow/followups?who=mine|team|all&showId=     POST /tradeshow/followups { orderId | leadId, date, repId }
@@ -52,6 +54,8 @@ tradeshowRouter.get('/shows/:id/export', h('export', async (req, res) => {
 tradeshowRouter.patch('/shows/:id', h('save show', async (req, res) => res.json({ id: await ts.saveShow(rep(req), req.body, req.params.id) })));
 tradeshowRouter.delete('/shows/:id', h('delete show', async (req, res) => { await ts.deleteShow(rep(req), req.params.id); res.json({ ok: true }); }));
 tradeshowRouter.get('/products', h('products', async (req, res) => res.json({ products: await ts.searchProducts(req.query.q) })));
+tradeshowRouter.get('/hidden', h('hidden products', async (_req, res) => res.json(await hid.hiddenSettings())));
+tradeshowRouter.put('/hidden', h('save hidden products', async (req, res) => { await hid.saveHidden(rep(req), req.body); res.json(await hid.hiddenSettings()); }));
 tradeshowRouter.get('/products/range', h('range', async (req, res) => res.json(await ts.productRange(req.query.brand, req.query.showId, req.query.q))));
 tradeshowRouter.get('/products/variants', h('colours', async (req, res) => res.json(await ts.productVariants(req.query.sku, req.query.showId))));
 tradeshowRouter.get('/shows/:id/stand', h('stand', async (req, res) => res.json(await ts.getStand(req.params.id))));
