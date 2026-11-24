@@ -17,7 +17,7 @@ export type Order = {
   orderDate: string; reference: string; customerPo: string | null; notes: string | null; repId: string | null; repName: string | null;
   contact: { name: string | null; email: string | null; phone: string | null; address: string | null };
   discount: { kind: 'pct' | 'amount'; value: number } | null; freight: number; cardPayment: boolean; cardSurchargePct: number | null; gstRate: number;
-  lines: { lineNo: number; kind: 'normal' | 'bundle' | 'gift'; offerId: string | null; pct: number; sku: string; name: string; brand: string | null; qty: number; price: number; comment: string | null; lineTotal: number; increment: number | null; packNote: string | null; stock: Stock | null }[];
+  lines: { lineNo: number; kind: 'normal' | 'bundle' | 'gift'; offerId: string | null; pct: number; sku: string; name: string; brand: string | null; qty: number; price: number; comment: string | null; lineTotal: number; increment: number | null; packNote: string | null; stock: Stock | null; image: string | null }[];
   totals: Totals; dear: { number: string; status: string | null; id: string; linkedByHand: boolean } | null;
   emailedAt: string | null; emailError: string | null; emailVersion: number; cancelReason: string | null; log: LogEntry[]; followUps: FollowUp[]; followUpsClosed: boolean;
   handoffReady: boolean; handoff: Handoff | null;

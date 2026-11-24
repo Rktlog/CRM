@@ -44,6 +44,20 @@ export async function writeLines(oid: string, r: { lines: OutLine[]; payBy: stri
 }
 
 // ---------- freight ----------
+// The order page asks for the offers and the freight rates on every load, and they change rarely. They are kept for 20 seconds (and dropped the moment a
+// manager saves one), so five reps working at once do not each make the database repeat the same two questions. Saving an order always reads them fresh.
+const CACHE_TTL = 20_000;
+const offerCache = new Map<string, { at: number; v: Offer[] }>();
+let freightCache: { at: number; v: { cfg: FreightCfg; custom: boolean } } | null = null;
+export const forgetOffers = () => { offerCache.clear(); freightCache = null; };
+export async function loadOffersCached(showId: string): Promise<Offer[]> {
+  const hit = offerCache.get(showId); if (hit && Date.now() - hit.at < CACHE_TTL) return hit.v;
+  const v = await loadOffers(showId); if (offerCache.size > 50) offerCache.clear(); offerCache.set(showId, { at: Date.now(), v }); return v;
+}
+export async function loadFreightCached(): Promise<{ cfg: FreightCfg; custom: boolean }> {
+  if (freightCache && Date.now() - freightCache.at < CACHE_TTL) return freightCache.v;
+  const v = await loadFreightCfg(); freightCache = { at: Date.now(), v }; return v;
+}
 export async function loadFreightCfg(): Promise<{ cfg: FreightCfg; custom: boolean }> {
   try {
     const [r] = await prisma.$queryRaw<{ config: FreightCfg }[]>`select config from crm.ts_freight_cfg where id = 1`;
@@ -101,11 +115,14 @@ export async function chargeSkus(): Promise<{ freight: string | null; surcharge:
 }
 
 /** What the order page needs beside the lines: the show's offers (to add bundles), what applied, what is close, the pay-by date, the freight set-up, the DEAR reference and payment. */
-export async function orderPlus(o: any, lines: { sku: string; name: string; brand: string | null; qty: number; price: string | number; comment?: string | null; line_kind?: string; offer_id?: string | null }[], t: { total: number }, stage: string) {
-  const offers = await loadOffers(o.show_id);
+export async function orderPlus(o: any, lines: { sku: string; name: string; brand: string | null; qty: number; price: string | number; comment?: string | null; line_kind?: string; offer_id?: string | null }[], t: { total: number }, stage: string, regionKnown?: string | null) {
+  // the offers, the freight rates and the customer's state are separate questions, asked together (the order page passes the state it already has)
+  const [offers, freightCfg, region] = await Promise.all([
+    loadOffersCached(o.show_id), loadFreightCached(),
+    regionKnown !== undefined ? Promise.resolve(regionKnown) : prisma.$queryRaw<{ region: string | null }[]>`select region from crm.accounts where id = ${o.account_id}::uuid`.then(r => r[0]?.region ?? null),
+  ]);
   const r = applyOffers(lines.filter(l => l.line_kind !== 'gift').map(l => ({ sku: l.sku, name: l.name, brand: l.brand, qty: l.qty, price: Number(l.price), kind: (l.line_kind === 'bundle' ? 'bundle' : 'normal') as 'bundle' | 'normal', offerId: l.offer_id ?? null })), offers);
-  const { cfg, custom } = await loadFreightCfg();
-  const [a] = await prisma.$queryRaw<{ region: string | null }[]>`select region from crm.accounts where id = ${o.account_id}::uuid`;
+  const { cfg, custom } = freightCfg;
   const pay = paymentOf(stage, t.total, o.dear_invoiced == null ? null : Number(o.dear_invoiced), o.dear_due == null ? null : Number(o.dear_due));
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' });
   const payBy = day(o.pay_by) ?? r.payBy;
@@ -113,7 +130,7 @@ export async function orderPlus(o: any, lines: { sku: string; name: string; bran
     dearReference: o.dear_reference ?? o.reference,
     offers: offers.filter(x => x.active), applied: r.applied, prompts: r.prompts, payBy,
     payByOverdue: !!payBy && payBy < today && pay.status !== 'paid' && pay.status !== 'cancelled',
-    freightInfo: { regionType: o.region_type ?? 'Metro', largeItems: !!o.large_items, pantone: !!o.pantone, manual: !!o.freight_manual, note: o.freight_note ?? null, state: a?.region ?? null, cfg, customRates: custom },
+    freightInfo: { regionType: o.region_type ?? 'Metro', largeItems: !!o.large_items, pantone: !!o.pantone, manual: !!o.freight_manual, note: o.freight_note ?? null, state: region, cfg, customRates: custom },
     payment: pay,
   };
 }
