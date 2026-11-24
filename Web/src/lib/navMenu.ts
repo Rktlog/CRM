@@ -48,7 +48,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     key: 'marketing',
     label: 'Marketing & Sales Support',
-    items: [{ to: '/marketing', label: 'Marketing', managerOnly: true }, { to: '/marketing-dashboard', label: 'Marketing Dashboard', managerOnly: true }],   // every page under /marketing counts as this one
+    items: [{ to: '/marketing', label: 'Email Builder', managerOnly: true }, { to: '/marketing-dashboard', label: 'Marketing Dashboard', managerOnly: true }],   // every page under /marketing counts as this one
   },
   {
     key: 'insights',

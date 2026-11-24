@@ -20,7 +20,7 @@ export default function MarketingSettings() {
   const L = ({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) => <div style={{ marginBottom: 12 }}><div className="stat-label" style={{ marginBottom: 3 }}>{label}</div>{children}{hint && <div className="acct-region" style={{ marginTop: 3, maxWidth: 460 }}>{hint}</div>}</div>;
   return (
     <ManagersOnly>
-      <h1>Marketing settings</h1><MarketingNav /><SendingBanner status={s.status} />
+      <h1>Email Builder settings</h1><MarketingNav /><SendingBanner status={s.status} />
       <div className="section"><div className="panel-title">Sender</div>
         <L label="From name"><input aria-label="From name" style={field} value={s.from_name} onChange={e => set('from_name', e.target.value)} /></L>
         <L label="From email" hint="Must be on a domain you have verified with the sending service."><input aria-label="From email" style={field} value={s.from_email} onChange={e => set('from_email', e.target.value)} placeholder="hello@rhinorhino.com.au" /></L>

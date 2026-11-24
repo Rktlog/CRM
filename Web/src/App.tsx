@@ -26,7 +26,6 @@ import InactiveStockists from './pages/InactiveStockists';
 import Credit from './pages/Credit';
 import Catalogue from './pages/Catalogue';
 import Conversion from './pages/Conversion';
-import Marketing from './pages/Marketing';
 import MarketingCampaigns from './pages/MarketingCampaigns';
 import MarketingCampaign from './pages/MarketingCampaign';
 import MarketingReport from './pages/MarketingReport';
@@ -92,7 +91,7 @@ function Routed() {
         <Route path="trade-shows/orders/:id" element={<TradeShowOrder />} />
         <Route path="trade-shows/leads/:id" element={<TradeShowLead />} />
         <Route path="conversion" element={<Conversion />} />
-        <Route path="marketing" element={<Marketing />} />
+        <Route path="marketing" element={<Navigate to="/marketing/campaigns" replace />} />
         <Route path="marketing/campaigns" element={<MarketingCampaigns />} />
         <Route path="marketing/campaigns/:id" element={<MarketingCampaign />} />
         <Route path="marketing/campaigns/:id/report" element={<MarketingReport />} />
