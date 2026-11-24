@@ -1,3 +1,6 @@
+import { DEFAULTS, fill } from './salesToolsCore';
+import { renderBuiltIn } from './salesTools';
+import { bodyToText } from './emailHtml';
 import { prisma } from './prisma';
 import { melDay, openQuotes, PREPAYMENT } from './receivables';
 import { accessTokenFrom, canDraft, cleanAddress, createDraft, draftLink, getMessageBody, getThreadMeta, privateExclusion, searchThreadIds } from './gmail/google';
@@ -23,26 +26,18 @@ export function firstNameOf(contact: string | null | undefined): string | null {
   return w === w.toUpperCase() || w === w.toLowerCase() ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : w;
 }
 
-// The email: the template exactly as the team wrote it, with the first name and the quote number filled in.
+// The email: the template exactly as the team wrote it, with the first name and the quote number filled in. This is today's wording; once a manager saves a
+// change on the Sales Tools page, savedReminder uses that instead (and falls back to this one if the saved one cannot be used).
 export function reminderMessage(name: string | null, number: string): { subject: string; body: string } {
-  return {
-    subject: `Friendly Reminder: Payment Due for Sales Quote ${number}`,
-    body: [
-      `Hi ${name ?? 'there'},`,
-      '',
-      "Hope you're keeping well.",
-      '',
-      `Just to follow up and bump this email back up into your inbox with a friendly reminder that payment is past due to secure your stock on Sales Quote ${number} attached for your reference.`,
-      '',
-      'Please advise if you would like us to reactivate this sales quote and allocate stock for delivery once payment is made?',
-      '',
-      'If payment has already been processed, please disregard this message.',
-      '',
-      'Regardless of the status, we would greatly appreciate your response or prompt payment at your earliest convenience.',
-      '',
-      'Thank you for your attention to this matter.',
-    ].join('\n'),
-  };
+  const v = { names: name ? [name] : [], number };
+  return { subject: fill(DEFAULTS.payment_reminder.subject, v).text, body: fill(DEFAULTS.payment_reminder.body, v).text };
+}
+/** The reminder from the saved template. The draft is plain text, so a link shows as "name (address)". */
+export async function savedReminder(name: string | null, number: string): Promise<{ subject: string; body: string }> {
+  try {
+    const t = await renderBuiltIn('payment_reminder', { names: name ? [name] : [], number });
+    return { subject: t.subject, body: bodyToText(t.body) };
+  } catch { return reminderMessage(name, number); }
 }
 
 type Row = { id: string; number: string; customer: string; payment: string; remaining: number; followUp: { next: { kind: string; date: string } | null } };
@@ -69,6 +64,7 @@ export type Deps = {
   openQuotes: typeof openQuotes; accessTokenFrom: typeof accessTokenFrom; createDraft: typeof createDraft; decrypt: typeof decrypt; today: () => string;
   findReplyTarget: (token: string, q: ReplyQuery) => Promise<ReplyTarget | null>;
   getBody: typeof getMessageBody;
+  reminder?: (name: string | null, number: string) => Promise<{ subject: string; body: string }>;
 };
 // Where a quote's own conversation is looked for: the emails already saved for the shop that name the quote, then a Gmail search (never Private ones).
 const realLookup: LookupDeps = {
@@ -143,7 +139,7 @@ export async function runFollowUpDrafts(opts: { dryRun?: boolean; deps?: Partial
       returning id`;
     if (!claim) { res.alreadyDone++; res.eligible--; continue; }
     try {
-      const m = reminderMessage(p.name, p.r.number);
+      const m = await (d.reminder ?? savedReminder)(p.name, p.r.number);
       const made = await makeReminderDraft({ createDraft: d.createDraft, findReplyTarget: d.findReplyTarget, getBody: d.getBody }, token, { to: p.to, subject: m.subject, body: m.body, repId: conn.rep_id, accountId: p.accountId, number: p.r.number, addresses: p.addresses });
       await prisma.$executeRaw`update crm.followup_drafts set status = 'created', gmail_draft_id = ${made.id}, gmail_message_id = ${made.messageId}, error = null, updated_at = now() where id = ${claim.id}::uuid`;
       res.created++; if (made.threaded) res.threaded++;

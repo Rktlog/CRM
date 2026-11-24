@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { checkRecipients, getGmailSignature, getStatus, knownFor, saveDraft, sendEmail, SendError, setAllow, setSignature, templateFor } from '../lib/emailSend';
+import { checkRecipients, getGmailSignature, getStatus, knownFor, saveDraft, sendEmail, SendError, setAllow, setSignature, templateFor, templateChoices, applyTemplate } from '../lib/emailSend';
 import { AttachError, MAX_FILE, readBody, removeAttachment, stageAttachment } from '../lib/emailAttachments';
 import { gmailConfigured } from '../lib/gmail/google';
 
@@ -9,6 +9,8 @@ import { gmailConfigured } from '../lib/gmail/google';
 //   PUT  /email-send/signature            { signature }             the plain-text signature saved in Radar
 //   GET  /email-send/gmail-signature      the signature set up in the rep's Gmail (cleaned HTML, with its logo), or why it cannot be read
 //   GET  /email-send/known?accountId=     (or ?orderId= or ?cartKey=)   the addresses already known for that customer (an order's own address first)
+//   GET  /email-send/templates?orderId=  (or ?cartKey= or ?accountId=)   the saved templates (Sales Tools) the email can start from
+//   POST /email-send/apply-template  { key, accountId|orderId|cartKey }   one of them filled in for this customer
 //   GET  /email-send/template?orderId=    (or ?cartKey= or ?accountId=)   how the email starts: the cart template, or the order number and a greeting
 //   POST /email-send/attachments          the file itself as the body, its name in X-File-Name (URL-encoded) and its type in X-File-Type   DELETE /email-send/attachments/:id
 //   POST /email-send/check                { accountId | orderId | cartKey, to, cc }   which addresses are new for this customer (nothing is sent)
@@ -29,6 +31,8 @@ emailSendRouter.post('/allow', async (req, res) => { try { await setAllow(req.re
 emailSendRouter.put('/signature', async (req, res) => { try { res.json({ signature: await setSignature(req.rep!.id, req.body?.signature) }); } catch (e) { fail(res, e, 'signature'); } });
 emailSendRouter.get('/gmail-signature', async (req, res) => { try { res.json(await getGmailSignature(req.rep!)); } catch (e) { fail(res, e, 'gmail signature'); } });
 emailSendRouter.get('/known', async (req, res) => { try { res.json({ known: await knownFor(req.rep!, req.query.accountId, req.query.cartKey, undefined, req.query.orderId) }); } catch (e) { fail(res, e, 'known'); } });
+emailSendRouter.get('/templates', async (req, res) => { try { res.json(await templateChoices(req.rep!, { accountId: req.query.accountId, cartKey: req.query.cartKey, orderId: req.query.orderId })); } catch (e) { fail(res, e, 'templates'); } });
+emailSendRouter.post('/apply-template', async (req, res) => { try { res.json(await applyTemplate(req.rep!, { accountId: req.body?.accountId, cartKey: req.body?.cartKey, orderId: req.body?.orderId, key: req.body?.key })); } catch (e) { fail(res, e, 'apply template'); } });
 emailSendRouter.get('/template', async (req, res) => { try { res.json(await templateFor(req.rep!, { accountId: req.query.accountId, cartKey: req.query.cartKey, orderId: req.query.orderId })); } catch (e) { fail(res, e, 'template'); } });
 emailSendRouter.post('/attachments', async (req, res) => {
   try {

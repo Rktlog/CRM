@@ -66,6 +66,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/assistant', label: 'Assistant' },
       { to: '/promos', label: 'Promos' },
+      { to: '/sales-tools', label: 'Sales Tools' },
       { to: '/misc', label: 'Misc' },
       { to: '/settings', label: 'Settings' },
     ],
