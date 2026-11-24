@@ -4,7 +4,7 @@ export type Show = { id: string; name: string; refName: string; startsOn: string
   costs: { stand: number | null; travel: number | null; samples: number | null; other: number | null }; cardSurchargePct: number | null; archived: boolean; orders?: number; quotes?: number; leads?: number };
 export type Customer = { id: string; name: string; region: string; contact: string | null; email: string | null; phone: string | null; address: string | null; terms: string | null; archived: boolean };
 export type Incoming = { qty: number; date: string | null; po: string | null } | null;
-export type Product = { sku: string; name: string; brand: string | null; price: number | null; increment: number | null; image: string | null; status: string | null; available: number; pending: number; free: number; incoming: Incoming; eta: string | null };
+export type Product = { sku: string; name: string; brand: string | null; price: number | null; retail?: number | null; increment: number | null; image: string | null; status: string | null; available: number; pending: number; free: number; incoming: Incoming; eta: string | null };
 /** The same item in another colour (the colour is read from the product names), and whether its brand is on the show's stand. */
 export type Variant = Product & { colour: string; onStand: boolean };
 export type Stand = { ready: boolean; brands: string[]; allBrands: string[] };
