@@ -45,8 +45,8 @@ marketingRouter.get('/account/:id/emails', async (req, res) => {
   res.json(rows.map(r => ({ ...r, automation: !!r.source && !r.marketing || AUTO_KEYS.includes(r.source) })));
 });
 
-// ---- everything below is for managers ----
-marketingRouter.use((req: Request, res: Response, next: NextFunction) => (req.rep!.role === 'manager' ? next() : fail(res, 403, 'Marketing is for managers')));
+// ---- everything below is for managers and the marketing team ----
+marketingRouter.use((req: Request, res: Response, next: NextFunction) => (req.rep!.role === 'manager' || req.rep!.role === 'marketing' ? next() : fail(res, 403, 'The Email Builder is for managers and the marketing team')));
 
 marketingRouter.get('/overview', async (req, res) => {
   try { const p = parsePeriod(req.query); res.json({ ...(await overview(p.from, p.to)), days: p.days }); }

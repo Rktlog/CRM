@@ -4,7 +4,7 @@ import { apiDelete, apiGet, apiPatch, apiPost } from '../lib/api';
 import { EVENT_PRIMARY, GIVEAWAY_PRIMARY, OUTCOME_LABEL, STAGE_LABEL, changeText, day, dayShort, msg, num, todayMel, usePeriodParams, type Account, type EdmPage, type EdmRow, type Gift, type IgPage, type ImportResult, type Init, type InitOut, type InitPage, type Outcome } from '../lib/mkt';
 import { LightPill, MetricTable, PeriodPicker } from '../components/MktBits';
 
-// The four detail pages of the marketing dashboard (managers only): EDMs, events, Instagram and giveaways. Each reads against its goal, and against the last comparable run.
+// The four detail pages of the marketing dashboard (managers and the marketing team): EDMs, events, Instagram and giveaways. Each reads against its goal, and against the last comparable run.
 const small: CSSProperties = { padding: '3px 10px', fontSize: 12.5 };
 const input: CSSProperties = { padding: '4px 8px', border: '1px solid var(--line)', borderRadius: 3, font: 'inherit', fontSize: 13 };
 const lab: CSSProperties = { display: 'grid', gap: 2 };

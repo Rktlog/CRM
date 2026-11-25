@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { NavLink, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useCloseDropdowns } from '../lib/useCloseDropdowns';
 import { useFitTables } from '../lib/useFitTables';
-import { HOME, visibleGroups, groupKeyForPath } from '../lib/navMenu';
+import { HOME, MARKETING_HOME, marketingMay, visibleGroups, groupKeyForPath } from '../lib/navMenu';
 import { RequestBadge } from './RequestsPanel';
 import { useNewRequestCount } from '../lib/productRequests';
 
@@ -46,6 +46,9 @@ export default function Layout() {
     setMenuOpen(!menuOpen);
   };
 
+  // A marketing login only has its own pages: anywhere else (the Dashboard included) sends it to the Marketing Dashboard. The API refuses the data as well.
+  if (role === 'marketing' && !marketingMay(pathname)) return <Navigate to={MARKETING_HOME} replace />;
+
   return (
     <div id="app">
       {import.meta.env.VITE_APP_ENV === 'staging' && (
@@ -59,7 +62,7 @@ export default function Layout() {
         </button>
 
         <nav className="topnav-tabs" id="topnav-tabs" aria-label="Main">
-          <NavLink to={HOME.to} end className={({ isActive }) => 'topnav-tab' + (isActive ? ' active' : '')}>{HOME.label}</NavLink>
+          {role !== 'marketing' && <NavLink to={HOME.to} end className={({ isActive }) => 'topnav-tab' + (isActive ? ' active' : '')}>{HOME.label}</NavLink>}
           {groups.map(g => {
             const isOpen = open === g.key;
             return (

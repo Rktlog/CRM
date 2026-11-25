@@ -30,7 +30,7 @@ type LedgerData = {
 };
 type Rep = { id: string; name: string; role: string };
 
-type Me = { role: 'rep' | 'manager'; regions: string[] };
+type Me = { role: 'rep' | 'manager' | 'marketing'; regions: string[] };
 
 export default function SalesData() {
   const [data, setData] = useState<LedgerData | null>(null);

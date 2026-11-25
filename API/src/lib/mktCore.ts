@@ -87,6 +87,8 @@ export const scaleGoal = (n: number, perDays: number | null | undefined, days: n
 /** Did every one of these meet its goal? null when there was nothing to judge. */
 export const allMet = (l: (boolean | null)[]): boolean | null => { const j = l.filter((x): x is boolean => x !== null); return j.length ? j.every(Boolean) : null; };
 /** A different manager has to approve a goal than the one who proposed it, unless there is only one manager. */
+/** Who may approve or reject a waiting goal: a manager. The marketing team may only take back a goal they proposed themselves. */
+export const canDecide = (role: string, approve: boolean, proposerId: string | null, repId: string): boolean => role === 'manager' || (approve === false && proposerId === repId);
 export const canApprove = (proposerId: string | null, approverId: string, managers: number): boolean => proposerId !== approverId || managers <= 1;
 export const round1 = (n: number): number => Math.round(n * 10) / 10;
 /** The change against the previous period, as a plain number: null when the previous was 0 and nothing can be said. */

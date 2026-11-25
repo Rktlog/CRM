@@ -9,7 +9,7 @@ import { msFromEnv } from '../lib/ttlCache';
 declare global {
   namespace Express {
     interface Request {
-      rep?: { id: string; role: 'rep' | 'manager' };
+      rep?: { id: string; role: 'rep' | 'manager' | 'marketing' };
     }
   }
 }

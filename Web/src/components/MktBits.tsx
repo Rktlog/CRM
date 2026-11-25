@@ -2,7 +2,7 @@ import { Fragment, useState, type CSSProperties } from 'react';
 import { apiPost, apiPut } from '../lib/api';
 import { LIGHT_CLASS, LIGHT_MARK, LIGHT_TEXT, OUTCOME_LABEL, day, msg, num, type Cell, type Light, type Outcome, type Period, type Waiting } from '../lib/mkt';
 
-// The pieces the marketing dashboard pages are built from. Managers only.
+// The pieces the marketing dashboard pages are built from. Managers and the marketing team only.
 const small: CSSProperties = { padding: '3px 10px', fontSize: 12.5 };
 const input: CSSProperties = { padding: '4px 8px', border: '1px solid var(--line)', borderRadius: 3, font: 'inherit', fontSize: 13 };
 

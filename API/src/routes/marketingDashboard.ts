@@ -21,7 +21,7 @@ const fail = (res: any, e: unknown, what: string) => {
   return res.status(500).json({ error: 'Something went wrong. Try again in a moment.' });
 };
 const run = (what: string, f: (req: any, res: any) => Promise<unknown>) => async (req: any, res: any) => {
-  try { if (req.rep!.role !== 'manager') return res.status(403).json({ error: 'Only managers can use the marketing dashboard.' }); res.json(await f(req, res)); } catch (e) { fail(res, e, what); }
+  try { if (req.rep!.role !== 'manager' && req.rep!.role !== 'marketing') return res.status(403).json({ error: 'Only managers and the marketing team can use the marketing dashboard.' }); res.json(await f(req, res)); } catch (e) { fail(res, e, what); }
 };
 const period = (req: any) => { const p = parsePeriod(req.query ?? {}); if ('error' in p) throw new MktError(p.error); return p; };
 
