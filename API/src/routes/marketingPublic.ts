@@ -4,6 +4,7 @@ import { recordClick, recordOpen, unsubscribe, unsubscribeInfo, handleWebhook } 
 import { fromB64u, verifyLink } from '../lib/marketing/blocks';
 import { linkSecret } from '../lib/marketing/sender';
 import { runMarketing } from '../lib/marketing/automations';
+import { readPicture } from '../lib/marketing/images';
 
 // The pages and pictures recipients' email programs fetch. No login: the token in the address is the key.
 // Mounted at /m, before the login check.
@@ -19,6 +20,15 @@ marketingPublicRouter.get('/o/:file', async (req, res) => {
   const token = req.params.file.replace(/\.gif$/, '');
   if (TOKEN.test(token)) await recordOpen(token).catch(() => undefined);
   res.set({ 'Content-Type': 'image/gif', 'Cache-Control': 'no-store, no-cache, must-revalidate', 'Content-Length': String(GIF.length) }).send(GIF);   // always the picture, so a broken link never shows
+});
+
+// A picture uploaded in the Email Builder. The address holds a long random code; there is no list of them.
+marketingPublicRouter.get('/img/:id', async (req, res) => {
+  const id = req.params.id.replace(/\.(jpg|jpeg|png|webp)$/i, '');
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return res.status(404).end();
+  const p = await readPicture(id).catch(() => null);
+  if (!p) return res.status(404).end();
+  res.set({ 'Content-Type': p.type, 'Content-Length': String(p.bytes.length), 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' }).send(p.bytes);
 });
 
 // The click counter: check the signature, count it, send them on. A link that was tampered with goes nowhere.

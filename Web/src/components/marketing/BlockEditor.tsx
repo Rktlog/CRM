@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { apiGet, apiPost } from '../../lib/api';
+import { PictureUpload, ProductPicker } from './PickParts';
 import { Block, BlockType, BLOCK_NAMES, AUTOMATION_ONLY, MergeTag, newBlock } from '../../lib/marketing';
 
 // The email editor: a list of blocks on the left, the real email on the right. Merge tags
@@ -119,7 +119,8 @@ export default function BlockEditor({ blocks, onChange, subject, previewText, fr
             {b.type === 'heading' && <TagField tags={tags} value={b.text} onChange={v => set(i, { text: v })} placeholder="Heading" />}
             {b.type === 'text' && <TagField tags={tags} multiline value={b.text} onChange={v => set(i, { text: v })} placeholder="Write your message. A web address becomes a link." />}
             {b.type === 'image' && <>
-              <TagField tags={[]} value={b.url} onChange={v => set(i, { url: v })} placeholder="Picture address (https://...). A Dropbox share link works." label="Picture" />
+              <PictureUpload onUploaded={url => set(i, { url })} />
+              <TagField tags={[]} value={b.url} onChange={v => set(i, { url: v })} placeholder="Or paste a picture address (https://...). A Dropbox share link works." label="Picture" />
               <TagField tags={[]} value={b.alt ?? ''} onChange={v => set(i, { alt: v })} placeholder="Describe the picture (shown if it cannot load)" />
               <TagField tags={tags} value={b.link ?? ''} onChange={v => set(i, { link: v })} placeholder="Where it links to (optional)" />
             </>}
@@ -128,11 +129,10 @@ export default function BlockEditor({ blocks, onChange, subject, previewText, fr
               <TagField tags={tags} value={b.url} onChange={v => set(i, { url: v })} placeholder="Where it goes (https://... or a merge tag)" />
             </>}
             {b.type === 'products' && <>
-              <TagField tags={[]} multiline rows={2} value={b.skus.join(', ')} onChange={v => set(i, { skus: v.split(/[\s,;]+/).filter(Boolean) })} placeholder="Product codes (SKUs), separated by commas" label="Products" />
+              <ProductPicker skus={b.skus} onChange={skus => set(i, { skus })} />
               <div style={{ display: 'flex', gap: 14, fontSize: 12.5, alignItems: 'center', flexWrap: 'wrap' }}>
-                <label><input type="checkbox" checked={!!b.showPrice} onChange={e => set(i, { showPrice: e.target.checked })} /> Show the RRP</label>
+                <label><input type="checkbox" checked={!!b.showPrice} onChange={e => set(i, { showPrice: e.target.checked })} /> Show wholesale and retail price (ex GST)</label>
                 <label>Across <select value={b.columns ?? 2} onChange={e => set(i, { columns: Number(e.target.value) === 3 ? 3 : 2 })}><option value={2}>2</option><option value={3}>3</option></select></label>
-                <Link to="/catalogue" target="_blank" className="order-link">Find product codes in the Catalogue</Link>
               </div>
             </>}
             {b.type === 'spacer' && <label style={{ fontSize: 12.5 }}>Height <input type="number" min={4} max={80} value={b.size ?? 20} onChange={e => set(i, { size: Number(e.target.value) })} style={{ width: 64 }} /> px</label>}
