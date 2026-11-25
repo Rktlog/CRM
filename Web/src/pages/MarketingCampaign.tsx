@@ -85,7 +85,7 @@ export default function MarketingCampaign() {
           </div>
         )}
         <div style={{ opacity: locked ? 0.65 : 1, pointerEvents: locked ? 'none' : 'auto' }}>
-          <BlockEditor blocks={c.blocks} onChange={b => edit({ blocks: b })} subject={c.subject} previewText={c.previewText} />
+          <BlockEditor blocks={c.blocks} onChange={b => edit({ blocks: b })} subject={c.subject} previewText={c.previewText} fromName={c.fromName} />
         </div>
       </div>
 
