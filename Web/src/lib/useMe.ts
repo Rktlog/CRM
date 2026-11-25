@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { apiGet } from './api';
+import type { Role } from './roles';
 
 // States an account can be in: the states, head offices as their own
 // "state" (tracked separately from the stores there), and overseas.
@@ -11,7 +12,7 @@ export const OTHERS = 'Unknown,INTL';
 export const FILTER_STATES = ['NSW', 'ACT', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'NT', 'NZ', 'NSW/HO', 'VIC/HO', OTHERS];
 export const stateLabel = (s: string) => (s === OTHERS ? 'Others (no state / overseas)' : s);
 
-export type Me = { id: string; role: 'rep' | 'manager'; name?: string; regions: string[] };
+export type Me = { id: string; role: Role; name?: string; regions: string[] };
 
 // Who's signed in, with their assigned states. Loaded once per page.
 export function useMe(): Me | null {

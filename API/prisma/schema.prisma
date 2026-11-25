@@ -12,6 +12,7 @@ datasource db {
 enum RepRole {
   rep
   manager
+  marketing
 
   @@schema("crm")
 }

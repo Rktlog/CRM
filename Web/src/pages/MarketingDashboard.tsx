@@ -4,7 +4,7 @@ import { apiGet } from '../lib/api';
 import { FOCUS_PATH, LIGHT_TEXT, addDaysTo, changeText, dayShort, msg, num, usePeriodParams, type CalendarItem, type Overview, type Row, type Stockists } from '../lib/mkt';
 import { LightPill, PeriodPicker, WaitingGoals } from '../components/MktBits';
 
-// The marketing dashboard (managers only), inside Marketing & Sales Support. One look at whether each initiative is hitting its goal.
+// The marketing dashboard (managers and the marketing team), inside Marketing & Sales Support. One look at whether each initiative is hitting its goal.
 // Stockists here are counted by their FIRST ORDER (the marketing way). The main dashboard and the sales tracker count at the first quote (Ellen's rules) and are not changed by this page.
 const CARDS: { key: keyof Stockists; title: string; rule: string }[] = [
   { key: 'new', title: 'New stockists', rule: 'First ever order placed in the period' },

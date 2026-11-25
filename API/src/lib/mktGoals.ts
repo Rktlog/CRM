@@ -2,7 +2,7 @@
 // A goal's live numbers change ONLY when a manager approves: a new goal or a change waits as a proposal, and a different manager has to approve it (unless there is only one manager).
 import { prisma } from './prisma';
 import { MktError, guard, managerCount, uuidOk, dayText, type Rep } from './mktShared';
-import { PRIMARY, canApprove, hasMetric, isDay, metricsOf, daysBetween, validateGoal, type Kind, type Outcome } from './mktCore';
+import { PRIMARY, canApprove, canDecide, hasMetric, isDay, metricsOf, daysBetween, validateGoal, type Kind, type Outcome } from './mktCore';
 
 export type Init = { id: string; kind: 'edm' | 'event' | 'giveaway'; name: string; series: string | null; outcome: Outcome; startsOn: string; endsOn: string | null; venue: string | null; postUrl: string | null; notes: string | null; primaryMetric: string; externalId: string | null };
 type InitRow = { id: string; kind: Init['kind']; name: string; series: string | null; outcome: Outcome; starts_on: string; ends_on: string | null; venue: string | null; post_url: string | null; notes: string | null; primary_metric: string | null; external_id: string | null };
@@ -135,6 +135,8 @@ export async function decideGoal(rep: Rep, id: unknown, approve: unknown): Promi
     const [g] = await prisma.$queryRawUnsafe<GRow[]>(`${GOAL_SELECT} where g.id = $1::uuid`, id);
     if (!g) throw new MktError('That was not found.', 404);
     if (g.pending_goal == null) throw new MktError('There is nothing waiting for approval on that.', 409);
+    // The marketing team can propose goals and take back their own proposal, but only a manager can approve or reject one.
+    if (!canDecide(rep.role, approve, g.proposed_by, rep.id)) throw new MktError('Only a manager can approve or reject a goal.', 403);
     if (approve) {
       if (!canApprove(g.proposed_by, rep.id, await managerCount())) throw new MktError('A different manager has to approve this one: you proposed it.', 403);
       await prisma.$queryRaw`update crm.mkt_goals set goal = pending_goal, failure_line = pending_failure, pending_goal = null, pending_failure = null, approved_by = ${rep.id}::uuid, approved_at = now(), updated_at = now() where id = ${id}::uuid`;
@@ -153,6 +155,6 @@ export async function waitingGoals(rep: Rep, managers?: number): Promise<Waiting
   const KIND = { edm: 'EDMs', event: 'Event', giveaway: 'Giveaway', instagram: 'Instagram' } as const;
   return rows.map(r => {
     const label = metricsOf(r.kind, r.scope).find(x => x.key === r.metric)?.label ?? r.metric;
-    return { id: r.id, kind: r.kind, what: r.init_name ? `${KIND[r.kind]}: ${r.init_name}` : r.kind === 'instagram' ? `Instagram, ${r.scope}` : KIND[r.kind], metric: label, goal: Number(r.pending_goal), failure: Number(r.pending_failure), liveGoal: r.goal == null ? null : Number(r.goal), liveFailure: r.failure_line == null ? null : Number(r.failure_line), by: r.proposer, byId: r.proposed_by, at: new Date(r.proposed_at ?? Date.now()).toISOString(), canApprove: canApprove(r.proposed_by, rep.id, n) };
+    return { id: r.id, kind: r.kind, what: r.init_name ? `${KIND[r.kind]}: ${r.init_name}` : r.kind === 'instagram' ? `Instagram, ${r.scope}` : KIND[r.kind], metric: label, goal: Number(r.pending_goal), failure: Number(r.pending_failure), liveGoal: r.goal == null ? null : Number(r.goal), liveFailure: r.failure_line == null ? null : Number(r.failure_line), by: r.proposer, byId: r.proposed_by, at: new Date(r.proposed_at ?? Date.now()).toISOString(), canApprove: rep.role === 'manager' && canApprove(r.proposed_by, rep.id, n) };
   });
 }

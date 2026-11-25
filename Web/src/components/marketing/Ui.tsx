@@ -23,10 +23,10 @@ export function MarketingNav() {
   );
 }
 
-// The Email Builder is for managers. Anyone else is told, not shown a broken page.
+// The Email Builder is for managers and the marketing team. Anyone else is told, not shown a broken page.
 export function ManagersOnly({ children }: { children: ReactNode }) {
   const { role } = useAuth();
-  if (role && role !== 'manager') return <div className="empty-state">The Email Builder is for managers.</div>;
+  if (role && role !== 'manager' && role !== 'marketing') return <div className="empty-state">The Email Builder is for managers and the marketing team.</div>;
   return <>{children}</>;
 }
 
