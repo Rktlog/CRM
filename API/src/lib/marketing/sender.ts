@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
-import { retailPrice } from '../pricing';
+import { retailPrice, wholesalePrice } from '../pricing';
 import { getProvider, NotConnectedError, Outgoing, SendResult } from './provider';
 import { renderEmail, Block, unknownTags } from './blocks';
 import { getSettings } from './settings';
@@ -75,7 +75,7 @@ export async function drainQueue(max = 500): Promise<{ sent: number; failed: num
       // The product pictures and prices that this batch's emails show.
       const skus = [...new Set(msgs.flatMap(m => (m.blocks ?? []).filter((b: Block) => b.type === 'products').flatMap((b: any) => b.skus ?? [])))] as string[];
       const prods = skus.length ? await prisma.$queryRaw<any[]>`select sku, name, image_url, prices from crm.products where sku = any(${skus})` : [];
-      const products = Object.fromEntries(prods.map(p => [p.sku, { name: p.name, imageUrl: p.image_url, price: retailPrice(p.prices) }]));
+      const products = Object.fromEntries(prods.map(p => [p.sku, { name: p.name, imageUrl: p.image_url, price: retailPrice(p.prices), wholesale: wholesalePrice(p.prices) }]));
 
       const toSend: { id: string; msg: Outgoing }[] = [];
       for (const m of msgs) {

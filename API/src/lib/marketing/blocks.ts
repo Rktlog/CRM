@@ -42,7 +42,7 @@ export type RenderCtx = {
   values: Record<string, string>;
   items?: { name: string; qty?: number; price?: number }[];
   facts?: { label: string; value: string }[];
-  products?: Record<string, { name: string; imageUrl: string | null; price?: number | null }>;
+  products?: Record<string, { name: string; imageUrl: string | null; price?: number | null; wholesale?: number | null }>;
 };
 export type RenderOpts = {
   subject: string; preview?: string; blocks: Block[]; ctx: RenderCtx;
@@ -57,6 +57,12 @@ const money = (n: number) => '$' + n.toLocaleString('en-AU', { minimumFractionDi
 export function fill(template: string, values: Record<string, string>): string {
   return (template ?? '').replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (_m, k) => values[String(k).toLowerCase()] ?? '');
 }
+// Both prices, wholesale first, each marked ex GST. A price the product does not have is left out.
+function priceLines(p: { price?: number | null; wholesale?: number | null }, font: string): string {
+  const line = (label: string, v: number | null | undefined) => v == null ? '' : `<div style="${font}font-size:13px;line-height:18px;color:#5b6573">${label} ${money(v)} <span style="font-size:11px">ex GST</span></div>`;
+  return line('Wholesale', p.wholesale) + line('Retail', p.price);
+}
+
 // Dropbox share links open a web page, not the picture: raw=1 asks for the picture itself.
 export function directImage(link: string | null | undefined): string | null {
   const raw = (link ?? '').trim();
@@ -115,7 +121,7 @@ function blockHtml(b: Block, o: RenderOpts, v: Record<string, string>): string {
       const cell = (x: (typeof items)[number]) => {
         const src = directImage(x.p!.imageUrl);
         const pic = src ? `<img src="${esc(src)}" alt="${esc(x.p!.name)}" width="${cols === 3 ? 160 : 250}" style="display:block;width:100%;height:auto;border:0;border-radius:4px">` : '';
-        const inner = `${pic}<div style="${font}font-size:13px;line-height:18px;padding-top:6px;font-weight:600">${esc(x.p!.name)}</div>${b.showPrice && x.p!.price != null ? `<div style="${font}font-size:13px;color:#5b6573">${money(x.p!.price!)}</div>` : ''}`;
+        const inner = `${pic}<div style="${font}font-size:13px;line-height:18px;padding-top:6px;font-weight:600">${esc(x.p!.name)}</div>${b.showPrice ? priceLines(x.p!, font) : ''}`;
         return `<td width="${Math.floor(100 / cols)}%" valign="top" style="padding:6px">${link ? `<a href="${esc(trackedUrl(link, o.track))}" style="text-decoration:none;color:inherit">${inner}</a>` : inner}</td>`;
       };
       const rows: string[] = [];

@@ -11,8 +11,9 @@ import { audienceSummary, changeTags, cleanFilter, countAudience, EMAIL_OK, impo
 import { campaignProblems, drainQueue, queueCampaign } from '../lib/marketing/sender';
 import { AUTOMATIONS, AUTO_KEYS, AutoKey, getAutomations, previewAutomation, runMarketing } from '../lib/marketing/automations';
 import { campaignReport, overview, sendingStatus } from '../lib/marketing/overview';
-import { retailPrice } from '../lib/pricing';
+import { retailPrice, wholesalePrice } from '../lib/pricing';
 import { directImage } from '../lib/marketing/blocks';
+import { PictureError, lookupPickable, savePicture, searchPickable } from '../lib/marketing/images';
 
 // Marketing: audience, templates, campaigns, automatic emails, the dashboard. Managers only (the one exception is
 // an account's own email history, which a rep can see for accounts in their states).
@@ -185,12 +186,28 @@ marketingRouter.delete('/templates/:id', async (req, res) => {
   r.length ? res.json({ ok: true }) : fail(res, 400, 'The starter designs cannot be deleted. Duplicate one to make your own.');
 });
 
+// ---- product search by name, and pictures from the person's computer ----
+marketingRouter.get('/products/search', async (req, res) => { try { res.json({ products: await searchPickable(req.query.q) }); } catch (e) { console.error('product search', e); fail(res, 500, 'The product search did not work. Try again.'); } });
+marketingRouter.post('/products/lookup', async (req, res) => { try { res.json({ products: await lookupPickable(req.body?.skus) }); } catch (e) { console.error('product lookup', e); fail(res, 500, 'The product names could not be loaded.'); } });
+marketingRouter.post('/images', express.raw({ type: 'image/*', limit: '3mb' }), async (req, res) => {
+  try {
+    const id = await savePicture(req.body, req.query.name, req.rep!.id);
+    const s = await getSettings();
+    const proto = String(req.get('x-forwarded-proto') ?? req.protocol).split(',')[0];
+    const base = s.tracking_base_url || `${proto}://${req.get('host')}`;
+    res.json({ id, url: `${base.replace(/\/+$/, '')}/m/img/${id}` });
+  } catch (e) {
+    if (e instanceof PictureError) return fail(res, e.status, e.message);
+    console.error('picture upload', e); fail(res, 500, 'The picture could not be saved. Try again.');
+  }
+});
+
 // ---- the live preview in the editor ----
 marketingRouter.post('/render', async (req, res) => {
   const blocks = cleanBlocks(req.body?.blocks); const s = await getSettings();
   const skus = [...new Set(blocks.filter(b => b.type === 'products').flatMap((b: any) => b.skus))] as string[];
   const prods = skus.length ? await prisma.$queryRaw<any[]>`select sku, name, image_url, prices from crm.products where sku = any(${skus})` : [];
-  const products = Object.fromEntries(prods.map(p => [p.sku, { name: p.name, imageUrl: p.image_url, price: retailPrice(p.prices) }]));
+  const products = Object.fromEntries(prods.map(p => [p.sku, { name: p.name, imageUrl: p.image_url, price: retailPrice(p.prices), wholesale: wholesalePrice(p.prices) }]));
   const subject = String(req.body?.subject ?? '');
   const sample = { ...SAMPLE_VALUES, portal_link: s.portal_url || SAMPLE_VALUES.portal_link, cart_link: s.portal_url || SAMPLE_VALUES.cart_link };
   const r = renderEmail({

@@ -147,6 +147,15 @@ export async function apiPutText(path: string, text: string, contentType = 'text
     return body;
   } finally { clearApiCache(); }
 }
+// Sends a file's own bytes (a picture) and returns the JSON answer.
+export async function apiPostFile(path: string, file: Blob): Promise<any> {
+  try {
+    const res = await fetch(`${API_URL}${path}`, { method: 'POST', headers: { 'Content-Type': file.type, ...(await authHeader()) }, body: file });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error ?? `POST ${path} failed: ${res.status}`);
+    return body;
+  } finally { clearApiCache(); }
+}
 // A picture that needs sign-in to fetch: gets it with the person's token and gives back a link the page can show. The caller revokes it when done.
 export async function apiBlobUrl(path: string): Promise<string> {
   const res = await fetch(`${API_URL}${path}`, { headers: await authHeader() });
