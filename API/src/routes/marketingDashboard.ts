@@ -4,11 +4,12 @@ import { parsePeriod } from '../lib/mktCore';
 import { createInitiative, decideGoal, deleteInitiative, proposeGoal, setResult, updateInitiative } from '../lib/mktGoals';
 import { addGift, addPost, deleteGift, deletePost, importDaily, importPosts, updateGift } from '../lib/mktInstagram';
 import { edmPage, eventsPage, giveawaysPage, instagramPage, overview } from '../lib/mktPages';
-import { syncMailchimp } from '../lib/mailchimp';
+import { creditedOrders, syncMailchimp } from '../lib/mailchimp';
 
 // The marketing dashboard. MANAGERS ONLY, for every route. Radar never writes to Mailchimp or Instagram: Mailchimp is read, Instagram comes from Meta's reports imported by hand.
 //   GET  /mkt/overview?from=&to=          the three stockist cards, the four focus rows, the calendar and the goals waiting for approval (default: the last 30 days)
 //   GET  /mkt/edm | /mkt/events | /mkt/giveaways | /mkt/instagram   (?from=&to=)   the detail pages
+//   GET  /mkt/edm/:campaignId/orders   the orders credited to one campaign (order number, store, value, the click that earned it)
 //   POST /mkt/mailchimp/sync               read Mailchimp now (also done every 3 hours once scheduled)
 //   POST /mkt/initiatives { kind: event | giveaway, ... }   PATCH /mkt/initiatives/:id   DELETE /mkt/initiatives/:id   PUT /mkt/initiatives/:id/results { metric, value }
 //   POST /mkt/goals { kind, initiativeId?, scope?, metric, goal, failure, outcome? }   propose;   POST /mkt/goals/:id/decision { approve }   a different manager approves
@@ -27,6 +28,7 @@ const period = (req: any) => { const p = parsePeriod(req.query ?? {}); if ('erro
 
 marketingDashboardRouter.get('/overview', run('overview', req => overview(req.rep, period(req))));
 marketingDashboardRouter.get('/edm', run('edm', req => edmPage(period(req))));
+marketingDashboardRouter.get('/edm/:campaignId/orders', run('edm orders', async req => ({ orders: (await creditedOrders()).filter(o => o.campaignId === String(req.params.campaignId)) })));
 marketingDashboardRouter.get('/events', run('events', req => eventsPage(period(req))));
 marketingDashboardRouter.get('/giveaways', run('giveaways', req => giveawaysPage(period(req))));
 marketingDashboardRouter.get('/instagram', run('instagram', req => instagramPage(period(req))));
