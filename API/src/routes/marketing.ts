@@ -13,6 +13,7 @@ import { AUTOMATIONS, AUTO_KEYS, AutoKey, getAutomations, previewAutomation, run
 import { campaignReport, overview, sendingStatus } from '../lib/marketing/overview';
 import { retailPrice, wholesalePrice } from '../lib/pricing';
 import { directImage } from '../lib/marketing/blocks';
+import { MailchimpError, audiencePart, listAudiences, mailchimpConfigured } from '../lib/mailchimp';
 import { PictureError, lookupPickable, savePicture, searchPickable } from '../lib/marketing/images';
 
 // Marketing: audience, templates, campaigns, automatic emails, the dashboard. Managers only (the one exception is
@@ -80,6 +81,32 @@ marketingRouter.post('/contacts/import', express.text({ type: '*/*', limit: '20m
   const note = as === 'subscribed' ? `Imported by ${me} on ${new Date().toISOString().slice(0, 10)}: permission confirmed` : `Imported as ${as}`;
   try { res.json(await importContacts(String(req.body ?? ''), { as, consentNote: note, extraTag: typeof req.query.tag === 'string' ? req.query.tag : undefined })); }
   catch (e) { fail(res, 400, (e as Error).message); }
+});
+// Bring the contact list over from Mailchimp. Mailchimp is only READ. The people go through the same importer as a CSV file, so someone who unsubscribed
+// or was cleaned there can only be brought in as unsubscribed or bounced, never as subscribed. People still waiting to confirm are not brought in.
+// A big audience is read a few thousand at a time (the page calls again with nextOffset until it is done).
+marketingRouter.get('/mailchimp/audiences', async (_req, res) => {
+  if (!mailchimpConfigured()) return res.json({ configured: false, audiences: [] });
+  try { res.json({ configured: true, audiences: await listAudiences() }); }
+  catch (e) { fail(res, e instanceof MailchimpError ? e.status === 400 ? 400 : 502 : 500, e instanceof MailchimpError ? e.message : 'Mailchimp would not answer. Try again in a minute.'); }
+});
+marketingRouter.post('/contacts/from-mailchimp', async (req, res) => {
+  const me = await who(req);
+  const listId = String(req.body?.listId ?? '').trim();
+  if (!listId) return fail(res, 400, 'Choose a Mailchimp audience.');
+  // Subscribed people need the same yes as a file import: that they agreed to be emailed.
+  if (req.body?.consent !== true) return fail(res, 400, 'Confirm that these people agreed to receive your emails.');
+  try {
+    const part = await audiencePart(listId, Number(req.body?.offset) || 0);
+    const name = String(req.body?.audienceName ?? '').slice(0, 80);
+    const note = `From Mailchimp${name ? ` audience "${name}"` : ''}, brought in by ${me} on ${new Date().toISOString().slice(0, 10)}: they are subscribed there`;
+    const r = part.read - part.skipped > 0 ? await importContacts(part.csv, { as: 'subscribed', consentNote: note, extraTag: typeof req.body?.tag === 'string' && req.body.tag.trim() ? req.body.tag : 'mailchimp' })
+      : { rows: 0, added: 0, updated: 0, skippedInvalid: 0, skippedDuplicateInFile: 0, unsubscribed: 0, bounced: 0 };
+    res.json({ ...r, read: part.read, notBroughtIn: part.skipped, nextOffset: part.nextOffset, total: part.total });
+  } catch (e) {
+    if (e instanceof MailchimpError) return fail(res, e.status === 400 ? 400 : 502, e.message);
+    console.error('mailchimp contacts', e); fail(res, 500, 'The contacts could not be brought over. Try again.');
+  }
 });
 marketingRouter.post('/contacts', async (req, res) => {
   const me = await who(req);

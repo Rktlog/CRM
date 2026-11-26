@@ -14,9 +14,11 @@ export default function MarketingAudience() {
   const [sum, setSum] = useState<Summary | null>(null); const [rows, setRows] = useState<Contact[]>([]); const [total, setTotal] = useState(0); const [loading, setLoading] = useState(true);
   const [q, setQ] = useState(''); const [status, setStatus] = useState(''); const [tag, setTag] = useState(''); const [region, setRegion] = useState(''); const [source, setSource] = useState('');
   const [picked, setPicked] = useState<Set<string>>(new Set()); const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null); const [busy, setBusy] = useState<string | null>(null);
-  const [panel, setPanel] = useState<'' | 'import' | 'add'>(''); const [bulkTag, setBulkTag] = useState('');
+  const [panel, setPanel] = useState<'' | 'import' | 'add' | 'mailchimp'>(''); const [bulkTag, setBulkTag] = useState('');
   // import form
   const [file, setFile] = useState<File | null>(null); const [as, setAs] = useState<'subscribed' | 'unsubscribed' | 'bounced'>('subscribed'); const [consent, setConsent] = useState(false); const [impTag, setImpTag] = useState('');
+  // from Mailchimp
+  const [mc, setMc] = useState<{ configured: boolean; audiences: { id: string; name: string; members: number }[] } | null>(null); const [mcId, setMcId] = useState(''); const [mcConsent, setMcConsent] = useState(false); const [mcTag, setMcTag] = useState('mailchimp'); const [mcProgress, setMcProgress] = useState<string | null>(null);
   // add form
   const [add, setAdd] = useState({ email: '', firstName: '', lastName: '', company: '', tags: '', consent: false });
 
@@ -37,6 +39,24 @@ export default function MarketingAudience() {
     const text = await file!.text(); const p = new URLSearchParams({ as, ...(as === 'subscribed' && consent ? { consent: '1' } : {}), ...(impTag.trim() ? { tag: impTag.trim() } : {}) });
     const r = await apiPostText(`/marketing/contacts/import?${p}`, text); setFile(null); setConsent(false); setPanel('');
     return `Imported: ${num(r.added)} added, ${num(r.updated)} already there.${r.skippedInvalid ? ` ${r.skippedInvalid} skipped (not an email).` : ''}${r.skippedDuplicateInFile ? ` ${r.skippedDuplicateInFile} repeated in the file.` : ''}${r.unsubscribed ? ` ${r.unsubscribed} marked unsubscribed.` : ''}`;
+  });
+  const openMailchimp = () => {
+    const next = panel === 'mailchimp' ? '' : 'mailchimp'; setPanel(next);
+    if (next && !mc) apiGet('/marketing/mailchimp/audiences', { fresh: true }).then(r => { setMc(r); if (r.audiences?.length === 1) setMcId(r.audiences[0].id); }).catch(e => setMsg({ ok: false, text: e.message }));
+  };
+  // Reads the audience a few thousand people at a time until it is all across.
+  const doMailchimp = () => run('mailchimp', async () => {
+    const a = mc?.audiences.find(x => x.id === mcId); let offset = 0; const t = { added: 0, updated: 0, unsubscribed: 0, bounced: 0, notBroughtIn: 0, read: 0 }; let total = a?.members ?? 0;
+    try {
+      for (let guard = 0; guard < 30; guard++) {
+        const r = await apiPost('/marketing/contacts/from-mailchimp', { listId: mcId, audienceName: a?.name, consent: mcConsent, tag: mcTag.trim() || 'mailchimp', offset });
+        t.added += r.added; t.updated += r.updated; t.unsubscribed += r.unsubscribed; t.bounced += r.bounced; t.notBroughtIn += r.notBroughtIn; t.read += r.read; total = r.total || total;
+        if (r.nextOffset == null) break;
+        offset = r.nextOffset; setMcProgress(`Read ${num(t.read)} of ${num(total)} people...`);
+      }
+    } finally { setMcProgress(null); }
+    setMcConsent(false); setPanel('');
+    return `From Mailchimp: ${num(t.added)} added, ${num(t.updated)} already there.${t.unsubscribed ? ` ${num(t.unsubscribed)} marked unsubscribed.` : ''}${t.bounced ? ` ${num(t.bounced)} marked bounced.` : ''}${t.notBroughtIn ? ` ${num(t.notBroughtIn)} not brought in (still waiting to confirm in Mailchimp).` : ''}`;
   });
   const addOne = () => run('add', async () => { await apiPost('/marketing/contacts', { email: add.email, firstName: add.firstName, lastName: add.lastName, company: add.company, tags: add.tags.split(','), consent: add.consent }); setAdd({ email: '', firstName: '', lastName: '', company: '', tags: '', consent: false }); setPanel(''); return 'Added.'; });
   const bulk = (action: string, extra: object = {}, done = 'Done.') => run(action, async () => { const r = await apiPost('/marketing/contacts/bulk', { ids: [...picked], action, ...extra }); setPicked(new Set()); return `${done} (${num(r.changed)} changed)`; });
@@ -61,12 +81,31 @@ export default function MarketingAudience() {
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
         <button className="btn" disabled={!!busy} onClick={sync}>{busy === 'sync' ? 'Updating…' : 'Update from the CRM'}</button>
+        <button className="btn secondary" onClick={openMailchimp}>Get from Mailchimp</button>
         <button className="btn secondary" onClick={() => setPanel(panel === 'import' ? '' : 'import')}>Import a list</button>
         <button className="btn secondary" onClick={() => setPanel(panel === 'add' ? '' : 'add')}>Add a contact</button>
       </div>
       <div className="acct-region" style={{ marginBottom: 10 }}>"Update from the CRM" brings in every account with an email. Customers can be emailed straight away. Leads wait until you confirm they agreed to hear from you. Anyone who has unsubscribed stays unsubscribed.</div>
       {msg && <div className={'save-msg ' + (msg.ok ? 'ok' : 'err')} style={{ marginBottom: 10 }} role="status">{msg.text}</div>}
 
+      {panel === 'mailchimp' && (
+        <div className="section" style={{ maxWidth: 620 }}><div className="panel-title">Get your contact list from Mailchimp</div>
+          {!mc && <div className="acct-region">Loading your audiences...</div>}
+          {mc && !mc.configured && <div className="acct-region">Mailchimp is not connected yet. Add the Mailchimp key in Railway first (the same one the marketing dashboard uses).</div>}
+          {mc?.configured && mc.audiences.length === 0 && <div className="acct-region">No audiences were found in Mailchimp.</div>}
+          {mc?.configured && mc.audiences.length > 0 && (
+            <>
+              <div className="acct-region" style={{ marginBottom: 8 }}>Radar only reads Mailchimp. Nothing is changed there. People who unsubscribed or were cleaned come across as unsubscribed or bounced, so they are never emailed. People who have not confirmed yet are left out. Someone who is already unsubscribed in Radar stays unsubscribed.</div>
+              <select aria-label="Mailchimp audience" value={mcId} onChange={e => setMcId(e.target.value)} style={{ padding: '6px 9px', border: '1px solid var(--line)', borderRadius: 6, font: 'inherit', fontSize: 13, marginBottom: 8, minWidth: 260 }}>
+                <option value="">Choose an audience</option>{mc.audiences.map(a => <option key={a.id} value={a.id}>{a.name} ({num(a.members)} people)</option>)}
+              </select>
+              <div><input aria-label="Tag" placeholder="Tag for all of them" value={mcTag} onChange={e => setMcTag(e.target.value)} style={{ padding: '6px 9px', border: '1px solid var(--line)', borderRadius: 6, font: 'inherit', fontSize: 13, marginBottom: 8, width: 260 }} /></div>
+              <label style={{ display: 'block', fontSize: 13, marginBottom: 8 }}><input type="checkbox" checked={mcConsent} onChange={e => setMcConsent(e.target.checked)} /> I confirm the people subscribed in this audience agreed to receive our emails</label>
+              <div><button className="btn" disabled={!mcId || !mcConsent || !!busy} onClick={doMailchimp}>{busy === 'mailchimp' ? (mcProgress ?? 'Reading Mailchimp...') : 'Bring them in'}</button></div>
+            </>
+          )}
+        </div>
+      )}
       {panel === 'import' && (
         <div className="section" style={{ maxWidth: 620 }}><div className="panel-title">Import a list</div>
           <div className="acct-region" style={{ marginBottom: 8 }}>A CSV file with an "Email" column. A Mailchimp export works as it is. Import your Mailchimp "unsubscribed" and "cleaned" files too, so those people are never emailed.</div>

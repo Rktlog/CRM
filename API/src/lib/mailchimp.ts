@@ -1,4 +1,4 @@
-// Mailchimp, READ ONLY. Radar reads your sent and scheduled campaigns (name, date, who it went to, opens, clicks) and who clicked each one, so the marketing dashboard can credit orders and
+// Mailchimp, READ ONLY. Radar reads your sent and scheduled campaigns (name, date, who it went to, opens, clicks), who clicked each one, and your audiences (the contact list, to bring people into Radar's own list), so the marketing dashboard can credit orders and
 // carts to a campaign. It never sends, edits, deletes or subscribes anything in Mailchimp: only GET requests are made (a test checks this).
 // The API key is MAILCHIMP_API_KEY on the API (a read-only key made under a dedicated Mailchimp user is best). It is never logged and never sent to the browser.
 import { prisma } from './prisma';
@@ -56,6 +56,37 @@ export async function clickersOf(campaignId: string): Promise<Map<string, Date[]
     if (offset + 1000 >= Number(b?.total_items ?? 0)) break;
   }
   return out;
+}
+
+// ---------- the contact list (audience) ----------
+export type Audience = { id: string; name: string; members: number };
+/** The audiences (lists) in the Mailchimp account, with how many people are in each. */
+export async function listAudiences(): Promise<Audience[]> {
+  const b = await get('/lists?count=100&fields=lists.id,lists.name,lists.stats.member_count');
+  return (b?.lists ?? []).map((l: any) => ({ id: String(l.id), name: String(l.name ?? 'Untitled audience').slice(0, 200), members: Number(l.stats?.member_count ?? 0) }));
+}
+const csvCell = (v: unknown) => { const t = String(v ?? '').replace(/[\r\n]+/g, ' '); return /[",]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+/** Mailchimp's own statuses. "pending" (has not confirmed yet) and "transactional" (not marketing) are NOT imported: those people have not agreed to marketing email. */
+const IMPORTABLE = new Set(['subscribed', 'unsubscribed', 'cleaned', 'archived']);
+export type AudiencePart = { csv: string; read: number; skipped: number; nextOffset: number | null; total: number };
+/** A slice of one audience as the CSV Radar's importer already understands (Email, names, Store, Tags, Status). Reads up to `pages` pages of 1,000 people from `offset`; `nextOffset` is null when the whole audience has been read. */
+export async function audiencePart(listId: string, offset = 0, pages = 5): Promise<AudiencePart> {
+  if (!/^[0-9a-f]{6,20}$/i.test(listId)) throw new MailchimpError('That is not a Mailchimp audience id.', 400);
+  const lines = ['Email,First Name,Last Name,Store,Tags,Status']; let read = 0, skipped = 0, total = 0, at = Math.max(0, Math.floor(offset));
+  for (let i = 0; i < pages && at < 50_000; i++) {
+    const b = await get(`/lists/${encodeURIComponent(listId)}/members?count=1000&offset=${at}&fields=total_items,members.email_address,members.status,members.merge_fields,members.tags.name`);
+    total = Number(b?.total_items ?? 0);
+    for (const m of b?.members ?? []) {
+      read++;
+      const status = String(m.status ?? '').toLowerCase();
+      if (!IMPORTABLE.has(status)) { skipped++; continue; }
+      const f = m.merge_fields ?? {};
+      lines.push([m.email_address, f.FNAME, f.LNAME, f.COMPANY ?? f.BUSINESS, (m.tags ?? []).map((t: any) => t?.name).filter(Boolean).join(';'), status].map(csvCell).join(','));
+    }
+    at += 1000;
+    if (at >= total) return { csv: lines.join('\n'), read, skipped, nextOffset: null, total };
+  }
+  return { csv: lines.join('\n'), read, skipped, nextOffset: at >= 50_000 ? null : at, total };
 }
 
 // ---------- the copy in Radar ----------
