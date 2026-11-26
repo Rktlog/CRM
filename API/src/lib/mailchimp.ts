@@ -145,20 +145,30 @@ export function tagOf(day: string, previous: string | null): Tag {
 }
 export type Credit = { sales: number; value: number; carts: number; byTag: Record<Tag, number> };
 const EMPTY = (): Credit => ({ sales: 0, value: 0, carts: 0, byTag: { new: 0, existing: 0, reactivated: 0 } });
-/** For each campaign: the orders credited to it (a click within the order window BEFORE the order; if there were several the last click wins; an order counts once), the carts left behind after a click, and which kind of stockist ordered. */
-export async function creditByCampaign(): Promise<Map<string, Credit>> {
-  const out = new Map<string, Credit>(); const days = (await getSettings()).attribution_days;
+/** One order credited to a campaign: which order, whose, what it is worth, and the click that earned it. */
+export type CreditedOrder = { campaignId: string; orderNo: string; accountId: string; store: string; value: number; orderedAt: string; clickedAt: string; tag: Tag };
+/** The orders credited to campaigns (a click within the order window BEFORE the order; if there were several the last click wins; an order counts once). The totals on the EDM page are these rows added up. */
+export async function creditedOrders(): Promise<CreditedOrder[]> {
+  const days = (await getSettings()).attribution_days;
   const [first] = await prisma.$queryRaw<{ d: Date | null }[]>`select min(coalesce(sent_at, scheduled_for)) as d from crm.mkt_edm_campaigns`;
-  if (!first?.d) return out;
-  const orders = await prisma.$queryRawUnsafe<{ id: string; value: number; day: string; prev: string | null; campaign_id: string }[]>(`
-    select q.id, coalesce(q.goods_total, q.amount)::float8 as value, to_char(${oday('q')}, 'YYYY-MM-DD') as day,
+  if (!first?.d) return [];
+  const orders = await prisma.$queryRawUnsafe<{ number: string; account_id: string; store: string; value: number; ordered_at: Date; clicked_at: Date; day: string; prev: string | null; campaign_id: string }[]>(`
+    select q.number, q.account_id, a.name as store, coalesce(q.goods_total, q.amount)::float8 as value, q.sent_at as ordered_at, k.ct as clicked_at, to_char(${oday('q')}, 'YYYY-MM-DD') as day,
       (select to_char(max(${oday('p')}), 'YYYY-MM-DD') from crm.quotes p where p.account_id = q.account_id and ${orderAny('p')} and ${oday('p')} < ${oday('q')}) as prev, k.campaign_id
     from crm.quotes q join crm.accounts a on a.id = q.account_id
     join lateral (select kk.campaign_id, ct from crm.mkt_edm_clicks kk, unnest(kk.click_times) ct
       where (kk.email = lower(btrim(coalesce(q.order_email, ''))) or kk.email = any(string_to_array(lower(regexp_replace(coalesce(a.email, ''), '[,;\\s]+', ';', 'g')), ';')))
         and ct <= q.sent_at and ct >= q.sent_at - make_interval(days => $1::int) order by ct desc limit 1) k on true
-    where ${orderLive('q')} and q.sent_at >= $2::timestamp - interval '1 day'`, days, first.d);
-  for (const o of orders) { const c = out.get(o.campaign_id) ?? EMPTY(); c.sales++; c.value += o.value; c.byTag[tagOf(o.day, o.prev)]++; out.set(o.campaign_id, c); }
+    where ${orderLive('q')} and q.sent_at >= $2::timestamp - interval '1 day'
+    order by q.sent_at desc`, days, first.d);
+  return orders.map(o => ({ campaignId: o.campaign_id, orderNo: o.number, accountId: o.account_id, store: o.store, value: o.value, orderedAt: new Date(o.ordered_at).toISOString(), clickedAt: new Date(o.clicked_at).toISOString(), tag: tagOf(o.day, o.prev) }));
+}
+/** For each campaign: the orders credited to it, the carts left behind after a click, and which kind of stockist ordered. */
+export async function creditByCampaign(): Promise<Map<string, Credit>> {
+  const out = new Map<string, Credit>(); const days = (await getSettings()).attribution_days;
+  const [first] = await prisma.$queryRaw<{ d: Date | null }[]>`select min(coalesce(sent_at, scheduled_for)) as d from crm.mkt_edm_campaigns`;
+  if (!first?.d) return out;
+  for (const o of await creditedOrders()) { const c = out.get(o.campaignId) ?? EMPTY(); c.sales++; c.value += o.value; c.byTag[o.tag]++; out.set(o.campaignId, c); }
   const carts = await prisma.$queryRawUnsafe<{ campaign_id: string; n: number }[]>(`
     select k.campaign_id, count(*)::int as n from (select abandoned_at, lower(btrim(email)) as email from crm.abandoned_cart_lines group by abandoned_at, lower(btrim(email))) c
     join lateral (select kk.campaign_id, ct from crm.mkt_edm_clicks kk, unnest(kk.click_times) ct where kk.email = c.email and ct <= c.abandoned_at and ct >= c.abandoned_at - make_interval(days => $1::int) order by ct desc limit 1) k on true
