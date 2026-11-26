@@ -32,6 +32,44 @@ const Tile = ({ label, cur, prev, money }: { label: string; cur: number; prev: n
   return <div className="card" style={{ margin: 0, minWidth: 130 }}><div className="acct-region">{label}</div><div style={{ fontSize: 24, fontWeight: 700 }}>{num(cur, money)}</div><div className="acct-region" style={{ fontSize: 12 }}>previous {num(prev, money)}{ch !== null ? ` (${changeText(ch)})` : ''}</div></div>;
 };
 
+
+type CreditedOrder = { orderNo: string; accountId: string; store: string; value: number; orderedAt: string; clickedAt: string; tag: 'new' | 'existing' | 'reactivated' };
+const TAG_TEXT = { new: 'New', existing: 'Existing', reactivated: 'Reactivated' } as const;
+const dayOf = (iso: string) => new Date(iso).toLocaleDateString('en-AU', { timeZone: 'Australia/Melbourne', day: 'numeric', month: 'short' });
+const when = (iso: string) => new Date(iso).toLocaleString('en-AU', { timeZone: 'Australia/Melbourne', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+/** The orders behind a campaign's sales figure, so any of them can be checked against DEAR. Loaded when opened. */
+function CreditedOrders({ campaignId, count }: { campaignId: string; count: number }) {
+  const [open, setOpen] = useState(false), [rows, setRows] = useState<CreditedOrder[] | null>(null), [error, setError] = useState<string | null>(null);
+  async function toggle() {
+    const next = !open; setOpen(next);
+    if (next && !rows) { try { setRows((await apiGet(`/mkt/edm/${encodeURIComponent(campaignId)}/orders`, { fresh: true })).orders); setError(null); } catch (e) { setError(msg(e)); } }
+  }
+  if (count === 0) return null;
+  return (
+    <div>
+      <button type="button" className="edit-link" aria-expanded={open} onClick={toggle}>{open ? 'Hide the orders' : 'Show the orders'}</button>
+      {open && (
+        <div style={{ marginTop: 6 }}>
+          {error && <div className="acct-region" role="alert" style={{ color: 'var(--rust)' }}>{error}</div>}
+          {!rows && !error && <div className="acct-region">Loading...</div>}
+          {rows && (
+            <div className="table-scroll"><table style={{ fontSize: 12.5, minWidth: 420 }}>
+              <thead><tr style={{ textAlign: 'left', color: 'var(--muted)' }}><th>Order</th><th>Store</th><th>Value (ex GST)</th><th>Ordered</th><th>Clicked the email</th></tr></thead>
+              <tbody>{rows.map(o => (
+                <tr key={o.orderNo} style={{ borderTop: '1px solid var(--line)' }}>
+                  <td style={{ paddingRight: 8 }}>{o.orderNo}</td>
+                  <td style={{ paddingRight: 8 }}><Link to={`/accounts/${o.accountId}`}>{o.store}</Link> <span className="acct-region">{TAG_TEXT[o.tag]}</span></td>
+                  <td style={{ paddingRight: 8 }}>{num(o.value, true)}</td><td style={{ paddingRight: 8 }}>{dayOf(o.orderedAt)}</td><td>{when(o.clickedAt)}</td>
+                </tr>))}</tbody>
+            </table></div>
+          )}
+          {rows && <div className="acct-region" style={{ fontSize: 11.5, marginTop: 4 }}>Value is the products only, ex GST and freight. Each order is credited to the last email clicked before it.</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------- EDMs ----------
 function Edm() {
   const { query, from, to, set } = usePeriodParams(); const { data, error, load } = usePage<EdmPage>('/mkt/edm', query);
@@ -91,6 +129,7 @@ function Edm() {
                             <>
                               <b>{num(r.sales)}</b> orders, {num(r.salesValue, true)}{' '}{sales.goal !== null ? <LightPill light={sales.light} text={`goal ${num(sales.goal)}`} /> : <span className="acct-region">no goal</span>}
                               <div className="acct-region" style={{ fontSize: 11.5 }}>{sales.prev !== null ? `previous ${num(sales.prev)}` : 'no earlier campaign'}{r.sales > 0 ? ` · ${r.byTag.new} new, ${r.byTag.existing} existing, ${r.byTag.reactivated} reactivated` : ''}</div>
+                              {r.campaignId && <CreditedOrders campaignId={r.campaignId} count={r.sales} />}
                             </>
                           )}
                         </td>
